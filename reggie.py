@@ -965,8 +965,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         dock.setObjectName('spriteeditor')  # needed for the state to save/restore correctly
         dock.move(100, 100) # offset the dock from the top-left corner
+        dock.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding))
 
         self.spriteDataEditor = SpriteEditorWidget()
+        self.spriteDataEditor.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding))
+        self.spriteDataEditor.setMinimumHeight(400)
         self.spriteDataEditor.DataUpdate.connect(self.SpriteDataUpdated)
         dock.setWidget(self.spriteDataEditor)
         self.spriteEditorDock = dock

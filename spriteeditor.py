@@ -226,7 +226,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         Constructor
         """
         super().__init__()
-        self.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred))
+        self.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding))
 
         # create the raw editor
         font = QtGui.QFont()
@@ -235,7 +235,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         self.editbox.setFont(font)
 
         edit_frame = QtWidgets.QStackedWidget()
-        edit_frame.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Fixed))
+        edit_frame.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Expanding))
         self._edit_frame = edit_frame
 
         self.raweditor = RawEditor()
@@ -352,19 +352,43 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         L.addWidget(self.com_deplist_w)
 
         self.com_box.setLayout(L)
+        self.com_box.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed))
+        self.com_box.setFixedHeight(100)
 
         # create a layout
         mainLayout = QtWidgets.QVBoxLayout()
         mainLayout.addLayout(toplayout)
         mainLayout.addLayout(subLayout)
 
+        widget_container = QtWidgets.QWidget() # a bit of a mess but it works
+        layout_container = QtWidgets.QGridLayout()
+        widget_container.setLayout(layout_container)
+        widget_container.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding))
+
         layout = QtWidgets.QGridLayout()
         self.editorlayout = layout
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setSizeAdjustPolicy(QtWidgets.QAbstractScrollArea.AdjustToContents)
+        widget = QtWidgets.QWidget()
+        widget_layout = QtWidgets.QVBoxLayout()
+        widget.setLayout(widget_layout)
+        subwidget = QtWidgets.QWidget()
+        subwidget.setLayout(layout)
+        widget_layout.addWidget(subwidget, alignment = QtCore.Qt.AlignTop)
+        scroll.setWidget(widget)
+        layout_container.addWidget(scroll, 0, 0)
+
+        bottom_widget = QtWidgets.QWidget()
+        bottom_layout = QtWidgets.QGridLayout()
+        bottom_widget.setLayout(bottom_layout)
+        bottom_layout.addWidget(self.com_box, 0, 0)
+        bottom_layout.addLayout(editboxlayout, 1, 0)
+        bottom_layout.setRowStretch(2, 1)
 
         subLayout.addLayout(self.msg_layout)
-        subLayout.addLayout(layout)
-        subLayout.addWidget(self.com_box)
-        subLayout.addLayout(editboxlayout)
+        subLayout.addWidget(widget_container)
+        subLayout.addWidget(bottom_widget, alignment = QtCore.Qt.AlignBottom)
 
         self.setLayout(mainLayout)
 
@@ -1568,7 +1592,6 @@ class SpriteEditorWidget(QtWidgets.QWidget):
 
             return self.insertvalue(data, value)
 
-
     class DynamicBlockValuesPropertyDecoder(PropertyDecoder):
         """
         Class that decodes/encodes sprite data to/from a row of dualboxes
@@ -1755,16 +1778,6 @@ class SpriteEditorWidget(QtWidgets.QWidget):
 
             return data
 
-
-
-
-
-
-
-
-
-
-
     class HexValuePropertyDecoder(PropertyDecoder):
         """
         Class that decodes/encodes sprite data to/from a spinbox
@@ -1850,9 +1863,6 @@ class SpriteEditorWidget(QtWidgets.QWidget):
             Handle the value changing in the spinbox
             """
             self.updateData.emit(self)
-
-
-
 
 
     def setSprite(self, type_, reset: bool = False, initial_data: RawData = None) -> None:
