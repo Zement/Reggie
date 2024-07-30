@@ -235,6 +235,7 @@ class RawEditor(QWidget):
         self.setSizePolicy(QSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred))
 
         self._data_widget = OldSpriteRawEditor()
+        self._data_widget.data_edited.connect(lambda: self.data_edited.emit(self.data))
 
         layout = QHBoxLayout()
         layout.addWidget(self._data_widget)
