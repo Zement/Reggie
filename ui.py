@@ -1,4 +1,4 @@
-from PyQt5 import QtGui, QtWidgets, QtCore
+from PyQt6 import QtGui, QtWidgets, QtCore
 from xml.etree import ElementTree
 import os
 
@@ -380,14 +380,14 @@ def clipStr(text, idealWidth, font=None):
     Returns a shortened string, or None if it need not be shortened
     """
     if font is None: font = QtGui.QFont()
-    width = QtGui.QFontMetrics(font).width(text)
+    width = QtGui.QFontMetrics(font).horizontalAdvance(text)
     if width <= idealWidth: return None
 
     # note that Qt has a builtin function for this:
     # QFontMetricsF::elidedText(text, Qt.TextElideMode.ElideNone, idealWidth)
     while width > idealWidth:
         text = text[:-1]
-        width = QtGui.QFontMetrics(font).width(text)
+        width = QtGui.QFontMetrics(font).horizontalAdvance(text)
 
     return text
 

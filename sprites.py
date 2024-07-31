@@ -34,7 +34,7 @@
 import math
 import random
 
-from PyQt5 import QtCore, QtGui
+from PyQt6 import QtCore, QtGui
 Qt = QtCore.Qt
 
 import spritelib as SLib
@@ -792,7 +792,7 @@ class SpriteImage_Block(SLib.SpriteImage):  # 207, 208, 209, 221, 255, 256, 402,
     def paint(self, painter):
         super().paint(painter)
 
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         if self.tilenum < len(SLib.Tiles):
             painter.drawPixmap(0, 0, SLib.GetTile(self.tilenum))
         painter.drawPixmap(0, 0, self.image)

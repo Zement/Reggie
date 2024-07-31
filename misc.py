@@ -1,4 +1,4 @@
-from PyQt5 import QtCore, QtWidgets, QtGui
+from PyQt6 import QtCore, QtWidgets, QtGui
 import collections
 import itertools
 import sys
@@ -430,11 +430,11 @@ class SpriteDefinition:
             """
             return len(self.entries)
 
-        def data(self, index, role=QtCore.Qt.DisplayRole):
+        def data(self, index, role=QtCore.Qt.ItemDataRole.DisplayRole):
             """
             Get what we have for a specific row
             """
-            if not index.isValid() or role != QtCore.Qt.DisplayRole:
+            if not index.isValid() or role != QtCore.Qt.ItemDataRole.DisplayRole:
                 return None
 
             n = index.row()
@@ -1072,7 +1072,7 @@ class ChooseLevelNameDialog(QtWidgets.QDialog):
             # see if it's a category or a level
             if isinstance(item[1], str):
                 # it's a level
-                node.setData(0, QtCore.Qt.UserRole, item[1])
+                node.setData(0, QtCore.Qt.ItemDataRole.UserRole, item[1])
                 node.setToolTip(0, item[1])
             else:
                 # it's a category
@@ -1087,7 +1087,7 @@ class ChooseLevelNameDialog(QtWidgets.QDialog):
         """
         Catch the selected level and enable/disable OK button as needed
         """
-        self.currentlevel = current.data(0, QtCore.Qt.UserRole)
+        self.currentlevel = current.data(0, QtCore.Qt.ItemDataRole.UserRole)
         if self.currentlevel is None:
             self.buttonBox.button(QtWidgets.QDialogButtonBox.Ok).setEnabled(False)
         else:
@@ -1098,7 +1098,7 @@ class ChooseLevelNameDialog(QtWidgets.QDialog):
         """
         Handle a doubleclick on a level
         """
-        self.currentlevel = item.data(0, QtCore.Qt.UserRole)
+        self.currentlevel = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
         if self.currentlevel is not None:
             self.currentlevel = str(self.currentlevel)
             self.accept()
@@ -1153,7 +1153,7 @@ class RecentFilesMenu(QtWidgets.QMenu):
             short = clipStr(filename, 72)
             if short is not None: filename = short + '...'
 
-            act = QtWidgets.QAction(ico, filename, self)
+            act = QtGui.QAction(ico, filename, self)
             if i <= 9: act.setShortcut(QtGui.QKeySequence('Ctrl+Alt+%d' % i))
             act.setToolTip(str(self.FileList[i]))
 
@@ -1314,7 +1314,7 @@ class ZoomWidget(QtWidgets.QWidget):
         maxwidth = 512 - 128
         maxheight = 20
 
-        self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.minLabel = QtWidgets.QPushButton()
         self.minusLabel = QtWidgets.QPushButton()
         self.plusLabel = QtWidgets.QPushButton()
@@ -1594,7 +1594,7 @@ class PreferencesDialog(QtWidgets.QDialog):
                 Read the preferences and check the respective boxes
                 """
                 self.Trans.addItem('English')
-                self.Trans.setItemData(0, None, QtCore.Qt.UserRole)
+                self.Trans.setItemData(0, None, QtCore.Qt.ItemDataRole.UserRole)
                 self.Trans.setCurrentIndex(0)
                 i = 1
                 for trans in os.listdir(os.path.join('reggiedata', 'translations')):
@@ -1606,7 +1606,7 @@ class PreferencesDialog(QtWidgets.QDialog):
                     transobj = ReggieTranslation(trans)
                     name = transobj.name
                     self.Trans.addItem(name)
-                    self.Trans.setItemData(i, trans, QtCore.Qt.UserRole)
+                    self.Trans.setItemData(i, trans, QtCore.Qt.ItemDataRole.UserRole)
                     if trans == str(setting('Translation')):
                         self.Trans.setCurrentIndex(i)
                     i += 1
@@ -1767,7 +1767,7 @@ class PreferencesDialog(QtWidgets.QDialog):
                 for name, themeObj in self.themes:
                     self.themeBox.addItem(name)
 
-                index = self.themeBox.findText(setting('Theme'), QtCore.Qt.MatchFixedString)
+                index = self.themeBox.findText(setting('Theme'), QtCore.Qt.MatchFlag.MatchFixedString)
                 if index >= 0:
                      self.themeBox.setCurrentIndex(index)
 

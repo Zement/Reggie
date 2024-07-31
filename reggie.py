@@ -46,11 +46,11 @@ import time
 import traceback
 import struct
 
-# PyQt5: import, and error msg if not installed
+# PyQt6: import, and error msg if not installed
 try:
-    from PyQt5 import QtCore, QtGui, QtWidgets
+    from PyQt6 import QtCore, QtGui, QtWidgets
 except (ImportError, NameError):
-    errormsg = 'PyQt5 is not installed for this Python installation. Go online and download it.'
+    errormsg = 'PyQt6 is not installed for this Python installation. Go online and download it.'
     raise Exception(errormsg)
 Qt = QtCore.Qt
 
@@ -72,7 +72,7 @@ for v, c in zip(version, pqt_min):
 
 if not hasattr(QtWidgets.QGraphicsItem, 'ItemSendsGeometryChanges'):
     # enables itemChange being called on QGraphicsItem
-    QtWidgets.QGraphicsItem.ItemSendsGeometryChanges = QtWidgets.QGraphicsItem.GraphicsItemFlag(0x800)
+    QtWidgets.QGraphicsItem.GraphicsItemChange.ItemSendsGeometryChanges = QtWidgets.QGraphicsItem.GraphicsItemFlag(0x800)
 
 ################################################################################
 ################################################################################
@@ -165,9 +165,9 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
 
         if icon is not None:
-            act = QtWidgets.QAction(icon, text, self)
+            act = QtGui.QAction(icon, text, self)
         else:
-            act = QtWidgets.QAction(text, self)
+            act = QtGui.QAction(text, self)
 
         if shortcut is not None: act.setShortcut(shortcut)
         if statustext is not None: act.setStatusTip(statustext)
@@ -207,7 +207,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         # create the level view
         self.scene = LevelScene(0, 0, 1024 * 24, 512 * 24, self)
-        self.scene.setItemIndexMethod(QtWidgets.QGraphicsScene.NoIndex)
+        self.scene.setItemIndexMethod(QtWidgets.QGraphicsScene.ItemIndexMethod.NoIndex)
         self.scene.selectionChanged.connect(self.ChangeSelectionHandler)
 
         self.view = LevelViewWidget(self.scene, self)
@@ -314,13 +314,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.CreateAction(
             'newlevel', self.HandleNewLevel, GetIcon('new'),
             globals_.trans.stringOneLine('MenuItems', 0), globals_.trans.stringOneLine('MenuItems', 1),
-            QtGui.QKeySequence.New,
+            QtGui.QKeySequence.StandardKey.New,
         )
 
         self.CreateAction(
             'openfromname', self.HandleOpenFromName, GetIcon('open'),
             globals_.trans.stringOneLine('MenuItems', 2), globals_.trans.stringOneLine('MenuItems', 3),
-            QtGui.QKeySequence.Open,
+            QtGui.QKeySequence.StandardKey.Open,
         )
 
         self.CreateAction(
@@ -338,13 +338,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.CreateAction(
             'save', self.HandleSave, GetIcon('save'),
             globals_.trans.stringOneLine('MenuItems', 8), globals_.trans.stringOneLine('MenuItems', 9),
-            QtGui.QKeySequence.Save,
+            QtGui.QKeySequence.StandardKey.Save,
         )
 
         self.CreateAction(
             'saveas', self.HandleSaveAs, GetIcon('saveas'),
             globals_.trans.stringOneLine('MenuItems', 10), globals_.trans.stringOneLine('MenuItems', 11),
-            QtGui.QKeySequence.SaveAs,
+            QtGui.QKeySequence.StandardKey.SaveAs,
         )
 
         self.CreateAction(
@@ -393,7 +393,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.CreateAction(
             'selectall', self.SelectAll, GetIcon('selectall'),
             globals_.trans.stringOneLine('MenuItems', 22), globals_.trans.stringOneLine('MenuItems', 23),
-            QtGui.QKeySequence.SelectAll,
+            QtGui.QKeySequence.StandardKey.SelectAll,
         )
 
         self.CreateAction(
@@ -405,31 +405,31 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.CreateAction(
             'undo', self.Undo, GetIcon('undo'),
             globals_.trans.stringOneLine('MenuItems', 124), globals_.trans.stringOneLine('MenuItems', 125),
-            QtGui.QKeySequence.Undo,
+            QtGui.QKeySequence.StandardKey.Undo,
         )
 
         self.CreateAction(
             'redo', self.Redo, GetIcon('redo'),
             globals_.trans.stringOneLine('MenuItems', 126), globals_.trans.stringOneLine('MenuItems', 127),
-            QtGui.QKeySequence.Redo,
+            QtGui.QKeySequence.StandardKey.Redo,
         )
 
         self.CreateAction(
             'cut', self.Cut, GetIcon('cut'),
             globals_.trans.stringOneLine('MenuItems', 26), globals_.trans.stringOneLine('MenuItems', 27),
-            QtGui.QKeySequence.Cut,
+            QtGui.QKeySequence.StandardKey.Cut,
         )
 
         self.CreateAction(
             'copy', self.Copy, GetIcon('copy'),
             globals_.trans.stringOneLine('MenuItems', 28), globals_.trans.stringOneLine('MenuItems', 29),
-            QtGui.QKeySequence.Copy,
+            QtGui.QKeySequence.StandardKey.Copy,
         )
 
         self.CreateAction(
             'paste', self.Paste, GetIcon('paste'),
             globals_.trans.stringOneLine('MenuItems', 30), globals_.trans.stringOneLine('MenuItems', 31),
-            QtGui.QKeySequence.Paste,
+            QtGui.QKeySequence.StandardKey.Paste,
         )
 
         self.CreateAction(
@@ -580,7 +580,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.CreateAction(
             'zoomin', self.HandleZoomIn, GetIcon('zoomin'),
             globals_.trans.stringOneLine('MenuItems', 64), globals_.trans.stringOneLine('MenuItems', 65),
-            QtGui.QKeySequence.ZoomIn,
+            QtGui.QKeySequence.StandardKey.ZoomIn,
         )
 
         self.CreateAction(
@@ -592,7 +592,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.CreateAction(
             'zoomout', self.HandleZoomOut, GetIcon('zoomout'),
             globals_.trans.stringOneLine('MenuItems', 68), globals_.trans.stringOneLine('MenuItems', 69),
-            QtGui.QKeySequence.ZoomOut,
+            QtGui.QKeySequence.StandardKey.ZoomOut,
         )
 
         self.CreateAction(
@@ -2865,8 +2865,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if globals_.Area is None:
             return
 
-        flag1 = QtWidgets.QGraphicsItem.ItemIsSelectable
-        flag2 = QtWidgets.QGraphicsItem.ItemIsMovable
+        flag1 = QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+        flag2 = QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
         unfrozen = not checked
 
         for layer in globals_.Area.layers:
@@ -2884,8 +2884,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if globals_.Area is None:
             return
 
-        flag1 = QtWidgets.QGraphicsItem.ItemIsSelectable
-        flag2 = QtWidgets.QGraphicsItem.ItemIsMovable
+        flag1 = QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+        flag2 = QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
         unfrozen = not checked
 
         for spr in globals_.Area.sprites:
@@ -2902,8 +2902,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if globals_.Area is None:
             return
 
-        flag1 = QtWidgets.QGraphicsItem.ItemIsSelectable
-        flag2 = QtWidgets.QGraphicsItem.ItemIsMovable
+        flag1 = QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+        flag2 = QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
         unfrozen = not checked
 
         for ent in globals_.Area.entrances:
@@ -2920,8 +2920,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if globals_.Area is None:
             return
 
-        flag1 = QtWidgets.QGraphicsItem.ItemIsSelectable
-        flag2 = QtWidgets.QGraphicsItem.ItemIsMovable
+        flag1 = QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+        flag2 = QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
         unfrozen = not checked
 
         for loc in globals_.Area.locations:
@@ -2951,8 +2951,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if globals_.Area is None:
             return
 
-        flag1 = QtWidgets.QGraphicsItem.ItemIsSelectable
-        flag2 = QtWidgets.QGraphicsItem.ItemIsMovable
+        flag1 = QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+        flag2 = QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
         unfrozen = not checked
 
         for com in globals_.Area.comments:
@@ -4348,7 +4348,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         camprofiles = []
         for row in range(dlg.list.count()):
             item = dlg.list.item(row)
-            camprofiles.append(item.data(QtCore.Qt.UserRole))
+            camprofiles.append(item.data(QtCore.Qt.ItemDataRole.UserRole))
 
         globals_.Area.camprofiles = camprofiles
         SetDirty()
@@ -4359,13 +4359,13 @@ def main():
     Main startup function for Reggie
     """
 
-    # set High-DPI-Displays-related attributes before creating an application
-    QtGui.QGuiApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
-    if hasattr(QtGui.QGuiApplication, 'setHighDpiScaleFactorRoundingPolicy'):
-        QtGui.QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.Round)
-
     # Create an application
     globals_.app = QtWidgets.QApplication(sys.argv)
+
+    # set High-DPI-Displays-related attributes before creating an application
+    # globals_.app.setAttribute(Qt.HighDpiScaleFactorRoundingPolicy.AA_EnableHighDpiScaling)
+    # if hasattr(globals_.app, 'setHighDpiScaleFactorRoundingPolicy'):
+    #     globals_.app.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.Round)
 
     # Go to the script path
     path = module_path()
@@ -4390,7 +4390,7 @@ def main():
     del subprocess
 
     # Load the settings
-    globals_.settings = QtCore.QSettings('settings.ini', QtCore.QSettings.IniFormat)
+    globals_.settings = QtCore.QSettings('settings.ini', QtCore.QSettings.Format.IniFormat)
 
     # Check the version and set the UI style to Fusion by default
     if setting("ReggieVersion") is None:

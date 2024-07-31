@@ -90,7 +90,7 @@ Other Testers and Contributors:
 
  * Python 3 - Python Software Foundation (https://www.python.org)
  * Qt 5 - Nokia (http://qt.nokia.com)
- * PyQt5 - Riverbank Computing (http://www.riverbankcomputing.co.uk/software/pyqt/intro)
+ * PyQt6 - Riverbank Computing (http://www.riverbankcomputing.co.uk/software/pyqt/intro)
  * NSMBLib - NSMBLib Updated (https://github.com/RoadrunnerWMC/NSMBLib-Updated)
  * MinGW - http://www.mingw.org/
  * Cython - http://cython.org/

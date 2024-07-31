@@ -1,6 +1,6 @@
 import os
 
-from PyQt5 import QtWidgets, QtGui, QtCore
+from PyQt6 import QtWidgets, QtGui, QtCore
 
 from ui import GetIcon, clipStr
 import globals_
@@ -411,7 +411,7 @@ class MetaInfoDialog(QtWidgets.QDialog):
                 infoGroupBox = QtWidgets.QGroupBox(globals_.trans.string('InfoDlg', 12))
 
                 infoLabel = QtWidgets.QVBoxLayout()
-                infoLabel.addWidget(QtWidgets.QLabel(globals_.trans.string('InfoDlg', 13)), 0, QtCore.Qt.AlignCenter)
+                infoLabel.addWidget(QtWidgets.QLabel(globals_.trans.string('InfoDlg', 13)), 0, QtCore.Qt.AlignmentFlag.AlignCenter)
                 infoLabel.addLayout(infoLayout)
                 infoGroupBox.setLayout(infoLabel)
 
@@ -1239,15 +1239,15 @@ class InfoPreviewWidget(QtWidgets.QWidget):
         self.direction = direction
 
         self.Label1 = QtWidgets.QLabel('')
-        if self.direction == QtCore.Qt.Horizontal: self.Label2 = QtWidgets.QLabel('')
+        if self.direction == QtCore.Qt.Orientation.Horizontal: self.Label2 = QtWidgets.QLabel('')
         self.updateLabels()
 
         self.mainLayout = QtWidgets.QHBoxLayout()
         self.mainLayout.addWidget(self.Label1)
-        if self.direction == QtCore.Qt.Horizontal: self.mainLayout.addWidget(self.Label2)
+        if self.direction == QtCore.Qt.Orientation.Horizontal: self.mainLayout.addWidget(self.Label2)
         self.setLayout(self.mainLayout)
 
-        if self.direction == QtCore.Qt.Horizontal: self.setMinimumWidth(256)
+        if self.direction == QtCore.Qt.Orientation.Horizontal: self.setMinimumWidth(256)
 
     def updateLabels(self):
         """
@@ -1255,7 +1255,7 @@ class InfoPreviewWidget(QtWidgets.QWidget):
         """
         if (not globals_.Area) or not hasattr(globals_.Area, 'filename'):  # can't get level metadata if there's no level
             self.Label1.setText('')
-            if self.direction == QtCore.Qt.Horizontal: self.Label2.setText('')
+            if self.direction == QtCore.Qt.Orientation.Horizontal: self.Label2.setText('')
             return
 
         a = [  # MUST be a list, not a tuple
@@ -1268,13 +1268,13 @@ class InfoPreviewWidget(QtWidgets.QWidget):
         ]
 
         for b, section in enumerate(a):  # cut off excessively long strings
-            if self.direction == QtCore.Qt.Vertical:
+            if self.direction == QtCore.Qt.Orientation.Vertical:
                 short = clipStr(section, 128)
             else:
                 short = clipStr(section, 184)
             if short is not None: a[b] = short + '...'
 
-        if self.direction == QtCore.Qt.Vertical:
+        if self.direction == QtCore.Qt.Orientation.Vertical:
             str1 = a[0] + '<br>' + a[1] + '<br>' + a[2] + '<br>' + a[3] + '<br>' + a[4] + '<br>' + a[5]
             self.Label1.setText(str1)
         else:
@@ -1360,7 +1360,7 @@ class CameraProfilesDialog(QtWidgets.QDialog):
 
         for profile in globals_.Area.camprofiles:
             item = CustomSortableListWidgetItem()
-            item.setData(QtCore.Qt.UserRole, profile)
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, profile)
             item.sortKey = profile[0]
             self.updateItemTitle(item)
             self.list.addItem(item)
@@ -1371,11 +1371,11 @@ class CameraProfilesDialog(QtWidgets.QDialog):
         new_id = 1
         for row in range(self.list.count()):
             item = self.list.item(row)
-            values = item.data(QtCore.Qt.UserRole)
+            values = item.data(QtCore.Qt.ItemDataRole.UserRole)
             new_id = max(new_id, values[0] + 1)
 
         item = CustomSortableListWidgetItem()
-        item.setData(QtCore.Qt.UserRole, [new_id, 0, 0])
+        item.setData(QtCore.Qt.ItemDataRole.UserRole, [new_id, 0, 0])
         self.updateItemTitle(item)
         self.list.addItem(item)
 
@@ -1390,25 +1390,25 @@ class CameraProfilesDialog(QtWidgets.QDialog):
 
         if selItems:
             selItem = selItems[0]
-            values = selItem.data(QtCore.Qt.UserRole)
+            values = selItem.data(QtCore.Qt.ItemDataRole.UserRole)
 
             self.eventid.setValue(values[0])
             self.camsettings.setValues(values[1], values[2])
 
     def handleEventIDChanged(self, eventid):
         selItem = self.list.selectedItems()[0]
-        values = selItem.data(QtCore.Qt.UserRole)
+        values = selItem.data(QtCore.Qt.ItemDataRole.UserRole)
         values[0] = eventid
-        selItem.setData(QtCore.Qt.UserRole, values)
+        selItem.setData(QtCore.Qt.ItemDataRole.UserRole, values)
         selItem.sortKey = eventid
         self.updateItemTitle(selItem)
 
     def handleCamSettingsChanged(self):
         selItem = self.list.selectedItems()[0]
-        values = selItem.data(QtCore.Qt.UserRole)
+        values = selItem.data(QtCore.Qt.ItemDataRole.UserRole)
         values[1] = self.camsettings.modeButtonGroup.checkedId()
         values[2] = self.camsettings.screenSizes.currentIndex()
-        selItem.setData(QtCore.Qt.UserRole, values)
+        selItem.setData(QtCore.Qt.ItemDataRole.UserRole, values)
 
     def updateItemTitle(self, item):
-        item.setText('Camera Profile on Event %d' % item.data(QtCore.Qt.UserRole)[0])
+        item.setText('Camera Profile on Event %d' % item.data(QtCore.Qt.ItemDataRole.UserRole)[0])

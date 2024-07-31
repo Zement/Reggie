@@ -1,4 +1,4 @@
-from PyQt5 import QtWidgets, QtCore
+from PyQt6 import QtWidgets, QtCore
 
 import globals_
 from ui import GetIcon
@@ -169,7 +169,7 @@ class TilesetsTab(QtWidgets.QWidget):
                         # It's a category
                         node.setText(0, item[0])
                         node.setToolTip(0, item[0])
-                        node.setFlags(QtCore.Qt.ItemIsEnabled)
+                        node.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
                         children = ParseCategory(item[1])
                         for cnode in children:
                             node.addChild(cnode)
@@ -295,7 +295,7 @@ class LoadedSpritesTab(QtWidgets.QWidget):
         """
 
         def flags(self, index):
-            return QtCore.Qt.ItemNeverHasChildren
+            return QtCore.Qt.ItemFlag.ItemNeverHasChildren
 
     def __init__(self):
         QtWidgets.QWidget.__init__(self)

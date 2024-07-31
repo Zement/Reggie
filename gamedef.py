@@ -4,7 +4,7 @@ import importlib
 import functools
 from xml.etree import ElementTree as etree
 
-from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt6 import QtWidgets, QtCore, QtGui
 
 from ui import GetIcon, createVertLine
 from misc import LoadSpriteData, LoadSpriteListData, LoadSpriteCategories, LoadBgANames, LoadBgBNames, LoadObjDescriptions, LoadTilesetNames, LoadTilesetInfo, LoadEntranceNames, LoadMusicInfo, LoadZoneThemes
@@ -137,12 +137,12 @@ class GameDefMenu(QtWidgets.QMenu):
         # Add entries for each gamedef
         self.GameDefs = getAvailableGameDefs()
 
-        self.actGroup = QtWidgets.QActionGroup(self)
+        self.actGroup = QtGui.QActionGroup(self)
         loadedDef = setting('LastGameDef')
         for folder in self.GameDefs:
             def_ = ReggieGameDefinition(folder)
 
-            act = QtWidgets.QAction(self)
+            act = QtGui.QAction(self)
             act.setText(def_.name)
             act.setToolTip(def_.description)
             act.setData(folder)
@@ -156,7 +156,7 @@ class GameDefMenu(QtWidgets.QMenu):
         # add button
         self.addSeparator()
 
-        act = QtWidgets.QAction(self)
+        act = QtGui.QAction(self)
         act.setText("Add a Reggie Patch Folder")
         act.setToolTip("Creates a symlink in the /reggiedata/patches folder using add_reggie_patch")
         act.setActionGroup(self.actGroup)

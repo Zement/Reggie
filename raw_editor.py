@@ -1,6 +1,6 @@
-from PyQt5.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QStackedWidget, QSizePolicy, QComboBox
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFontMetrics, QFont, QFocusEvent
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QStackedWidget, QSizePolicy, QComboBox
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QFontMetrics, QFont, QFocusEvent
 
 from raw_data import RawData
 

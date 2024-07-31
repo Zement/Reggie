@@ -142,7 +142,7 @@ print('>>')
 # Excludes
 excludes = ['doctest', 'pdb', 'unittest', 'difflib',
             'os2emxpath', 'optpath', 'multiprocessing', 'ssl',
-            'PyQt5.QtWebKit', 'PyQt5.QtNetwork']
+            'PyQt6.QtWebKit', 'PyQt6.QtNetwork']
 
 if sys.platform == 'nt':
     excludes.append('posixpath')
@@ -155,7 +155,7 @@ neededQtModules = ['Core', 'Gui', 'Widgets']
 targetQt = 'PyQt' + str(4 if sys.version_info.major < 3 else 5)
 print('>> Targeting ' + targetQt)
 
-for qt in ['PySide2', 'PyQt4', 'PyQt5']:
+for qt in ['PySide2', 'PyQt4', 'PyQt6']:
     # Exclude all the stuff we don't use
     for m in unneededQtModules:
         excludes.append(qt + '.Qt' + m)
