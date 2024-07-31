@@ -20,7 +20,7 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         """
         QtWidgets.QWidget.__init__(self)
         self.setSizePolicy(
-            QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.MinimumExpanding))
+            QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding))
 
         self.bgbrush = QtGui.QBrush(globals_.theme.color('bg'))
         self.objbrush = QtGui.QBrush(globals_.theme.color('overview_object'))
@@ -297,7 +297,7 @@ class ObjectPickerWidget(QtWidgets.QListView):
                 return self.ritems[n]
 
             if role == QtCore.Qt.ItemDataRole.BackgroundRole:
-                return QtWidgets.qApp.palette().base()
+                return QtWidgets.QApplication.palette().base()
 
             if role == QtCore.Qt.ItemDataRole.UserRole:
                 return self.itemsize[n]
@@ -494,7 +494,7 @@ class StampListModel(QtCore.QAbstractListModel):
             return self.items[n].Icon
 
         elif role == QtCore.Qt.ItemDataRole.BackgroundRole:
-            return QtWidgets.qApp.palette().base()
+            return QtWidgets.QApplication.palette().base()
 
         elif role == QtCore.Qt.ItemDataRole.UserRole:
             return self.items[n].Name

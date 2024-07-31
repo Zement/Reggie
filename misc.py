@@ -1324,7 +1324,7 @@ class ZoomWidget(QtWidgets.QWidget):
         self.slider.setMinimum(0)
         self.slider.setMaximum(len(globals_.mainWindow.ZoomLevels) - 1)
         self.slider.setTickInterval(2)
-        self.slider.setTickPosition(self.slider.TicksAbove)
+        self.slider.setTickPosition(self.slider.TickPosition.TicksAbove)
         self.slider.setPageStep(1)
         self.slider.setTracking(True)
         self.slider.setSliderPosition(self.findIndexOfLevel(100))

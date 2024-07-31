@@ -325,7 +325,7 @@ class ZoneTab(QtWidgets.QWidget):
     def createRendering(self, z):
         self.Rendering = QtWidgets.QGroupBox('Rendering')
 
-        comboboxSizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Fixed)
+        comboboxSizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding, QtWidgets.QSizePolicy.Policy.Fixed)
 
         zone_theme_values = globals_.ZoneThemeValues
         zone_terrain_theme_values = globals_.trans.stringList('ZonesDlg', 2)
@@ -380,7 +380,7 @@ class ZoneTab(QtWidgets.QWidget):
     def createCamera(self, z):
         self.Camera = QtWidgets.QGroupBox(globals_.trans.string('ZonesDlg', 19))
 
-        comboboxSizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Fixed)
+        comboboxSizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding, QtWidgets.QSizePolicy.Policy.Fixed)
 
         self.Zone_cammodezoom = CameraModeZoomSettingsLayout(True)
         self.Zone_cammodezoom.setValues(z.cammode, z.camzoom)
@@ -615,7 +615,7 @@ class CameraModeZoomSettingsLayout(QtWidgets.QFormLayout):
         super().__init__()
         self.updating = True
 
-        comboboxSizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Fixed)
+        comboboxSizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding, QtWidgets.QSizePolicy.Policy.Fixed)
 
         self.zm = -1
 

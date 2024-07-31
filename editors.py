@@ -16,7 +16,7 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         Constructor
         """
         QtWidgets.QWidget.__init__(self)
-        self.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed))
+        self.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Fixed))
 
         LoadEntranceNames()
         self.CanUseFlag40 = {0, 1, 7, 8, 9, 12, 20, 21, 22, 23, 24, 27}
@@ -357,7 +357,7 @@ class PathNodeEditorWidget(QtWidgets.QWidget):
         Constructor
         """
         QtWidgets.QWidget.__init__(self)
-        self.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed))
+        self.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Fixed))
 
         # Some single point float constants. Note that we cannot use the ones
         # provided by sys.float_info, since those relate to double precision
@@ -516,7 +516,7 @@ class LocationEditorWidget(QtWidgets.QWidget):
         Constructor
         """
         QtWidgets.QWidget.__init__(self)
-        self.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed))
+        self.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Fixed))
 
         # create widgets
         self.locationID = QtWidgets.QSpinBox()

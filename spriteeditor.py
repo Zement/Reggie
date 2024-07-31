@@ -226,7 +226,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         Constructor
         """
         super().__init__()
-        self.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred))
+        self.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Preferred))
 
         # create the raw editor
         font = QtGui.QFont()
@@ -235,7 +235,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         self.editbox.setFont(font)
 
         edit_frame = QtWidgets.QStackedWidget()
-        edit_frame.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Fixed))
+        edit_frame.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding, QtWidgets.QSizePolicy.Policy.Fixed))
         self._edit_frame = edit_frame
 
         self.raweditor = RawEditor()

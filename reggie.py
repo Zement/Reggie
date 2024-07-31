@@ -801,7 +801,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
                           globals_.trans.string('MenuItems', 89), QtGui.QKeySequence('Ctrl+Shift+H'))
         self.CreateAction('tipbox', self.TipBox, GetIcon('tips'), globals_.trans.stringOneLine('MenuItems', 90),
                           globals_.trans.string('MenuItems', 91), QtGui.QKeySequence('Ctrl+Shift+T'))
-        self.CreateAction('aboutqt', QtWidgets.qApp.aboutQt, GetIcon('qt'), globals_.trans.stringOneLine('MenuItems', 92),
+        self.CreateAction('aboutqt', QtWidgets.QApplication.aboutQt, GetIcon('qt'), globals_.trans.stringOneLine('MenuItems', 92),
                           globals_.trans.string('MenuItems', 93), QtGui.QKeySequence('Ctrl+Shift+Q'))
 
         if menu is None:
@@ -941,8 +941,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # level overview
         dock = QtWidgets.QDockWidget(globals_.trans.string('MenuItems', 94), self)
         dock.setFeatures(
-            QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFloatable | QtWidgets.QDockWidget.DockWidgetClosable)
-        # dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        # dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         dock.setObjectName('leveloverview')  # needed for the state to save/restore correctly
 
         self.levelOverview = LevelOverviewWidget()
@@ -950,7 +950,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.levelOverviewDock = dock
         dock.setWidget(self.levelOverview)
 
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         dock.setVisible(True)
         act = dock.toggleViewAction()
         act.setShortcut(QtGui.QKeySequence('Ctrl+M'))
@@ -961,8 +961,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # create the sprite editor panel
         dock = QtWidgets.QDockWidget(globals_.trans.string('SpriteDataEditor', 0), self)
         dock.setVisible(False)
-        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFloatable)
-        dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable)
+        dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         dock.setObjectName('spriteeditor')  # needed for the state to save/restore correctly
         dock.move(100, 100) # offset the dock from the top-left corner
 
@@ -971,14 +971,14 @@ class ReggieWindow(QtWidgets.QMainWindow):
         dock.setWidget(self.spriteDataEditor)
         self.spriteEditorDock = dock
 
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         dock.setFloating(True)
 
         # create the entrance editor panel
         dock = QtWidgets.QDockWidget(globals_.trans.string('EntranceDataEditor', 24), self)
         dock.setVisible(False)
-        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFloatable)
-        dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable)
+        dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         dock.setObjectName('entranceeditor')  # needed for the state to save/restore correctly
         dock.move(100, 100) # offset the dock from the top-left corner
 
@@ -986,14 +986,14 @@ class ReggieWindow(QtWidgets.QMainWindow):
         dock.setWidget(self.entranceEditor)
         self.entranceEditorDock = dock
 
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         dock.setFloating(True)
 
         # create the path node editor panel
         dock = QtWidgets.QDockWidget(globals_.trans.string('PathDataEditor', 10), self)
         dock.setVisible(False)
-        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFloatable)
-        dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable)
+        dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         dock.setObjectName('pathnodeeditor')  # needed for the state to save/restore correctly
         dock.move(100, 100) # offset the dock from the top-left corner
 
@@ -1001,14 +1001,14 @@ class ReggieWindow(QtWidgets.QMainWindow):
         dock.setWidget(self.pathEditor)
         self.pathEditorDock = dock
 
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         dock.setFloating(True)
 
         # create the location editor panel
         dock = QtWidgets.QDockWidget(globals_.trans.string('LocationDataEditor', 12), self)
         dock.setVisible(False)
-        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFloatable)
-        dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable)
+        dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         dock.setObjectName('locationeditor')  # needed for the state to save/restore correctly
         dock.move(100, 100) # offset the dock from the top-left corner
 
@@ -1016,14 +1016,14 @@ class ReggieWindow(QtWidgets.QMainWindow):
         dock.setWidget(self.locationEditor)
         self.locationEditorDock = dock
 
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         dock.setFloating(True)
 
         # create the palette
         dock = QtWidgets.QDockWidget(globals_.trans.string('MenuItems', 96), self)
         dock.setFeatures(
-            QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFloatable | QtWidgets.QDockWidget.DockWidgetClosable)
-        dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         dock.setObjectName('palette')  # needed for the state to save/restore correctly
 
         self.creationDock = dock
@@ -1033,7 +1033,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         act.setStatusTip(globals_.trans.string('MenuItems', 97))
         self.vmenu.addAction(act)
 
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         dock.setVisible(True)
 
         # add tabs to it
@@ -1152,8 +1152,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # default sprite data editor
         ddock = QtWidgets.QDockWidget(globals_.trans.string('Palette', 7), self)
         ddock.setFeatures(
-            QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFloatable | QtWidgets.QDockWidget.DockWidgetClosable)
-        ddock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        ddock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         ddock.setObjectName('defaultprops')  # needed for the state to save/restore correctly
         ddock.move(100, 100) # offset the dock from the top-left corner
 
@@ -1161,7 +1161,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.defaultDataEditor.setVisible(False)
         ddock.setWidget(self.defaultDataEditor)
 
-        self.addDockWidget(Qt.RightDockWidgetArea, ddock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, ddock)
         ddock.setVisible(False)
         ddock.setFloating(True)
         self.defaultPropDock = ddock

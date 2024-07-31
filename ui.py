@@ -348,13 +348,13 @@ def GetIcon(name, big=False):
 
 def createHorzLine():
     f = QtWidgets.QFrame()
-    f.setFrameStyle(QtWidgets.QFrame.HLine | QtWidgets.QFrame.Sunken)
+    f.setFrameStyle(QtWidgets.QFrame.Shape.HLine | QtWidgets.QFrame.Shadow.Sunken)
     return f
 
 
 def createVertLine():
     f = QtWidgets.QFrame()
-    f.setFrameStyle(QtWidgets.QFrame.VLine | QtWidgets.QFrame.Sunken)
+    f.setFrameStyle(QtWidgets.QFrame.Shape.VLine | QtWidgets.QFrame.Shadow.Sunken)
     return f
 
 
