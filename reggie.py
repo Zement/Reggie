@@ -1088,7 +1088,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         lbg.addButton(self.objUseLayer0, 0)
         lbg.addButton(self.objUseLayer1, 1)
         lbg.addButton(self.objUseLayer2, 2)
-        lbg.buttonClicked[int].connect(self.LayerChoiceChanged)
+        lbg.buttonClicked.connect(self.LayerChoiceChanged)
         self.LayerButtonGroup = lbg
 
         self.objPicker = ObjectPickerWidget()
@@ -1254,11 +1254,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.eventChooser.setHeaderLabels((globals_.trans.string('Palette', 22), globals_.trans.string('Palette', 23)))
         self.eventChooser.itemClicked.connect(self.handleEventTabItemClick)
         self.eventChooserItems = []
-        flags = Qt.ItemIsSelectable | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled
+        flags = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
         for id in range(64):
             itm = QtWidgets.QTreeWidgetItem()
             itm.setFlags(flags)
-            itm.setCheckState(0, Qt.Unchecked)
+            itm.setCheckState(0, Qt.CheckState.Unchecked)
             itm.setText(0, globals_.trans.string('Palette', 24, '[id]', str(id + 1)))
             itm.setText(1, '')
             self.eventChooser.addTopLevelItem(itm)
@@ -1431,8 +1431,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         Configures the Events tab from the data in globals_.Area.defEvents
         """
         defEvents = globals_.Area.defEvents
-        checked = Qt.Checked
-        unchecked = Qt.Unchecked
+        checked = Qt.CheckState.Checked
+        unchecked = Qt.CheckState.Unchecked
 
         data = globals_.Area.Metadata.binData('EventNotes_A%d' % globals_.Area.areanum)
         eventTexts = {}
@@ -1464,11 +1464,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         selIdx = self.eventChooserItems.index(item)
         isOn = (globals_.Area.defEvents & 1 << selIdx) == 1 << selIdx
-        if item.checkState(0) == Qt.Checked and not isOn:
+        if item.checkState(0) == Qt.CheckState.Checked and not isOn:
             # Turn a bit on
             globals_.Area.defEvents |= 1 << selIdx
             SetDirty()
-        elif item.checkState(0) == Qt.Unchecked and isOn:
+        elif item.checkState(0) == Qt.CheckState.Unchecked and isOn:
             # Turn a bit off (mask out 1 bit)
             globals_.Area.defEvents &= ~(1 << selIdx)
             SetDirty()

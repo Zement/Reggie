@@ -180,10 +180,10 @@ class ObjectPickerWidget(QtWidgets.QListView):
         Initializes the widget
         """
         QtWidgets.QListView.__init__(self)
-        self.setFlow(QtWidgets.QListView.LeftToRight)
-        self.setLayoutMode(QtWidgets.QListView.SinglePass)
-        self.setMovement(QtWidgets.QListView.Static)
-        self.setResizeMode(QtWidgets.QListView.Adjust)
+        self.setFlow(QtWidgets.QListView.Flow.LeftToRight)
+        self.setLayoutMode(QtWidgets.QListView.LayoutMode.SinglePass)
+        self.setMovement(QtWidgets.QListView.Movement.Static)
+        self.setResizeMode(QtWidgets.QListView.ResizeMode.Adjust)
         self.setWrapping(True)
 
         self.models = [
@@ -377,10 +377,10 @@ class StampChooserWidget(QtWidgets.QListView):
         """
         QtWidgets.QListView.__init__(self)
 
-        self.setFlow(QtWidgets.QListView.LeftToRight)
-        self.setLayoutMode(QtWidgets.QListView.SinglePass)
-        self.setMovement(QtWidgets.QListView.Static)
-        self.setResizeMode(QtWidgets.QListView.Adjust)
+        self.setFlow(QtWidgets.QListView.Flow.LeftToRight)
+        self.setLayoutMode(QtWidgets.QListView.LayoutMode.SinglePass)
+        self.setMovement(QtWidgets.QListView.Movement.Static)
+        self.setResizeMode(QtWidgets.QListView.ResizeMode.Adjust)
         self.setWrapping(True)
 
         self.model = StampListModel()
@@ -934,7 +934,7 @@ class SpriteList(QtWidgets.QWidget):
         headers = ["ID", "Name"] + list(self.idtype_names[1:])
         self.table.setHorizontalHeaderLabels(headers)
         self.table.verticalHeader().setVisible(False) # hide row numbers
-        self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
         self.table.setSortingEnabled(True)
         self.table.setMouseTracking(True) # for 'entered' signal
         self.table.itemDoubleClicked.connect(self.moveToSprite)
