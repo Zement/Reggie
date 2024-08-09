@@ -1363,7 +1363,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
             dlg = ExternalSpriteOptionDialog(self.type, self.dispvalue)
 
             # only contine if the user pressed "OK"
-            if dlg.exec_() != QtWidgets.QDialog.Accepted:
+            if dlg.exec() != QtWidgets.QDialog.Accepted:
                 return
 
             # read set value from dlg and update self.dispwidget
@@ -2369,7 +2369,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         dlg = ResizeChoiceDialog(self.spritetype)
 
         # only contine if the user pressed "OK"
-        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
             return
 
 

@@ -275,7 +275,7 @@ class LevelEditorItem(QtWidgets.QGraphicsItem):
         Generic constructor for level editor items
         """
         QtWidgets.QGraphicsItem.__init__(self)
-        self.setFlag(self.ItemSendsGeometryChanges, True)
+        self.setFlag(self.GraphicsItemFlag.ItemSendsGeometryChanges, True)
 
     def __lt__(self, other):
         if self.objx != other.objx:
@@ -431,7 +431,7 @@ class LevelEditorItem(QtWidgets.QGraphicsItem):
         br.setHeight(br.height() + marginY)
 
         # Take the screenshot
-        ScreenshotImage = QtGui.QImage(br.size().toSize(), QtGui.QImage.Format_ARGB32)
+        ScreenshotImage = QtGui.QImage(br.size().toSize(), QtGui.QImage.Format.Format_ARGB32)
         ScreenshotImage.fill(QtCore.Qt.transparent)
 
         RenderPainter = QtGui.QPainter(ScreenshotImage)
@@ -486,8 +486,8 @@ class ObjectItem(LevelEditorItem):
         self.TLGrabbed = self.TRGrabbed = self.BLGrabbed = self.BRGrabbed = False
         self.MTGrabbed = self.MLGrabbed = self.MBGrabbed = self.MRGrabbed = False
 
-        self.setFlag(self.ItemIsMovable, not globals_.ObjectsFrozen)
-        self.setFlag(self.ItemIsSelectable, not globals_.ObjectsFrozen)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not globals_.ObjectsFrozen)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, not globals_.ObjectsFrozen)
 
         self.UpdateRects()
 
@@ -1655,8 +1655,8 @@ class LocationItem(LevelEditorItem):
         self.UpdateTitle()
         self.UpdateRects()
 
-        self.setFlag(self.ItemIsMovable, not globals_.LocationsFrozen)
-        self.setFlag(self.ItemIsSelectable, not globals_.LocationsFrozen)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not globals_.LocationsFrozen)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, not globals_.LocationsFrozen)
 
         globals_.DirtyOverride += 1
         self.setPos(int(x * 1.5), int(y * 1.5))
@@ -1885,8 +1885,8 @@ class SpriteItem(LevelEditorItem):
 
         self.InitializeSprite()
 
-        self.setFlag(self.ItemIsMovable, not globals_.SpritesFrozen)
-        self.setFlag(self.ItemIsSelectable, not globals_.SpritesFrozen)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not globals_.SpritesFrozen)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, not globals_.SpritesFrozen)
 
         globals_.DirtyOverride += 1
         if globals_.SpriteImagesShown:
@@ -2226,7 +2226,7 @@ class SpriteItem(LevelEditorItem):
 
             # Move the position to sprite origin space by subtracting the image
             # offset
-            origin_pos = (new_pos - offset_point).toPoint()
+            origin_pos = (new_pos - offset_point).toPoint().toPointF()
 
             # Snap this position to the grid
             drag_offset = None
@@ -2561,8 +2561,8 @@ class EntranceItem(LevelEditorItem):
         self.cpdirection = cpd
         self.LevelRect = QtCore.QRectF(self.objx / 16, self.objy / 16, 1.5, 1.5)
 
-        self.setFlag(self.ItemIsMovable, not globals_.EntrancesFrozen)
-        self.setFlag(self.ItemIsSelectable, not globals_.EntrancesFrozen)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not globals_.EntrancesFrozen)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, not globals_.EntrancesFrozen)
 
         self.aux = self.AuxEntranceItem(self)
 
@@ -2997,8 +2997,8 @@ class PathItem(LevelEditorItem):
         self.listitem = ListWidgetItem_SortsByOther(self, self.ListString())
 
         self.LevelRect = QtCore.QRectF(self.objx / 16, self.objy / 16, 1.5, 1.5)
-        self.setFlag(self.ItemIsMovable, not globals_.PathsFrozen)
-        self.setFlag(self.ItemIsSelectable, not globals_.PathsFrozen)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not globals_.PathsFrozen)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, not globals_.PathsFrozen)
 
         old_snap = globals_.OverrideSnapping
         globals_.OverrideSnapping = True
@@ -3097,8 +3097,8 @@ class PathEditorLineItem(QtWidgets.QGraphicsPathItem):
 
         self._path = path
 
-        self.setFlag(self.ItemIsMovable, False)
-        self.setFlag(self.ItemIsSelectable, False)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
 
         color = globals_.theme.color('path_connector')
         self.setPen(QtGui.QPen(color, 3, join=QtCore.Qt.PenJoinStyle.RoundJoin, cap=QtCore.Qt.PenCapStyle.RoundCap))
@@ -3150,8 +3150,8 @@ class CommentItem(LevelEditorItem):
         self.listitem = None
         self.LevelRect = (QtCore.QRectF(self.objx / 16, self.objy / 16, 2.25, 2.25))
 
-        self.setFlag(self.ItemIsMovable, not globals_.CommentsFrozen)
-        self.setFlag(self.ItemIsSelectable, not globals_.CommentsFrozen)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not globals_.CommentsFrozen)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, not globals_.CommentsFrozen)
 
         globals_.DirtyOverride += 1
         self.setPos(int(x * 1.5), int(y * 1.5))

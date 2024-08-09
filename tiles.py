@@ -85,7 +85,7 @@ class TilesetTile:
         for frame in range(numberOfFrames):
             framedata = data[frame * 2048: (frame * 2048) + 2048]
             newdata = tpl.decodeRGB4A3(framedata, 32, 32, False)
-            img = QtGui.QImage(newdata, 32, 32, 128, QtGui.QImage.Format_ARGB32)
+            img = QtGui.QImage(newdata, 32, 32, 128, QtGui.QImage.Format.Format_ARGB32)
             pix = QtGui.QPixmap.fromImage(img.copy(4, 4, 24, 24))
             animTiles.append(pix)
 
@@ -100,7 +100,7 @@ class TilesetTile:
         ##padded += ' ' * (0x80000 - len(data))
         ### It'll crash on this next line
         ##rgbdata = NSMBLib.decodeTileAnims(padded)
-        ##tilesImg = QtGui.QImage(rgbdata, 32, (len(rgbdata)/4)/32, 32*4, QtGui.QImage.Format_ARGB32_Premultiplied)
+        ##tilesImg = QtGui.QImage(rgbdata, 32, (len(rgbdata)/4)/32, 32*4, QtGui.QImage.Format.Format_ARGB32_Premultiplied)
         ##tilesPix = QtGui.QPixmap.fromImage(tilesImg)
 
         ##self.isAnimated = True
@@ -1064,9 +1064,9 @@ def LoadTexture_NSMBW(tiledata):
     # format for Qt - ARGB32 premultiplied if nsmblib is used, and ARGB32 by
     # default.
     if lib_versions["nsmblib"] is not None:
-        data_format = QtGui.QImage.Format_ARGB32_Premultiplied
+        data_format = QtGui.QImage.Format.Format_ARGB32_Premultiplied
     else:
-        data_format = QtGui.QImage.Format_ARGB32
+        data_format = QtGui.QImage.Format.Format_ARGB32
 
     return QtGui.QImage(data, 1024, 256, 4096, data_format)
 

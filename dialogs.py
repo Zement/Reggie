@@ -424,7 +424,7 @@ class MetaInfoDialog(QtWidgets.QDialog):
                 self.Ok.setDisabled(self.New.text() != self.Verify.text() and self.New.text() != '')
 
         dlg = ChangePWDialog()
-        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+        if dlg.exec() == QtWidgets.QDialog.Accepted:
             self.lockedLabel.setVisible(True)
             self.Password.setVisible(True)
             self.PasswordLabel.setVisible(True)

@@ -142,7 +142,7 @@ def _excepthook(*exc_info):
 
     errorbox = QtWidgets.QMessageBox()
     errorbox.setText(notice + msg)
-    errorbox.exec_()
+    errorbox.exec()
 
     globals_.DirtyOverride = 0
 
@@ -1287,12 +1287,14 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.stampRemoveBtn = stampRemoveBtn  # so we can enable/disable it later
 
         menu = QtWidgets.QMenu()
-        menu.addAction(globals_.trans.string('Palette', 31), self.handleStampsOpen, 0)  # Open Set...
-        menu.addAction(globals_.trans.string('Palette', 32), self.handleStampsSave, 0)  # Save Set As...
+        open_stamp_act = menu.addAction(globals_.trans.string('Palette', 31))  # Open Set...
+        open_stamp_act.triggered.connect(self.handleStampsOpen)
+        save_stamp_act = menu.addAction(globals_.trans.string('Palette', 32))  # Save Set As...
+        save_stamp_act.triggered.connect(self.handleStampsSave)
         stampToolsBtn = QtWidgets.QToolButton()
         stampToolsBtn.setText(globals_.trans.string('Palette', 30))
         stampToolsBtn.setMenu(menu)
-        stampToolsBtn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        stampToolsBtn.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         stampToolsBtn.setSizePolicy(stampAddBtn.sizePolicy())
         stampToolsBtn.setMinimumHeight(stampAddBtn.height() // 20)
 
@@ -1414,7 +1416,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         msg.setStandardButtons(
             QtWidgets.QMessageBox.Save | QtWidgets.QMessageBox.Discard | QtWidgets.QMessageBox.Cancel)
         msg.setDefaultButton(QtWidgets.QMessageBox.Save)
-        ret = msg.exec_()
+        ret = msg.exec()
 
         if ret == QtWidgets.QMessageBox.Save:
             # If the save failed, the file is still dirty, so we need to negate
@@ -1610,7 +1612,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         Shows the about box
         """
-        AboutDialog().exec_()
+        AboutDialog().exec()
 
     def HandleInfo(self):
         """
@@ -1618,7 +1620,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         if globals_.Area.areanum == 1:
             dlg = MetaInfoDialog()
-            if dlg.exec_() == QtWidgets.QDialog.Accepted:
+            if dlg.exec() == QtWidgets.QDialog.Accepted:
                 globals_.Area.Metadata.setStrData('Title', dlg.levelName.text())
                 globals_.Area.Metadata.setStrData('Author', dlg.Author.text())
                 globals_.Area.Metadata.setStrData('Group', dlg.Group.text())
@@ -1629,7 +1631,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         else:
             dlg = QtWidgets.QMessageBox()
             dlg.setText(globals_.trans.string('InfoDlg', 14))
-            dlg.exec_()
+            dlg.exec()
 
     def HelpBox(self):
         """
@@ -1965,7 +1967,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if not items: return
 
         dlg = ObjectShiftDialog()
-        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
             return
 
         xoffset = dlg.XOffset.value()
@@ -2015,7 +2017,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         Swaps objects' tilesets
         """
         dlg = ObjectTilesetSwapDialog()
-        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
             return
 
         from_tileset = dlg.FromTS.value() - 1
@@ -2038,7 +2040,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         Swaps objects' types
         """
-        ObjectTypeSwapDialog().exec_()
+        ObjectTypeSwapDialog().exec()
 
     def MergeLocations(self):
         """
@@ -2332,7 +2334,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         # choose one
         dlg = AreaChoiceDialog(areacount)
-        if dlg.exec_() == QtWidgets.QDialog.Rejected:
+        if dlg.exec() == QtWidgets.QDialog.Rejected:
             return
 
         area = dlg.areaCombo.currentIndex() + 1
@@ -2455,7 +2457,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         # Show the dialog
         dlg = PreferencesDialog()
-        if dlg.exec_() == QtWidgets.QDialog.Rejected:
+        if dlg.exec() == QtWidgets.QDialog.Rejected:
             return
 
         # Get the translation
@@ -2526,7 +2528,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         LoadLevelNames()
         dlg = ChooseLevelNameDialog()
-        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+        if dlg.exec() == QtWidgets.QDialog.Accepted:
             self.LoadLevel(dlg.currentlevel, False, 1)
 
     def HandleOpenFromFile(self):
@@ -3197,7 +3199,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # Clear out all level-thing lists
         for thingList in (self.spriteList, self.entranceList, self.locationList, self.pathList, self.commentList):
             thingList.clear()
-            thingList.selectionModel().setCurrentIndex(QtCore.QModelIndex(), QtCore.QItemSelectionModel.Clear)
+            thingList.selectionModel().setCurrentIndex(QtCore.QModelIndex(), QtCore.QItemSelectionModel.SelectionFlag.Clear)
 
         # Reset these here, because if they are set after
         # creating the objects, they use the old values.
@@ -4089,7 +4091,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         Pops up the options for Area Dialogue
         """
         dlg = AreaOptionsDialog()
-        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
             return
 
         SetDirty()
@@ -4153,7 +4155,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         LoadZoneThemes()
 
         dlg = ZonesDialog()
-        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
             self.levelOverview.update()
             return
 
@@ -4230,7 +4232,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         Pops up the Background settings Dialog
         """
         dlg = BGDialog()
-        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
             return
 
         SetDirty()
@@ -4264,7 +4266,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
 
         dlg = ScreenCapChoiceDialog()
-        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
             return
 
         screenshot_type = dlg.zoneCombo.currentIndex()
@@ -4282,7 +4284,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if screenshot_type == 0:  # Current view
             screenshot_rect = QtCore.QRect(QtCore.QPoint(), self.view.size())
             renderer = self.view
-            ss_img = QtGui.QImage(screenshot_rect.size(), QtGui.QImage.Format_ARGB32)
+            ss_img = QtGui.QImage(screenshot_rect.size(), QtGui.QImage.Format.Format_ARGB32)
 
         else:
             if screenshot_type == 1:  # All zones together
@@ -4302,7 +4304,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
             screenshot_rect &= QtCore.QRectF(0, 0, 1024 * 24, 512 * 24)
 
             renderer = self.scene
-            ss_img = QtGui.QImage(screenshot_rect.size().toSize(), QtGui.QImage.Format_ARGB32)
+            ss_img = QtGui.QImage(screenshot_rect.size().toSize(), QtGui.QImage.Format.Format_ARGB32)
 
         ss_img.fill(Qt.transparent)
         ss_painter = QtGui.QPainter(ss_img)
@@ -4337,12 +4339,12 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         Checks the level for any obvious problems and provides options to autofix them
         """
-        DiagnosticToolDialog().exec_()
+        DiagnosticToolDialog().exec()
 
     def HandleCameraProfiles(self):
         """Pops up the options for camera profiles"""
         dlg = CameraProfilesDialog()
-        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
             return
 
         camprofiles = []
@@ -4400,7 +4402,7 @@ def main():
     # 4.0 -> oldest version with settings.ini compatible with the current version
     if setting("ReggieVersion") < 4.0 or setting("ReggieVersion") > globals_.ReggieVersionFloat:
         warningBox = QtWidgets.QMessageBox(QtWidgets.QMessageBox.NoIcon, 'Unsupported settings file', 'Your settings.ini file is unsupported. Please remove it and run Reggie again.')
-        warningBox.exec_()
+        warningBox.exec()
         sys.exit(1)
 
     # Load the translation (needs to happen first)
@@ -4497,7 +4499,7 @@ def main():
     autofile = setting('AutoSaveFilePath')
     autofiledata = setting('AutoSaveFileData', 'x')
     if autofile is not None and autofiledata != 'x':
-        result = AutoSavedInfoDialog(autofile).exec_()
+        result = AutoSavedInfoDialog(autofile).exec()
         if result == QtWidgets.QDialog.Accepted:
             globals_.RestoredFromAutoSave = True
             globals_.AutoSavePath = autofile
@@ -4514,7 +4516,7 @@ def main():
     if '-generatestringsxml' in sys.argv:
         globals_.trans.generateXML()
 
-    exitcodesys = globals_.app.exec_()
+    exitcodesys = globals_.app.exec()
     globals_.app.deleteLater()
     sys.exit(exitcodesys)
 

@@ -464,7 +464,7 @@ class ListWidgetWithToolTipSignal(QtWidgets.QListWidget):
         """
         Handles viewport events
         """
-        if e.type() == e.ToolTip:
+        if e.type() == e.Type.ToolTip:
             item = self.itemFromIndex(self.indexAt(e.pos()))
             if item is not None:
                 self.toolTipAboutToShow.emit(item)
