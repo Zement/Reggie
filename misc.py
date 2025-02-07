@@ -464,7 +464,8 @@ class SpriteDefinition:
             'external',
             'multidualbox',
             'dynamicblockvalues',
-            'hexvalue'
+            'hexvalue',
+            'dynamicstring'
         ]
 
         for field in elem:
@@ -623,6 +624,9 @@ class SpriteDefinition:
                 round_bit1 = bit[0][1] // 4 * 4 + 1
 
                 fields.append((9, attribs['title'], [(round_bit0, round_bit1)], comment, required, advanced, comment2, advancedcomment, block))
+
+            elif field.tag == 'dynamicstring':
+                fields.append((10, attribs['title'], comment, required, advanced, comment2, advancedcomment, idtype, block))
 
     def parseBits(self, nybble_val: str) -> tuple[list[tuple[int, int]], int]:
         """
