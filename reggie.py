@@ -132,7 +132,7 @@ def _excepthook(*exc_info):
     sections = [separator, timeString, separator, short_string]
     msg = '\n'.join(sections)
 
-    globals_.ErrMsg += msg + e
+    globals_.ErrMsg += '\n'.join([separator, timeString, separator, e])
 
     try:
         with open(logFile, "w", encoding="utf-8") as f:
