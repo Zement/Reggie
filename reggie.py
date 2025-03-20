@@ -124,10 +124,15 @@ def _excepthook(*exc_info):
     timeString = time.strftime("%Y-%m-%d, %H:%M:%S")
 
     e = "".join(traceback.format_exception(*exc_info))
-    sections = [separator, timeString, separator, e]
+    short_string = str(exc_info[1])
+
+    if len(short_string) > 200:
+        short_string = short_string[:200] + f'... (see details for more)'
+
+    sections = [separator, timeString, separator, short_string]
     msg = '\n'.join(sections)
 
-    globals_.ErrMsg += msg
+    globals_.ErrMsg += msg + e
 
     try:
         with open(logFile, "w", encoding="utf-8") as f:
@@ -137,6 +142,10 @@ def _excepthook(*exc_info):
         pass
 
     errorbox = QtWidgets.QMessageBox()
+    errorbox.setIcon(QtWidgets.QMessageBox.Critical)
+    errorbox.setWindowTitle("Reggie! Next - Unhandled Exception")
+    errorbox.setDetailedText(e)
+
     errorbox.setText(notice + msg)
     errorbox.exec_()
 
