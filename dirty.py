@@ -16,14 +16,17 @@ def SetDirty(noautosave = False):
 
 
 # Define which group each setting belongs to
+# Note: Avoid "General" as group name - QSettings encodes it as "%General"
 SETTING_GROUPS = {
+    'Main': ['ReggieVersion', 'uiStyle', 'LastLevel', 'LastGameDef', 
+             'RecentFiles', 'Translation', 'Theme'],
     'View': ['ShowSprites', 'ShowSpriteImages', 'ShowLocations', 'ShowComments', 
              'ShowPaths', 'ShowCollisions', 'RealViewEnabled', 'GridType'],
     'Freeze': ['FreezeObjects', 'FreezeSprites', 'FreezeEntrances', 
                'FreezeLocations', 'FreezePaths', 'FreezeComments'],
-    'Preferences': ['Translation', 'ZoneEntIndicators', 'ZoneBoundIndicators',
+    'Preferences': ['ZoneEntIndicators', 'ZoneBoundIndicators',
                     'ResetDataWhenHiding', 'HideResetSpritedata', 'EnablePadding',
-                    'PaddingLength', 'PlaceObjectsAtFullSize', 'InsertPathNode', 'Theme'],
+                    'PaddingLength', 'PlaceObjectsAtFullSize', 'InsertPathNode'],
     'Geometry': ['MainWindowState', 'MainWindowGeometry', 'ToolbarActs',
                  'AutoSaveFilePath', 'AutoSaveFileData'],
 }
@@ -39,8 +42,8 @@ def _get_group_for_setting(name):
     if name.startswith(('StageGamePath_', 'TextureGamePath_', 'LastLevel_', 'PatchPath_')):
         return 'GamePaths'
     
-    # Default to General
-    return 'General'
+    # Default to Main (avoid "General" as QSettings encodes it as "%General")
+    return 'Main'
 
 def setting(name, default=None):
     """
@@ -57,6 +60,9 @@ def setting(name, default=None):
     elif globals_.settings.contains(name):
         # Fallback to old location (no group)
         value = globals_.settings.value(name)
+    elif globals_.settings.contains(f"%General/{name}"):
+        # Fallback to %General group (old QSettings encoding)
+        value = globals_.settings.value(f"%General/{name}")
     else:
         return default
     
@@ -146,24 +152,26 @@ def reorganizeSettings():
     """
     import globals_
     
-    # Get all keys at root level (not in groups)
-    all_keys = [k for k in globals_.settings.allKeys() if '/' not in k]
+    # Get all keys at root level (not in groups) or in %General group
+    all_keys = [k for k in globals_.settings.allKeys() if '/' not in k or k.startswith('%General/')]
     
     if not all_keys:
         return  # Already organized
     
-    # Read all values
+    # Read all values and clean up key names
     values = {}
     for key in all_keys:
-        values[key] = globals_.settings.value(key)
+        # Remove %General/ prefix if present
+        clean_key = key.replace('%General/', '')
+        values[clean_key] = globals_.settings.value(key)
     
     # Remove old keys
     for key in all_keys:
         globals_.settings.remove(key)
     
     # Write back with groups in specific order
-    # Order: General, View, Freeze, Preferences, GamePaths, Geometry
-    group_order = ['General', 'View', 'Freeze', 'Preferences', 'GamePaths', 'Geometry']
+    # Order: Main, View, Freeze, Preferences, GamePaths, Geometry
+    group_order = ['Main', 'View', 'Freeze', 'Preferences', 'GamePaths', 'Geometry']
     
     for group_name in group_order:
         for key, value in values.items():
