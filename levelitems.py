@@ -2808,6 +2808,10 @@ class Path:
 
         self._loops = value
         self._line_item.update_path()
+        
+        # Force scene update to ensure the visual change is rendered
+        if self._has_line:
+            self._scene.update()
 
         return True
 
@@ -3117,6 +3121,9 @@ class PathEditorLineItem(QtWidgets.QGraphicsPathItem):
         line_path.addPolygon(QtGui.QPolygonF(points))
 
         old_rect = self.boundingRect()
+        
+        # Notify Qt that the geometry is about to change
+        self.prepareGeometryChange()
 
         self.setPath(line_path)
 
@@ -3124,6 +3131,11 @@ class PathEditorLineItem(QtWidgets.QGraphicsPathItem):
         # remain on the scene if we do not update the scene manually...
         if old_rect:
             globals_.mainWindow.scene.update(old_rect)
+        
+        # Also update the new rect to ensure the loop connection is drawn
+        new_rect = self.boundingRect()
+        if new_rect:
+            globals_.mainWindow.scene.update(new_rect)
 
 
 class CommentItem(LevelEditorItem):

@@ -485,10 +485,14 @@ class PathNodeEditorWidget(QtWidgets.QWidget):
             SetDirty()
 
     def HandleLoopsChanged(self, i):
-        if self.UpdateFlag or self.path_node.path._loops == (i == QtCore.Qt.CheckState.Checked):
+        if self.UpdateFlag:
             return
 
-        if self.path_node.path.set_loops(i == QtCore.Qt.CheckState.Checked):
+        # i is an integer: 0=Unchecked, 2=Checked
+        # Convert to boolean
+        new_loops_value = (i == QtCore.Qt.CheckState.Checked.value or i == 2)
+        
+        if self.path_node.path.set_loops(new_loops_value):
             SetDirty()
 
     def HandlePathIdChanged(self, i):

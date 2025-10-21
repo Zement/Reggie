@@ -1424,6 +1424,53 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         elif ret == QtWidgets.QMessageBox.StandardButton.Cancel:
             return True
+        
+        elif ret == QtWidgets.QMessageBox.StandardButton.Discard:
+            # User chose to discard changes - reload the current area from disk
+            # to discard all unsaved changes
+            if globals_.Area is not None and hasattr(globals_.Area, 'areanum'):
+                current_area_num = globals_.Area.areanum
+                
+                # Set a flag to indicate we just discarded changes
+                # This will force a reload even if loading the "same" level
+                self.justDiscardedChanges = True
+                
+                # Clear the dirty flag before reloading
+                globals_.Dirty = False
+                globals_.DirtyOverride += 1
+                
+                # Clear the scene and lists
+                self.scene.clearSelection()
+                self.CurrentSelection = []
+                self.scene.clear()
+                
+                for thingList in (self.spriteList, self.entranceList, self.locationList, self.pathList, self.commentList):
+                    thingList.clear()
+                    thingList.selectionModel().setCurrentIndex(QtCore.QModelIndex(), QtCore.QItemSelectionModel.SelectionFlag.Clear)
+                
+                # Unload and reload the area to discard changes
+                globals_.Area.unload()
+                globals_.Area.load()
+                
+                # Reload the scene with the fresh data
+                self.ResetPalette()
+                
+                # Refresh object layouts
+                for layer in globals_.Area.layers:
+                    for obj in layer:
+                        obj.updateObjCache()
+                
+                for sprite in globals_.Area.sprites:
+                    sprite.UpdateDynamicSizing()
+                    sprite.ImageObj.positionChanged()
+                
+                # Update the scene and overview
+                self.scene.update()
+                self.levelOverview.Reset()
+                self.levelOverview.update()
+                
+                globals_.DirtyOverride -= 1
+            return False
 
         return False
 
@@ -3133,6 +3180,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
             name = checkname
             same = name == self.fileSavePath  # Just an area change
+            
+            # If we just discarded changes, force a full reload even if it's the same level
+            if hasattr(self, 'justDiscardedChanges') and self.justDiscardedChanges:
+                same = False
+                self.justDiscardedChanges = False
 
         # Get the file path, if possible
         if new:
@@ -4396,11 +4448,32 @@ def main():
 
     # Load the settings
     globals_.settings = QtCore.QSettings('settings.ini', QtCore.QSettings.Format.IniFormat)
+    
+    # Migrate old settings format (remove typeof entries)
+    def migrate_settings():
+        """Remove old typeof entries from settings"""
+        all_keys = globals_.settings.allKeys()
+        typeof_keys = [key for key in all_keys if key.startswith('typeof(')]
+        for key in typeof_keys:
+            globals_.settings.remove(key)
+    
+    # Check if we need to migrate (if any typeof entries exist)
+    if any(key.startswith('typeof(') for key in globals_.settings.allKeys()):
+        migrate_settings()
+        globals_.settings.sync()
+    
+    # Reorganize settings into groups if they're still flat
+    from dirty import reorganizeSettings, ensureSettingsVisible
+    reorganizeSettings()
 
     # Check the version and set the UI style to Fusion by default
     if setting("ReggieVersion") is None:
         setSetting("ReggieVersion", globals_.ReggieVersionFloat)
         setSetting('uiStyle', "Fusion")
+    
+    # Ensure all important settings are visible in the file
+    ensureSettingsVisible()
+    globals_.settings.sync()
 
     # 4.0 -> oldest version with settings.ini compatible with the current version
     if setting("ReggieVersion") < 4.0 or setting("ReggieVersion") > globals_.ReggieVersionFloat:

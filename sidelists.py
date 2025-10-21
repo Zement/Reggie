@@ -21,6 +21,9 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         QtWidgets.QWidget.__init__(self)
         self.setSizePolicy(
             QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding))
+        
+        # Set minimum height to ensure visibility when docked
+        self.setMinimumHeight(80)
 
         self.bgbrush = QtGui.QBrush(globals_.theme.color('bg'))
         self.objbrush = QtGui.QBrush(globals_.theme.color('overview_object'))

@@ -88,48 +88,59 @@ class GameDefMenu(QtWidgets.QMenu):
             src_path = QtWidgets.QFileDialog.getExistingDirectory(None, "Select Reggie Patch Folder ...")
             return src_path
 
-        def create_symlink(src_path, dst_path):
-            """
-            Create a symlink with proper error handling for all platforms
-            """
-            try:
-                # On Windows, try to create directory symlink
-                if sys.platform == 'win32':
-                    os.symlink(src_path, dst_path, target_is_directory=True)
-                else:
-                    os.symlink(src_path, dst_path)
-                return True, None
-            except OSError as e:
-                # On Windows, symlinks require admin privileges or Developer Mode
-                if sys.platform == 'win32' and e.winerror == 1314:
-                    return False, "Administrator privileges required to create symlinks on Windows.\n\nPlease either:\n1. Run Reggie as Administrator, or\n2. Enable Developer Mode in Windows Settings"
-                else:
-                    return False, f"Failed to create symlink: {str(e)}"
-            except Exception as e:
-                return False, f"Unexpected error: {str(e)}"
-
         def restart_reggie_info():
             # Warn the user that they may need to restart
             QtWidgets.QMessageBox.warning(None, globals_.trans.string('PrefsDlg', 0), globals_.trans.string('PrefsDlg', 30))
 
         # Select the patch folder
-        src_path = select_reggie_patch_folder()
-        if src_path == "":
+        patch_path = select_reggie_patch_folder()
+        if patch_path == "":
             return
 
-        dst_path = os.path.join(os.getcwd(), 'reggiedata', 'patches', os.path.basename(src_path))
-        src_path = os.path.normpath(src_path)
+        patch_path = os.path.normpath(patch_path)
+        patch_name = os.path.basename(patch_path)
         
-        # Check if symlink already exists
-        if os.path.exists(dst_path):
-            QtWidgets.QMessageBox.warning(None, 'Error', f'A patch folder with this name already exists:\n{os.path.basename(src_path)}')
+        # Verify that main.xml exists in the selected folder
+        if not os.path.isfile(os.path.join(patch_path, 'main.xml')):
+            QtWidgets.QMessageBox.warning(None, 'Invalid Patch', 
+                f'The selected folder does not contain a valid Reggie patch (main.xml not found).')
             return
         
-        success, error_msg = create_symlink(src_path, dst_path)
-        if success:
-            restart_reggie_info()
+        # Check if a patch with this name already exists (in patches dir or settings)
+        patches_dir_path = os.path.join(os.getcwd(), 'reggiedata', 'patches', patch_name)
+        if os.path.exists(patches_dir_path):
+            QtWidgets.QMessageBox.warning(None, 'Error', 
+                f'A patch with this name already exists in the patches directory:\n{patch_name}')
+            return
+        
+        # Check if already configured in settings
+        existing_path = setting('PatchPath_' + patch_name)
+        if existing_path:
+            QtWidgets.QMessageBox.warning(None, 'Error', 
+                f'A patch with this name is already configured:\n{patch_name}\nPath: {existing_path}')
+            return
+        
+        # Save the patch path to settings using the same format as other paths
+        # Format: C:/folder\\subfolder\\file (forward slash after drive, double backslash for separators)
+        # Note: In Python strings, '\\' is one backslash, '\\\\' is two backslashes
+        # QSettings will write them as they are
+        patch_path = os.path.normpath(patch_path)
+        
+        if len(patch_path) >= 2 and patch_path[1] == ':':
+            # Windows path with drive letter: C:\folder\subfolder
+            # Convert to: C:/folder\\subfolder (one forward slash, then double backslashes)
+            drive = patch_path[0:2]  # e.g., "C:"
+            rest = patch_path[3:]     # Skip drive and first backslash: "folder\subfolder"
+            # In the settings file, we want double backslashes between folders
+            # In Python, we write '\\\\' to get '\\' in the file
+            patch_path_formatted = drive + '/' + rest.replace('\\', '\\\\')
         else:
-            QtWidgets.QMessageBox.critical(None, 'Symlink Creation Failed', error_msg)
+            # UNC or relative path
+            patch_path_formatted = patch_path.replace('\\', '\\\\')
+        
+        setSetting('PatchPath_' + patch_name, patch_path_formatted)
+        
+        restart_reggie_info()
 
 
     def __init__(self):
@@ -224,9 +235,10 @@ class ReggieGameDefinition:
             self.path = path
             self.patch = patch
 
-    def __init__(self, name=None):
+    def __init__(self, name=None, custom_path=None):
         """
         Initializes the ReggieGameDefinition
+        custom_path: Optional custom path to the patch folder (from settings)
         """
         self.InitAsEmpty()
 
@@ -236,7 +248,7 @@ class ReggieGameDefinition:
             return
 
         try:
-            self.InitFromName(name)
+            self.InitFromName(name, custom_path)
         except Exception:
             self.InitAsEmpty()
             raise
@@ -277,17 +289,29 @@ class ReggieGameDefinition:
             'external': gdf(None, False),
         }
 
-    def InitFromName(self, name):
+    def InitFromName(self, name, custom_path=None):
         """
         Attempts to open/load a Game Definition from a name string. Just loads
         the name and description to avoid referring to other game definitions.
+        custom_path: Optional custom path to the patch folder (from settings)
         """
         self.custom = True
         name = str(name)
         self.gamepath = name
+        self.custom_patch_path = custom_path  # Store custom path if provided
 
-        # Parse the file (errors are handled by __init__())
-        path = os.path.join("reggiedata", "patches", name, "main.xml")
+        # Determine the path to main.xml
+        if custom_path:
+            path = os.path.join(custom_path, "main.xml")
+        else:
+            path = os.path.join("reggiedata", "patches", name, "main.xml")
+            
+            # Check if there's a custom path in settings
+            custom_setting_path = setting('PatchPath_' + name)
+            if custom_setting_path and os.path.isfile(os.path.join(custom_setting_path, "main.xml")):
+                path = os.path.join(custom_setting_path, "main.xml")
+                self.custom_patch_path = custom_setting_path
+        
         tree = etree.parse(path)
         root = tree.getroot()
 
@@ -310,7 +334,14 @@ class ReggieGameDefinition:
         if not self.custom:
             return
 
-        path = os.path.join("reggiedata", "patches", self.gamepath, "main.xml")
+        # Use custom path if available, otherwise use default patches directory
+        if hasattr(self, 'custom_patch_path') and self.custom_patch_path:
+            addpath = self.custom_patch_path
+            path = os.path.join(addpath, "main.xml")
+        else:
+            addpath = os.path.join("reggiedata", "patches", self.gamepath)
+            path = os.path.join(addpath, "main.xml")
+            
         tree = etree.parse(path)
         root = tree.getroot()
 
@@ -321,7 +352,7 @@ class ReggieGameDefinition:
             self.base = ReggieGameDefinition()
 
         # Parse the nodes
-        addpath = os.path.join("reggiedata", "patches", self.gamepath)
+        # addpath is already set above
         for node in root:
             n = node.tag.lower()
             if n not in ('file', 'folder'):
@@ -585,15 +616,44 @@ class ReggieGameDefinition:
 
 def getAvailableGameDefs():
     game_defs = []
+    patches_dir = os.path.join('reggiedata', 'patches')
 
-    # Add them
-    folders = os.listdir(os.path.join('reggiedata', 'patches'))
-    for folder in folders:
-        if not os.path.isfile(os.path.join('reggiedata', 'patches', folder, 'main.xml')): continue
+    # Add patches from the patches directory
+    if os.path.exists(patches_dir):
+        folders = os.listdir(patches_dir)
+        for folder in folders:
+            if not os.path.isfile(os.path.join(patches_dir, folder, 'main.xml')): 
+                continue
 
-        def_ = ReggieGameDefinition(folder)
-        if def_.custom:
-            game_defs.append((def_.name, folder))
+            def_ = ReggieGameDefinition(folder)
+            if def_.custom:
+                game_defs.append((def_.name, folder))
+    
+    # Add patches from custom paths stored in settings
+    all_keys = globals_.settings.allKeys()
+    for key in all_keys:
+        # Handle both grouped (GamePaths/PatchPath_X) and flat (PatchPath_X) keys
+        key_name = key.split('/')[-1] if '/' in key else key
+        
+        if key_name.startswith('PatchPath_'):
+            patch_name = key_name[10:]  # Remove 'PatchPath_' prefix
+            patch_path = setting(key_name)  # Use setting() which handles groups
+            
+            if patch_path:
+                # Normalize the path to handle different slash conventions
+                patch_path = os.path.normpath(patch_path)
+                
+                if os.path.isfile(os.path.join(patch_path, 'main.xml')):
+                    # Check if not already added from patches directory
+                    if not any(folder == patch_name for _, folder in game_defs):
+                        try:
+                            def_ = ReggieGameDefinition(patch_name, custom_path=patch_path)
+                            if def_.custom:
+                                game_defs.append((def_.name, patch_name))
+                        except Exception as e:
+                            # Skip invalid patches but log the error for debugging
+                            print(f"Failed to load patch {patch_name} from {patch_path}: {e}")
+                            pass
 
     # Alphabetize them, and then add the default
     game_defs.sort()
