@@ -102,7 +102,8 @@ def setting(name, default=None):
 def _normalize_path_for_settings(path):
     """
     Normalize a file path for storage in settings.ini
-    Format: C:/folder\\subfolder\\file (forward slash after drive, double backslash for separators)
+    Format: C:/folder\\subfolder\\file (forward slash after drive, single backslash for separators)
+    Note: QSettings will automatically escape backslashes when writing to INI file
     """
     if not path or not isinstance(path, str):
         return path
@@ -114,15 +115,14 @@ def _normalize_path_for_settings(path):
     # Check if it's a Windows path with drive letter
     if len(path) >= 2 and path[1] == ':':
         # Windows path: C:\folder\subfolder
-        # Convert to: C:/folder\\subfolder
+        # Convert to: C:/folder\subfolder (single backslashes - QSettings will escape them)
         drive = path[0:2]  # e.g., "C:"
         rest = path[3:] if len(path) > 3 else ""  # Skip "C:\" to get "folder\subfolder"
-        # Replace single backslashes with double backslashes for INI format
-        rest = rest.replace('\\', '\\\\')
+        # Use single backslashes - QSettings will double them when writing to INI
         return drive + '/' + rest if rest else drive + '/'
     else:
-        # UNC or relative path - just double the backslashes
-        return path.replace('\\', '\\\\')
+        # UNC or relative path - keep as-is, QSettings will handle escaping
+        return path
 
 def setSetting(name, value):
     """
