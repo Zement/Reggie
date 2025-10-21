@@ -4383,12 +4383,15 @@ def main():
 
     # Try to get the last commit id - if it failed, we're in a build.
     import subprocess
+    import os
 
-    try:
-        commit_id = subprocess.check_output(["git", "describe", "--always"], stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL).decode('utf-8').strip()
-        globals_.ReggieVersionShort += "-" + commit_id
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        pass
+    # Only try to get git commit if we're in a git repository
+    if os.path.exists('.git'):
+        try:
+            commit_id = subprocess.check_output(["git", "describe", "--always"], stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL).decode('utf-8').strip()
+            globals_.ReggieVersionShort += "-" + commit_id
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
 
     del subprocess
 
