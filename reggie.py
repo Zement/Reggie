@@ -4383,7 +4383,6 @@ def main():
 
     # Try to get the last commit id - if it failed, we're in a build.
     import subprocess
-    import os
 
     # Only try to get git commit if we're in a git repository
     if os.path.exists('.git'):
