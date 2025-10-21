@@ -99,11 +99,40 @@ def setting(name, default=None):
     return value
 
 
+def _normalize_path_for_settings(path):
+    """
+    Normalize a file path for storage in settings.ini
+    Format: C:/folder\\subfolder\\file (forward slash after drive, double backslash for separators)
+    """
+    if not path or not isinstance(path, str):
+        return path
+    
+    import os
+    # Normalize to Windows format first
+    path = os.path.normpath(path)
+    
+    # Check if it's a Windows path with drive letter
+    if len(path) >= 2 and path[1] == ':':
+        # Windows path: C:\folder\subfolder
+        # Convert to: C:/folder\\subfolder
+        drive = path[0:2]  # e.g., "C:"
+        rest = path[3:] if len(path) > 3 else ""  # Skip "C:\" to get "folder\subfolder"
+        # Replace single backslashes with double backslashes for INI format
+        rest = rest.replace('\\', '\\\\')
+        return drive + '/' + rest if rest else drive + '/'
+    else:
+        # UNC or relative path - just double the backslashes
+        return path.replace('\\', '\\\\')
+
 def setSetting(name, value):
     """
     Thin wrapper around QSettings that properly stores values in groups
     """
     assert isinstance(name, str)
+    
+    # Normalize paths before saving
+    if isinstance(value, str) and ('Path' in name or 'Level' in name) and ('\\' in value or '/' in value):
+        value = _normalize_path_for_settings(value)
     
     # Determine the group for this setting
     group = _get_group_for_setting(name)

@@ -120,25 +120,9 @@ class GameDefMenu(QtWidgets.QMenu):
                 f'A patch with this name is already configured:\n{patch_name}\nPath: {existing_path}')
             return
         
-        # Save the patch path to settings using the same format as other paths
-        # Format: C:/folder\\subfolder\\file (forward slash after drive, double backslash for separators)
-        # Note: In Python strings, '\\' is one backslash, '\\\\' is two backslashes
-        # QSettings will write them as they are
-        patch_path = os.path.normpath(patch_path)
-        
-        if len(patch_path) >= 2 and patch_path[1] == ':':
-            # Windows path with drive letter: C:\folder\subfolder
-            # Convert to: C:/folder\\subfolder (one forward slash, then double backslashes)
-            drive = patch_path[0:2]  # e.g., "C:"
-            rest = patch_path[3:]     # Skip drive and first backslash: "folder\subfolder"
-            # In the settings file, we want double backslashes between folders
-            # In Python, we write '\\\\' to get '\\' in the file
-            patch_path_formatted = drive + '/' + rest.replace('\\', '\\\\')
-        else:
-            # UNC or relative path
-            patch_path_formatted = patch_path.replace('\\', '\\\\')
-        
-        setSetting('PatchPath_' + patch_name, patch_path_formatted)
+        # Save the patch path to settings
+        # setSetting will automatically normalize the path format
+        setSetting('PatchPath_' + patch_name, patch_path)
         
         restart_reggie_info()
 
