@@ -16,17 +16,14 @@ def SetDirty(noautosave = False):
 
 
 # Define which group each setting belongs to
-# Note: Avoid "General" as group name - QSettings encodes it as "%General"
 SETTING_GROUPS = {
-    'Main': ['ReggieVersion', 'uiStyle', 'LastLevel', 'LastGameDef', 
-             'RecentFiles', 'Translation', 'Theme'],
     'View': ['ShowSprites', 'ShowSpriteImages', 'ShowLocations', 'ShowComments', 
              'ShowPaths', 'ShowCollisions', 'RealViewEnabled', 'GridType'],
     'Freeze': ['FreezeObjects', 'FreezeSprites', 'FreezeEntrances', 
                'FreezeLocations', 'FreezePaths', 'FreezeComments'],
-    'Preferences': ['ZoneEntIndicators', 'ZoneBoundIndicators',
+    'Preferences': ['Translation', 'ZoneEntIndicators', 'ZoneBoundIndicators',
                     'ResetDataWhenHiding', 'HideResetSpritedata', 'EnablePadding',
-                    'PaddingLength', 'PlaceObjectsAtFullSize', 'InsertPathNode'],
+                    'PaddingLength', 'PlaceObjectsAtFullSize', 'InsertPathNode', 'Theme'],
     'Geometry': ['MainWindowState', 'MainWindowGeometry', 'ToolbarActs',
                  'AutoSaveFilePath', 'AutoSaveFileData'],
 }
@@ -42,8 +39,8 @@ def _get_group_for_setting(name):
     if name.startswith(('StageGamePath_', 'TextureGamePath_', 'LastLevel_', 'PatchPath_')):
         return 'GamePaths'
     
-    # Default to Main (avoid "General" as QSettings encodes it as "%General")
-    return 'Main'
+    # Default to General
+    return 'General'
 
 def setting(name, default=None):
     """
@@ -60,9 +57,6 @@ def setting(name, default=None):
     elif globals_.settings.contains(name):
         # Fallback to old location (no group)
         value = globals_.settings.value(name)
-    elif globals_.settings.contains(f"%General/{name}"):
-        # Fallback to %General group (old QSettings encoding)
-        value = globals_.settings.value(f"%General/{name}")
     else:
         return default
     
@@ -114,10 +108,10 @@ def setSetting(name, value):
     # Determine the group for this setting
     group = _get_group_for_setting(name)
     
-    # Write to the grouped location
-    globals_.settings.beginGroup(group)
-    globals_.settings.setValue(name, value)
-    globals_.settings.endGroup()
+    # Write using full key path to avoid URL encoding of group names
+    # Format: "GroupName/settingName"
+    full_key = f"{group}/{name}"
+    globals_.settings.setValue(full_key, value)
 
 
 def ensureSettingsVisible():
@@ -152,34 +146,32 @@ def reorganizeSettings():
     """
     import globals_
     
-    # Get all keys at root level (not in groups) or in %General group
-    all_keys = [k for k in globals_.settings.allKeys() if '/' not in k or k.startswith('%General/')]
+    # Get all keys at root level (not in groups)
+    all_keys = [k for k in globals_.settings.allKeys() if '/' not in k]
     
     if not all_keys:
         return  # Already organized
     
-    # Read all values and clean up key names
+    # Read all values
     values = {}
     for key in all_keys:
-        # Remove %General/ prefix if present
-        clean_key = key.replace('%General/', '')
-        values[clean_key] = globals_.settings.value(key)
+        values[key] = globals_.settings.value(key)
     
     # Remove old keys
     for key in all_keys:
         globals_.settings.remove(key)
     
     # Write back with groups in specific order
-    # Order: Main, View, Freeze, Preferences, GamePaths, Geometry
-    group_order = ['Main', 'View', 'Freeze', 'Preferences', 'GamePaths', 'Geometry']
+    # Order: General, View, Freeze, Preferences, GamePaths, Geometry
+    group_order = ['General', 'View', 'Freeze', 'Preferences', 'GamePaths', 'Geometry']
     
     for group_name in group_order:
         for key, value in values.items():
             group = _get_group_for_setting(key)
             if group == group_name:
-                globals_.settings.beginGroup(group)
-                globals_.settings.setValue(key, value)
-                globals_.settings.endGroup()
+                # Write using full key path to avoid URL encoding
+                full_key = f"{group}/{key}"
+                globals_.settings.setValue(full_key, value)
     
     globals_.settings.sync()
 
