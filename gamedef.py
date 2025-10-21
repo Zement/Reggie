@@ -89,34 +89,47 @@ class GameDefMenu(QtWidgets.QMenu):
             return src_path
 
         def create_symlink(src_path, dst_path):
+            """
+            Create a symlink with proper error handling for all platforms
+            """
             try:
-                os.symlink(src_path, dst_path)
-                return True
-            except:
-                return False
+                # On Windows, try to create directory symlink
+                if sys.platform == 'win32':
+                    os.symlink(src_path, dst_path, target_is_directory=True)
+                else:
+                    os.symlink(src_path, dst_path)
+                return True, None
+            except OSError as e:
+                # On Windows, symlinks require admin privileges or Developer Mode
+                if sys.platform == 'win32' and e.winerror == 1314:
+                    return False, "Administrator privileges required to create symlinks on Windows.\n\nPlease either:\n1. Run Reggie as Administrator, or\n2. Enable Developer Mode in Windows Settings"
+                else:
+                    return False, f"Failed to create symlink: {str(e)}"
+            except Exception as e:
+                return False, f"Unexpected error: {str(e)}"
 
         def restart_reggie_info():
             # Warn the user that they may need to restart
             QtWidgets.QMessageBox.warning(None, globals_.trans.string('PrefsDlg', 0), globals_.trans.string('PrefsDlg', 30))
 
-        if sys.platform == 'win32':
-            import subprocess
-            child = subprocess.Popen(os.path.join(os.getcwd(), 'add_reggie_patch.exe'), stdout=subprocess.PIPE)
-            streamdata = child.communicate()[0]
-            rc = child.returncode
-            del subprocess
-            if rc == 0:
-                restart_reggie_info()
+        # Select the patch folder
+        src_path = select_reggie_patch_folder()
+        if src_path == "":
+            return
 
+        dst_path = os.path.join(os.getcwd(), 'reggiedata', 'patches', os.path.basename(src_path))
+        src_path = os.path.normpath(src_path)
+        
+        # Check if symlink already exists
+        if os.path.exists(dst_path):
+            QtWidgets.QMessageBox.warning(None, 'Error', f'A patch folder with this name already exists:\n{os.path.basename(src_path)}')
+            return
+        
+        success, error_msg = create_symlink(src_path, dst_path)
+        if success:
+            restart_reggie_info()
         else:
-            src_path = select_reggie_patch_folder()
-            if src_path == "":
-                return
-
-            dst_path = os.path.join(os.getcwd(), 'reggiedata', 'patches', os.path.basename(src_path))
-            src_path = os.path.normpath(src_path)
-            if create_symlink(src_path, dst_path):
-                restart_reggie_info()
+            QtWidgets.QMessageBox.critical(None, 'Symlink Creation Failed', error_msg)
 
 
     def __init__(self):
