@@ -138,7 +138,7 @@ def _excepthook(*exc_info):
         pass
 
     errorbox = QtWidgets.QMessageBox()
-    errorbox.setIcon(QtWidgets.QMessageBox.Critical)
+    errorbox.setIcon(QtWidgets.QMessageBox.Icon.Critical)
     errorbox.setWindowTitle("Reggie! Next - Unhandled Exception")
     errorbox.setDetailedText(e)
 

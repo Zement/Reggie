@@ -106,3 +106,8 @@ log.txt
 settings.ini
 settings.ini.bak
 /reggiedata/patches/NSMLW/
+
+# Development and analysis files
+git-workflow-standards.md
+BRANCH_MERGE_ANALYSIS.md
+reggiedata/patches/*

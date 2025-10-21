@@ -1,6 +1,6 @@
-from PyQt5.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QStackedWidget, QSizePolicy, QComboBox
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFontMetrics, QFont, QFocusEvent
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QStackedWidget, QSizePolicy, QComboBox
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QFontMetrics, QFont, QFocusEvent
 
 from raw_data import RawData
 
@@ -20,7 +20,7 @@ class FormattedLineEdit(QLineEdit):
         # self.setInputMask(text_format)
 
         self.setMinimumWidth(min_valid_width + 2 * 11)  # add padding
-        self.setSizePolicy(QSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed))
+        self.setSizePolicy(QSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed))
 
         self.textEdited.connect(self._text_edited)
 
@@ -129,10 +129,10 @@ class NewSpriteRawEditor(QWidget):
 
         self._block_combo = QComboBox()
         self._block_combo.currentIndexChanged.connect(self._block_changed)
-        self._block_combo.setSizePolicy(QSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed))
+        self._block_combo.setSizePolicy(QSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed))
 
         self._stack = QStackedWidget()
-        self._stack.setSizePolicy(QSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed))
+        self._stack.setSizePolicy(QSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed))
 
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -232,7 +232,7 @@ class RawEditor(QWidget):
         Constructor
         '''
         super().__init__()
-        self.setSizePolicy(QSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred))
+        self.setSizePolicy(QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred))
 
         self._data_widget = OldSpriteRawEditor()
         self._data_widget.data_edited.connect(lambda: self.data_edited.emit(self.data))

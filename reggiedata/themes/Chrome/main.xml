@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<theme
+		format="1.0"
+		name="Chrome Dark"
+		creator="Zementblock"
+		version="1.5"
+		description="Chrome Dark - Flat and simple"
+		style="windowsvista"
+		forceStyleSheet="true"
+		>
+		
+	<qss file="style.qss" />
+    <colors file="levelview.xml" />
+	
+</theme>

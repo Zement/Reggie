@@ -616,7 +616,7 @@ class Stamp:
         pixmapSize = (maxX - minX, maxY - minY)
 
         # Create the pixmap, and a painter
-        pix = QtGui.QPixmap(pixmapSize[0], pixmapSize[1])
+        pix = QtGui.QPixmap(int(pixmapSize[0]), int(pixmapSize[1]))
         pix.fill(QtCore.Qt.GlobalColor.transparent)
         painter = QtGui.QPainter(pix)
         painter.setRenderHint(painter.RenderHint.Antialiasing)
