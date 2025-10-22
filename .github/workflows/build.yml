@@ -85,7 +85,7 @@ jobs:
     - name: Get version
       id: get_version
       run: |
-        VERSION=$(grep "ReggieVersionShort = " globals_.py | sed "s/ReggieVersionShort = '\(.*\)'/\1/")
+        VERSION=$(grep "ReggieVersionShort = " globals_.py | sed "s/.*ReggieVersionShort = '\([^']*\)'.*/\1/")
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         
     - name: Create release archive
@@ -141,7 +141,7 @@ jobs:
     - name: Get version
       id: get_version
       run: |
-        VERSION=$(grep "ReggieVersionShort = " globals_.py | sed "s/ReggieVersionShort = '\(.*\)'/\1/")
+        VERSION=$(grep "ReggieVersionShort = " globals_.py | sed "s/.*ReggieVersionShort = '\([^']*\)'.*/\1/")
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         
     - name: Create release archive
