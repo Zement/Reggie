@@ -60,7 +60,9 @@ PlaceObjectsAtFullSize = True
 RealViewEnabled = False
 ReggieID = 'Reggie! Next Level Editor by Treeki, Tempus and RoadrunnerWMC'
 ReggieVersionFloat = 4.9
-ReggieVersionShort = 'v4.9.1'
+# Version format: v[Major].[Minor].[Patch]-[MinorPatch]-[CommitID]
+# MinorPatch increments with each commit for proper sorting
+ReggieVersionShort = 'v4.9.1-4'  # Will be updated to include commit ID at runtime
 ResetDataWhenHiding = False
 RestoredFromAutoSave = False
 SettingsActions = None

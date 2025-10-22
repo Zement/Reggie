@@ -17,7 +17,6 @@ def SetDirty(noautosave = False):
 
 # Define which group each setting belongs to
 # Note: Using 'Main' instead of 'General' to avoid QSettings URL encoding to %General
-# Note: Geometry settings kept at root level (no group) for Qt compatibility
 SETTING_GROUPS = {
     'View': ['ShowSprites', 'ShowSpriteImages', 'ShowLocations', 'ShowComments', 
              'ShowPaths', 'ShowCollisions', 'RealViewEnabled', 'GridType'],
@@ -31,7 +30,6 @@ SETTING_GROUPS = {
 
 def _get_group_for_setting(name):
     """Determine which group a setting belongs to"""
-    # Geometry settings stay at root level (no group) for Qt compatibility
     if name in ['MainWindowState', 'MainWindowGeometry', 'ToolbarActs', 'AutoSaveFilePath', 'AutoSaveFileData']:
         return None
     

@@ -201,7 +201,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         # set up the window
         QtWidgets.QMainWindow.__init__(self, None)
-        self.setWindowTitle('Reggie! Next Level Editor %s' % globals_.ReggieVersionShort)
+        # Don't include version here - Qt automatically appends application display name
+        self.setWindowTitle('Reggie! Next Level Editor')
         self.setWindowIcon(QtGui.QIcon('reggiedata/icon.png'))
         self.setIconSize(QtCore.QSize(16, 16))
         self.setUnifiedTitleAndToolBarOnMac(True)
@@ -4504,6 +4505,17 @@ def main():
     LoadActionsLists()
     LoadNumberFont()
     SetAppStyle()
+
+    # Get commit ID and append to version string
+    try:
+        import subprocess
+        commit_id = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], 
+                                           cwd=os.path.dirname(__file__), 
+                                           stderr=subprocess.DEVNULL).decode('utf-8').strip()
+        globals_.ReggieVersionShort = f"{globals_.ReggieVersionShort}-{commit_id}"
+    except:
+        # If git is not available or we're not in a git repo, keep the version as-is
+        pass
 
     # Set the default window icon (used for random popups and stuff)
     globals_.app.setWindowIcon(GetIcon('reggie'))
