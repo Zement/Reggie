@@ -4435,17 +4435,24 @@ def main():
         del copy2
 
     # Try to get the last commit id - if it failed, we're in a build.
-    import subprocess
-
-    # Only try to get git commit if we're in a git repository
-    if os.path.exists('.git'):
+    # Only try if we're in a git repository (check in the script's directory)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    git_dir = os.path.join(script_dir, '.git')
+    
+    if os.path.exists(git_dir):
         try:
-            commit_id = subprocess.check_output(["git", "describe", "--always"], stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL).decode('utf-8').strip()
+            import subprocess
+            commit_id = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"], 
+                stderr=subprocess.DEVNULL, 
+                stdin=subprocess.DEVNULL,
+                cwd=script_dir
+            ).decode('utf-8').strip()
             globals_.ReggieVersionShort += "-" + commit_id
-        except (FileNotFoundError, subprocess.CalledProcessError):
+            del subprocess
+        except Exception:
+            # Silently ignore any git-related errors (not in repo, git not installed, etc.)
             pass
-
-    del subprocess
 
     # Load the settings
     globals_.settings = QtCore.QSettings('settings.ini', QtCore.QSettings.Format.IniFormat)
@@ -4505,17 +4512,6 @@ def main():
     LoadActionsLists()
     LoadNumberFont()
     SetAppStyle()
-
-    # Get commit ID and append to version string
-    try:
-        import subprocess
-        commit_id = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], 
-                                           cwd=os.path.dirname(__file__), 
-                                           stderr=subprocess.DEVNULL).decode('utf-8').strip()
-        globals_.ReggieVersionShort = f"{globals_.ReggieVersionShort}-{commit_id}"
-    except:
-        # If git is not available or we're not in a git repo, keep the version as-is
-        pass
 
     # Set the default window icon (used for random popups and stuff)
     globals_.app.setWindowIcon(GetIcon('reggie'))
