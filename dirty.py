@@ -16,6 +16,8 @@ def SetDirty(noautosave = False):
 
 
 # Define which group each setting belongs to
+# Note: Using 'Main' instead of 'General' to avoid QSettings URL encoding to %General
+# Note: Geometry settings kept at root level (no group) for Qt compatibility
 SETTING_GROUPS = {
     'View': ['ShowSprites', 'ShowSpriteImages', 'ShowLocations', 'ShowComments', 
              'ShowPaths', 'ShowCollisions', 'RealViewEnabled', 'GridType'],
@@ -24,12 +26,15 @@ SETTING_GROUPS = {
     'Preferences': ['Translation', 'ZoneEntIndicators', 'ZoneBoundIndicators',
                     'ResetDataWhenHiding', 'HideResetSpritedata', 'EnablePadding',
                     'PaddingLength', 'PlaceObjectsAtFullSize', 'InsertPathNode', 'Theme'],
-    'Geometry': ['MainWindowState', 'MainWindowGeometry', 'ToolbarActs',
-                 'AutoSaveFilePath', 'AutoSaveFileData'],
+    # Geometry settings are NOT in a group - they stay at root level for Qt
 }
 
 def _get_group_for_setting(name):
     """Determine which group a setting belongs to"""
+    # Geometry settings stay at root level (no group) for Qt compatibility
+    if name in ['MainWindowState', 'MainWindowGeometry', 'ToolbarActs', 'AutoSaveFilePath', 'AutoSaveFileData']:
+        return None
+    
     # Check predefined groups
     for group, settings in SETTING_GROUPS.items():
         if name in settings:
@@ -39,8 +44,8 @@ def _get_group_for_setting(name):
     if name.startswith(('StageGamePath_', 'TextureGamePath_', 'LastLevel_', 'PatchPath_')):
         return 'GamePaths'
     
-    # Default to General
-    return 'General'
+    # Default to Main (not General to avoid %General encoding)
+    return 'Main'
 
 def setting(name, default=None):
     """
@@ -50,15 +55,22 @@ def setting(name, default=None):
     group = _get_group_for_setting(name)
     
     # Check both with and without group for backwards compatibility
-    full_key = f"{group}/{name}"
-    
-    if globals_.settings.contains(full_key):
-        value = globals_.settings.value(full_key)
-    elif globals_.settings.contains(name):
-        # Fallback to old location (no group)
-        value = globals_.settings.value(name)
+    if group is None:
+        # Geometry settings are at root level
+        if globals_.settings.contains(name):
+            value = globals_.settings.value(name)
+        else:
+            return default
     else:
-        return default
+        full_key = f"{group}/{name}"
+        
+        if globals_.settings.contains(full_key):
+            value = globals_.settings.value(full_key)
+        elif globals_.settings.contains(name):
+            # Fallback to old location (no group)
+            value = globals_.settings.value(name)
+        else:
+            return default
     
     # Handle None/null values
     if value is None or value == 'None' or value == '@Invalid()':
@@ -138,9 +150,12 @@ def setSetting(name, value):
     group = _get_group_for_setting(name)
     
     # Write using full key path to avoid URL encoding of group names
-    # Format: "GroupName/settingName"
-    full_key = f"{group}/{name}"
-    globals_.settings.setValue(full_key, value)
+    # If group is None (Geometry settings), write to root level
+    if group is None:
+        globals_.settings.setValue(name, value)
+    else:
+        full_key = f"{group}/{name}"
+        globals_.settings.setValue(full_key, value)
 
 
 def ensureSettingsVisible():
@@ -172,6 +187,7 @@ def reorganizeSettings():
     """
     Reorganizes existing settings from flat structure into groups.
     This is a one-time migration for existing settings files.
+    Also normalizes all file paths to consistent format.
     """
     import globals_
     
@@ -179,28 +195,60 @@ def reorganizeSettings():
     all_keys = [k for k in globals_.settings.allKeys() if '/' not in k]
     
     if not all_keys:
-        return  # Already organized
+        # Already organized, but normalize all existing paths
+        normalizeAllPaths()
+        return
     
     # Read all values
     values = {}
     for key in all_keys:
-        values[key] = globals_.settings.value(key)
+        value = globals_.settings.value(key)
+        # Normalize paths during migration
+        if isinstance(value, str) and ('Path' in key or 'Level' in key) and ('\\' in value or '/' in value):
+            value = _normalize_path_for_settings(value)
+        values[key] = value
     
     # Remove old keys
     for key in all_keys:
         globals_.settings.remove(key)
     
     # Write back with groups in specific order
-    # Order: General, View, Freeze, Preferences, GamePaths, Geometry
-    group_order = ['General', 'View', 'Freeze', 'Preferences', 'GamePaths', 'Geometry']
+    # Order: Main, View, Freeze, Preferences, GamePaths, then Geometry at root level
+    group_order = ['Main', 'View', 'Freeze', 'Preferences', 'GamePaths', None]
     
     for group_name in group_order:
         for key, value in values.items():
             group = _get_group_for_setting(key)
             if group == group_name:
                 # Write using full key path to avoid URL encoding
-                full_key = f"{group}/{key}"
-                globals_.settings.setValue(full_key, value)
+                if group is None:
+                    # Geometry settings stay at root level
+                    globals_.settings.setValue(key, value)
+                else:
+                    full_key = f"{group}/{key}"
+                    globals_.settings.setValue(full_key, value)
+    
+    globals_.settings.sync()
+
+def normalizeAllPaths():
+    """
+    Normalizes all file paths in settings to consistent format.
+    Called when reading or writing any path to ensure all paths are normalized.
+    """
+    import globals_
+    
+    # Get all keys (including grouped ones)
+    all_keys = globals_.settings.allKeys()
+    
+    # Find and normalize all path-related settings
+    for key in all_keys:
+        key_name = key.split('/')[-1] if '/' in key else key
+        if ('Path' in key_name or 'Level' in key_name):
+            value = globals_.settings.value(key)
+            if isinstance(value, str) and ('\\' in value or '/' in value):
+                normalized = _normalize_path_for_settings(value)
+                if normalized != value:
+                    globals_.settings.setValue(key, normalized)
     
     globals_.settings.sync()
 
