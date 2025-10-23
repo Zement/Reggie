@@ -105,6 +105,11 @@ class RawData:
 
     @staticmethod
     def from_sprite_id(sprite_id: int) -> 'RawData':
+        # Check if sprite data exists for this ID
+        if not (0 <= sprite_id < globals_.NumSprites) or globals_.Sprites[sprite_id] is None:
+            # Unknown sprite, return vanilla format with no extended data
+            return RawData(bytes(8), format=RawData.Format.Vanilla)
+        
         extended_settings = globals_.Sprites[sprite_id].extendedSettings
 
         return RawData(
@@ -115,6 +120,11 @@ class RawData:
 
 
     def fix_size_if_needed(self, sprite_id: int) -> None:
+        # Check if sprite data exists for this ID
+        if not (0 <= sprite_id < globals_.NumSprites) or globals_.Sprites[sprite_id] is None:
+            # Unknown sprite, don't modify the data
+            return
+        
         block_count = globals_.Sprites[sprite_id].extendedSettings
 
         while len(self.blocks) < block_count:

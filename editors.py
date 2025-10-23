@@ -173,9 +173,11 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         self.pathID.setValue(ent.entpath)
         self.pathIDLabel.setVisible(ent.enttype in self.CanUseFlag8 and ((ent.entsettings & 8) != 0))
 
-        self.cpDirection.setVisible(ent.enttype in self.CanUseFlag8 and ((ent.entsettings & 8) != 0))
+        # CP Direction is only visible if the plugin is enabled
+        cp_direction_enabled = 'connected_pipe_direction' in globals_.gamedef.plugins
+        self.cpDirection.setVisible(cp_direction_enabled and ent.enttype in self.CanUseFlag8 and ((ent.entsettings & 8) != 0))
         self.cpDirection.setCurrentIndex(ent.cpdirection)
-        self.cpDirectionLabel.setVisible(ent.enttype in self.CanUseFlag8 and ((ent.entsettings & 8) != 0))
+        self.cpDirectionLabel.setVisible(cp_direction_enabled and ent.enttype in self.CanUseFlag8 and ((ent.entsettings & 8) != 0))
         self.cpHorzLine.setVisible(ent.enttype in self.CanUseFlag8 and ((ent.entsettings & 8) != 0))
 
         self.activeLayer.setCurrentIndex(ent.entlayer)
@@ -216,8 +218,11 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         self.connectedPipeReverseCheckbox.setVisible(i in self.CanUseFlag8 and ((self.ent.entsettings & 8) != 0))
         self.pathIDLabel.setVisible(i and ((self.ent.entsettings & 8) != 0))
         self.pathID.setVisible(i and ((self.ent.entsettings & 8) != 0))
-        self.cpDirection.setVisible(self.ent.enttype in self.CanUseFlag8 and ((self.ent.entsettings & 8) != 0))
-        self.cpDirectionLabel.setVisible(self.ent.enttype in self.CanUseFlag8 and ((self.ent.entsettings & 8) != 0))
+        
+        # CP Direction is only visible if the plugin is enabled
+        cp_direction_enabled = 'connected_pipe_direction' in globals_.gamedef.plugins
+        self.cpDirection.setVisible(cp_direction_enabled and self.ent.enttype in self.CanUseFlag8 and ((self.ent.entsettings & 8) != 0))
+        self.cpDirectionLabel.setVisible(cp_direction_enabled and self.ent.enttype in self.CanUseFlag8 and ((self.ent.entsettings & 8) != 0))
         self.cpHorzLine.setVisible(self.ent.enttype in self.CanUseFlag8 and ((self.ent.entsettings & 8) != 0))
         self.forwardPipeCheckbox.setVisible(i in self.CanUseFlag4)
         if self.UpdateFlag: return
@@ -290,8 +295,11 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         self.connectedPipeReverseCheckbox.setVisible(checked)
         self.pathID.setVisible(checked)
         self.pathIDLabel.setVisible(checked)
-        self.cpDirection.setVisible(checked)
-        self.cpDirectionLabel.setVisible(checked)
+        
+        # CP Direction is only visible if the plugin is enabled
+        cp_direction_enabled = 'connected_pipe_direction' in globals_.gamedef.plugins
+        self.cpDirection.setVisible(cp_direction_enabled and checked)
+        self.cpDirectionLabel.setVisible(cp_direction_enabled and checked)
         self.cpHorzLine.setVisible(checked)
         if self.UpdateFlag: return
         SetDirty()

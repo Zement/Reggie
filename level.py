@@ -571,6 +571,7 @@ class Area:
         spritedata = self.blocks[7]
         sprstruct = struct.Struct('>HHH8sxx')
         sprites = []
+        unknown_sprite_ids = set()
 
         unpack = sprstruct.unpack_from
         append = sprites.append
@@ -580,7 +581,15 @@ class Area:
         for offset in range(0, len(spritedata) - 4, 16):
             data = unpack(spritedata, offset)
             type_, x, y, sd = data
-            is_extended = globals_.Sprites[type_].extendedSettings
+            
+            # Check if sprite ID is valid
+            if 0 <= type_ < globals_.NumSprites and globals_.Sprites[type_] is not None:
+                is_extended = globals_.Sprites[type_].extendedSettings
+            else:
+                # Unknown sprite ID - track it and use default settings
+                unknown_sprite_ids.add(type_)
+                is_extended = False
+            
             extended_id = int.from_bytes(sd[2:6], 'big')
             extended_settings = self.spriteSettings[extended_id] if is_extended else []
 
@@ -604,6 +613,9 @@ class Area:
         for sprite in self.sprites:
             sprite: SpriteItem # type hint
             sprite.spritedata.fix_size_if_needed(sprite.type)
+        
+        # Store unknown sprite IDs for later warning
+        self.unknown_sprite_ids = unknown_sprite_ids
 
 
     def LoadLoadedSprites(self):
@@ -1129,6 +1141,11 @@ class Area:
         decoder = SpriteEditorWidget.PropertyDecoder()
 
         for sprite in self.sprites:
+            # Check if sprite data exists for this type
+            if not (0 <= sprite.type < globals_.NumSprites) or globals_.Sprites[sprite.type] is None:
+                # Unknown sprite, skip it
+                continue
+            
             sdef = globals_.Sprites[sprite.type]
 
             # Find what values are used by this sprite
@@ -1163,6 +1180,11 @@ class Area:
         self.sprites.remove(sprite)
 
         # Remove the ids the sprite used from the id list
+        # Check if sprite data exists for this type
+        if not (0 <= sprite.type < globals_.NumSprites) or globals_.Sprites[sprite.type] is None:
+            # Unknown sprite, nothing to clean up
+            return
+        
         decoder = SpriteEditorWidget.PropertyDecoder()
         sdef = globals_.Sprites[sprite.type]
 

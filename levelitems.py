@@ -1878,10 +1878,10 @@ class SpriteItem(LevelEditorItem):
 
         self.ImageObj = SLib.SpriteImage(self)
 
-        if 0 <= type_ < globals_.NumSprites:
+        if 0 <= type_ < globals_.NumSprites and globals_.Sprites[type_] is not None:
             self.name = globals_.Sprites[type_].name
         else:
-            self.name = "UNKNOWN"
+            self.name = "UNKNOWN [%d]" % type_
 
         self.InitializeSprite()
 
@@ -1916,10 +1916,10 @@ class SpriteItem(LevelEditorItem):
         """
         Sets the type of the sprite
         """
-        if 0 <= type_ < globals_.NumSprites:
+        if 0 <= type_ < globals_.NumSprites and globals_.Sprites[type_] is not None:
             self.name = globals_.Sprites[type_].name
         else:
-            self.name = "UNKNOWN"
+            self.name = "UNKNOWN [%d]" % type_
 
         self.setToolTip(globals_.trans.string('Sprites', 0, '[type]', type_, '[name]', self.name))
         self.type = type_
@@ -2050,8 +2050,11 @@ class SpriteItem(LevelEditorItem):
         """
         type_ = self.type
 
-        if not 0 <= type_ < globals_.NumSprites:
-            print('Tried to initialize a sprite of type %d, but this is out of range %d.' % (type_, globals_.NumSprites))
+        # Check if sprite type is valid and sprite data exists
+        if not 0 <= type_ < globals_.NumSprites or globals_.Sprites[type_] is None:
+            # Use a default name for unknown sprites
+            self.name = 'Unknown Sprite [%d]' % type_
+            self.setToolTip('Unknown sprite type %d' % type_)
             return
 
         self.name = globals_.Sprites[type_].name

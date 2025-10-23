@@ -337,6 +337,10 @@ class ReggieTranslation:
                 2: 'Error while Reggie was trying to save the level:[br]The original file data ([orig-len] bytes) exceeded the fixed length ([pad-len] bytes).[br][br](Your work has not been saved! Increase the fixed length in the Preferences Dialog.)',
                 3: 'Error while Reggie was trying to save the level:[br]An error occurred while compressing the level. Is it too big? The uncompressed size is [file-size] bytes.[br][br](Your work has not been saved! Try saving without compression or removing elements from your level.)',
             },
+            'Err_UnknownSprite': {
+                0: 'Warning: This level contains sprite ID [id] which is not defined in the current game patch. The sprite will be displayed as "UNKNOWN" but can still be edited and saved.',
+                1: 'Warning: This level contains sprite IDs ([ids]) which are not defined in the current game patch. These sprites will be displayed as "UNKNOWN" but can still be edited and saved.',
+            },
             'FileDlgs': {
                 0: 'Choose a level archive',
                 1: 'Level Archives',

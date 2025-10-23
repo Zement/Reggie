@@ -124,7 +124,9 @@ class GameDefMenu(QtWidgets.QMenu):
         # setSetting will automatically normalize the path format
         setSetting('PatchPath_' + patch_name, patch_path)
         
-        restart_reggie_info()
+        # Refresh the menu to show the new patch
+        self.refreshMenu()
+        self.gameChanged.emit()
 
 
     def __init__(self):
@@ -199,6 +201,37 @@ class GameDefMenu(QtWidgets.QMenu):
         for act in self.actGroup.actions():
             act.setChecked(act.data() == real_gamedef)
         self.update_flag = False
+    
+    def refreshMenu(self):
+        """
+        Refresh the menu to show newly added patches
+        """
+        # Clear existing patch actions (but keep the viewer and add button)
+        for act in self.actGroup.actions():
+            self.removeAction(act)
+            self.actGroup.removeAction(act)
+        
+        # Reload game defs
+        self.GameDefs = getAvailableGameDefs()
+        
+        # Re-add entries for each gamedef
+        loadedDef = setting('LastGameDef')
+        for folder in self.GameDefs:
+            def_ = ReggieGameDefinition(folder)
+            
+            act = QtGui.QAction(self)
+            act.setText(def_.name)
+            act.setToolTip(def_.description)
+            act.setData(folder)
+            act.setActionGroup(self.actGroup)
+            act.setCheckable(True)
+            act.setChecked(folder == loadedDef)
+            act.toggled.connect(self.handleGameDefClicked)
+            
+            # Insert before the separator and "Add" button
+            actions = self.actions()
+            if len(actions) >= 3:  # viewer, separator, patches..., separator, add button
+                self.insertAction(actions[-2], act)  # Insert before last separator
 
 
 class ReggieGameDefinition:
@@ -251,6 +284,7 @@ class ReggieGameDefinition:
         self.version = '2'
 
         self.sprites = sprites
+        self.plugins = {}  # Dictionary of enabled plugins
 
         self.files = {
             'bga': gdf(os.path.join('reggiedata', 'bga.txt'), False),
@@ -359,6 +393,9 @@ class ReggieGameDefinition:
         # Get rid of the XML stuff
         del tree, root
 
+        # Load plugins.xml if it exists
+        self.LoadPlugins(addpath)
+
         # Load sprites.py if provided
         if 'sprites' in self.files:
             with open(self.files['sprites'].path, 'r', encoding='utf-8') as f:
@@ -379,8 +416,128 @@ class ReggieGameDefinition:
             new_module = importlib.util.module_from_spec(spec)
 
             exec(filedata, new_module.__dict__)
-            sys.modules[new_module.__name__] = new_module
-            self.sprites = new_module
+
+    def LoadPlugins(self, addpath):
+        """
+        Loads plugins from plugins.xml if it exists, creates default if missing
+        """
+        plugins_path = os.path.join(addpath, "plugins.xml")
+        
+        # Start with base plugins if we have a base
+        if self.base is not None and hasattr(self.base, 'plugins'):
+            self.plugins = self.base.plugins.copy()
+        else:
+            self.plugins = {}
+        
+        # Load patch-specific plugins if plugins.xml exists
+        if os.path.isfile(plugins_path):
+            try:
+                tree = etree.parse(plugins_path)
+                root = tree.getroot()
+                
+                for plugin in root.findall('plugin'):
+                    name = plugin.get('name')
+                    enabled = plugin.get('enabled', 'false').lower() == 'true'
+                    
+                    if enabled:
+                        # Check if plugin has parameters
+                        params = {}
+                        for param in plugin.findall('param'):
+                            param_name = param.get('name')
+                            param_value = param.get('value')
+                            params[param_name] = param_value
+                        
+                        self.plugins[name] = params if params else True
+                    elif name in self.plugins:
+                        # Plugin explicitly disabled, remove from inherited plugins
+                        del self.plugins[name]
+                
+                del tree, root
+            except Exception as e:
+                # If plugins.xml is malformed, create default
+                print(f"Warning: Failed to load plugins.xml: {e}")
+                self.CreateDefaultPluginsXML(plugins_path)
+        else:
+            # Create default plugins.xml if it doesn't exist
+            self.CreateDefaultPluginsXML(plugins_path)
+    
+    def CreateDefaultPluginsXML(self, plugins_path):
+        """
+        Creates a default plugins.xml file with all plugins disabled
+        """
+        try:
+            # Only create for custom patches (not base game)
+            if not self.custom:
+                return
+            
+            # Define all available plugins with their parameters
+            available_plugins = [
+                {
+                    'name': 'connected_pipe_exit',
+                    'desc': 'Connected Pipe Exit Direction',
+                    'params': []
+                },
+                {
+                    'name': 'special_event_sprite',
+                    'desc': 'Custom Special Event Sprite ID',
+                    'params': [
+                        {'name': 'sprite_name', 'value': 'Special Event'}
+                    ]
+                },
+            ]
+            
+            # Create XML structure
+            root = etree.Element('plugins')
+            root.text = '\n  '
+            root.tail = '\n'
+            
+            for i, plugin_def in enumerate(available_plugins):
+                # Add comment
+                comment = etree.Comment(f' {plugin_def["desc"]} ')
+                comment.tail = '\n  '
+                root.append(comment)
+                
+                # Add plugin element
+                plugin = etree.SubElement(root, 'plugin')
+                plugin.set('name', plugin_def['name'])
+                plugin.set('enabled', 'false')
+                plugin.tail = '\n  ' if i < len(available_plugins) - 1 else '\n'
+                
+                # Add parameters if any
+                if plugin_def['params']:
+                    plugin.text = '\n    '
+                    for j, param in enumerate(plugin_def['params']):
+                        param_elem = etree.SubElement(plugin, 'param')
+                        param_elem.set('name', param['name'])
+                        param_elem.set('value', param['value'])
+                        param_elem.tail = '\n    ' if j < len(plugin_def['params']) - 1 else '\n  '
+            
+            # Write to file with proper formatting
+            tree = etree.ElementTree(root)
+            # Indent the XML manually since standard ElementTree doesn't support pretty_print
+            self._indent_xml(root)
+            tree.write(plugins_path, encoding='utf-8', xml_declaration=True)
+            print(f"Created default plugins.xml at {plugins_path}")
+        except Exception as e:
+            print(f"Warning: Failed to create default plugins.xml: {e}")
+    
+    def _indent_xml(self, elem, level=0):
+        """
+        Helper to indent XML for pretty printing (since standard ElementTree doesn't support it)
+        """
+        indent = "\n" + "  " * level
+        if len(elem):
+            if not elem.text or not elem.text.strip():
+                elem.text = indent + "  "
+            if not elem.tail or not elem.tail.strip():
+                elem.tail = indent
+            for child in elem:
+                self._indent_xml(child, level + 1)
+            if not child.tail or not child.tail.strip():
+                child.tail = indent
+        else:
+            if level and (not elem.tail or not elem.tail.strip()):
+                elem.tail = indent
 
     def bgFile(self, name, layer):
         """
@@ -676,6 +833,11 @@ def LoadGameDef(name=None, dlg=None):
         # Load the globals_.gamedef
         if dlg: dlg.setLabelText(globals_.trans.string('Gamedefs', 1))  # Loading game patch...
 
+        # Clear any existing warning icons when changing patches
+        if globals_.mainWindow is not None:
+            for icon in list(globals_.mainWindow.warningIcons):
+                globals_.mainWindow.RemoveWarningIcon(icon)
+
         globals_.gamedef = ReggieGameDefinition(name)
         globals_.gamedef.__init2__()
 
@@ -788,6 +950,25 @@ def LoadGameDef(name=None, dlg=None):
                     s.setImageObj(spriteClasses[s.type])
                 else:
                     s.setImageObj(SLib.SpriteImage)
+            
+            # Recalculate unknown sprite IDs based on current patch's sprite definitions
+            unknown_sprite_ids = set()
+            for sprite in globals_.Area.sprites:
+                if sprite.type >= globals_.NumSprites or globals_.Sprites[sprite.type] is None:
+                    unknown_sprite_ids.add(sprite.type)
+            
+            # Update the Area's unknown_sprite_ids
+            globals_.Area.unknown_sprite_ids = unknown_sprite_ids
+            
+            # Check for unknown sprite IDs and show warning icon in status bar
+            if unknown_sprite_ids:
+                sprite_ids = sorted(unknown_sprite_ids)
+                if globals_.mainWindow is not None:
+                    if len(sprite_ids) == 1:
+                        msg = globals_.trans.string('Err_UnknownSprite', 0, '[id]', str(sprite_ids[0]))
+                    else:
+                        msg = globals_.trans.string('Err_UnknownSprite', 1, '[ids]', ', '.join(map(str, sprite_ids)))
+                    globals_.mainWindow.AddWarningIcon(msg)
 
         if dlg: dlg.setValue(5)
 
@@ -803,13 +984,26 @@ def LoadGameDef(name=None, dlg=None):
         LoadEntranceNames(True)
         if dlg: dlg.setValue(7)
 
-    except Exception:
-        raise
-    #    # Something went wrong.
-    #    if dlg: dlg.setValue(7) # autocloses it
-    #    QtWidgets.QMessageBox.information(None, globals_.trans.string('Gamedefs', 17), globals_.trans.string('Gamedefs', 18, '[error]', str(e)))
-    #    if name is not None: LoadGameDef(None)
-    #    return False
+    except Exception as e:
+        # Something went wrong loading the patch
+        if dlg: dlg.setValue(7)  # autocloses it
+        
+        # If we were trying to load a specific patch and it failed, show a message
+        # and fall back to the base game
+        if name is not None:
+            QtWidgets.QMessageBox.warning(
+                None,
+                'Patch Not Found',
+                f'The patch "{name}" could not be loaded.\n\n'
+                f'Error: {str(e)}\n\n'
+                f'Reggie will load the base game (New Super Mario Bros. Wii) instead.',
+                QtWidgets.QMessageBox.StandardButton.Ok
+            )
+            # Try to load the base game instead
+            return LoadGameDef(None, dlg)
+        else:
+            # We failed to load even the base game, this is a critical error
+            raise
 
 
     # Success!

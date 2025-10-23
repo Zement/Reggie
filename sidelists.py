@@ -778,7 +778,7 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
 
                     id_ = snode.data(0, QtCore.Qt.ItemDataRole.UserRole)
 
-                    if 0 <= id_ < globals_.NumSprites:
+                    if 0 <= id_ < globals_.NumSprites and globals_.Sprites[id_] is not None:
                         sdef = globals_.Sprites[id_]
                     else:
                         sdef = None
@@ -815,7 +815,7 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
                         snode.setData(0, QtCore.Qt.ItemDataRole.UserRole, -2)
                         self.NoSpritesFound = snode
                     else:
-                        if 0 <= id_ < globals_.NumSprites:
+                        if 0 <= id_ < globals_.NumSprites and globals_.Sprites[id_] is not None:
                             sdef = globals_.Sprites[id_]
                         else:
                             sdef = None
@@ -1000,7 +1000,7 @@ class SpriteList(QtWidgets.QWidget):
         filtertype = self.idtypes[filteridx - 1]
         sprite = self.table.item(row, 0).data(QtCore.Qt.ItemDataRole.UserRole)
 
-        if 0 <= sprite.type < globals_.NumSprites:
+        if 0 <= sprite.type < globals_.NumSprites and globals_.Sprites[sprite.type] is not None:
             sdef = globals_.Sprites[sprite.type]
         else:
             # No sprite definition -> hide
@@ -1201,7 +1201,7 @@ class SpriteList(QtWidgets.QWidget):
         Returns an (idtype, [values]) dict for every
         idtype this sprite has
         """
-        if not 0 <= sprite.type < globals_.NumSprites:
+        if not (0 <= sprite.type < globals_.NumSprites) or globals_.Sprites[sprite.type] is None:
             return {}
 
         sdef = globals_.Sprites[sprite.type]

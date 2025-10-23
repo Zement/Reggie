@@ -2494,8 +2494,8 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         """
         dlg = ResizeChoiceDialog(self.spritetype)
 
-        # only contine if the user pressed "OK"
-        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+        # only continue if the user pressed "OK"
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
 
 
@@ -2902,7 +2902,7 @@ class ResizeChoiceDialog(QtWidgets.QDialog):
             self.radio2.setChecked(True)
 
         # create layout
-        buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
 
         buttonBox.accepted.connect(self.accept)
         buttonBox.rejected.connect(self.reject)
@@ -2912,7 +2912,12 @@ class ResizeChoiceDialog(QtWidgets.QDialog):
 
         if self.present:
             mainLayout.addWidget(QtWidgets.QLabel(text3))
-            mainLayout.addWidget(QtWidgets.QLabel(str(self.present)))
+            # Display sprite information properly
+            sprite_info = []
+            for type_val, sprite in self.present:
+                sprite_type_name = "Global" if type_val == 2 else f"Slot {type_val}"
+                sprite_info.append(f"Sprite {sprite.type} ({sprite_type_name})")
+            mainLayout.addWidget(QtWidgets.QLabel(", ".join(sprite_info)))
 
         mainLayout.addLayout(slotsLayout)
         mainLayout.addWidget(buttonBox, 0, QtCore.Qt.AlignmentFlag.AlignBottom)
@@ -2968,9 +2973,18 @@ class ResizeChoiceDialog(QtWidgets.QDialog):
         Returns a list of (slot, sprite) pairs, where slot = 2 means it is a global
         resize.
         """
+        # Get special event sprite ID from plugin or use default
+        special_event_id = 246
+        if 'special_event_sprite' in globals_.gamedef.plugins:
+            # Search for sprite with name "Special Event"
+            for sprite_id, sprite_data in enumerate(globals_.Sprites):
+                if sprite_data is not None and sprite_data.name == "Special Event":
+                    special_event_id = sprite_id
+                    break
+        
         slots = []
         for sprite in globals_.Area.sprites:
-            if sprite.type != 246:
+            if sprite.type != special_event_id:
                 continue
 
             type = sprite.spritedata[5] & 0xF
@@ -3002,7 +3016,7 @@ class ResizeChoiceDialog(QtWidgets.QDialog):
         if not thing:
             self.placeSpecialResizeEvent()
         elif len(thing) == 1:
-            self.editSpecialResizeEvent(thing[0][1])
+            self.editSpecialResizeEvent(thing[0])
         else:
             # TODO: figure out what to do here
             ...
@@ -3035,7 +3049,15 @@ class ResizeChoiceDialog(QtWidgets.QDialog):
 
         x = globals_.mainWindow.selObj.objx + 16
         y = globals_.mainWindow.selObj.objy
+        
+        # Get special event sprite ID from plugin or use default
         special_event_id = 246
+        if 'special_event_sprite' in globals_.gamedef.plugins:
+            # Search for sprite with name "Special Event"
+            for sprite_id, sprite_data in enumerate(globals_.Sprites):
+                if sprite_data is not None and sprite_data.name == "Special Event":
+                    special_event_id = sprite_id
+                    break
 
         if globals_.mainWindow.CreateSprite(x, y, special_event_id, RawData(data, format = RawData.Format.Vanilla)) is not None:
             globals_.mainWindow.scene.update()

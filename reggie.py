@@ -94,6 +94,7 @@ from dirty import setting, setSetting, SetDirty
 from gamedef import GameDefMenu, LoadGameDef
 from levelitems import LocationItem, ZoneItem, ObjectItem, SpriteItem, EntranceItem, ListWidgetItem_SortsByOther, PathItem, CommentItem, PathEditorLineItem
 from dialogs import AutoSavedInfoDialog, DiagnosticToolDialog, ScreenCapChoiceDialog, AreaChoiceDialog, ObjectTypeSwapDialog, ObjectTilesetSwapDialog, ObjectShiftDialog, MetaInfoDialog, AboutDialog, CameraProfilesDialog
+from patch_manager_dialog import PatchManagerDialog
 from background import BGDialog
 from zones import ZonesDialog
 from tiles import UnloadTileset, LoadTileset, LoadOverrides
@@ -249,6 +250,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.statusBar().addWidget(self.posLabel)
         self.statusBar().addWidget(self.selectionLabel)
         self.statusBar().addWidget(self.hoverLabel)
+        
+        # Warning icons container
+        self.warningIcons = []
+        
         #self.diagnostic = DiagnosticWidget()
         self.ZoomWidget = ZoomWidget()
         self.ZoomStatusWidget = ZoomStatusWidget()
@@ -364,6 +369,12 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.CreateAction(
             'changegamedef', None, GetIcon('game'),
             globals_.trans.stringOneLine('MenuItems', 98), globals_.trans.stringOneLine('MenuItems', 99),
+            None,
+        )
+
+        self.CreateAction(
+            'patchmanager', self.HandlePatchManager, GetIcon('game'),
+            'Patch Manager', 'Manage folder paths for all game patches',
             None,
         )
 
@@ -708,6 +719,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         fmenu.addAction(self.actions['metainfo'])
         fmenu.addSeparator()
         fmenu.addAction(self.actions['changegamedef'])
+        fmenu.addAction(self.actions['patchmanager'])
         fmenu.addAction(self.actions['screenshot'])
         fmenu.addAction(self.actions['changegamepath'])
         fmenu.addAction(self.actions['preferences'])
@@ -2460,10 +2472,17 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         if self.CheckDirty(): return
 
+        # On macOS, use DontUseNativeDialog to show the title bar
+        dialog_options = QtWidgets.QFileDialog.Option.ShowDirsOnly
+        if sys.platform == 'darwin':
+            dialog_options |= QtWidgets.QFileDialog.Option.DontUseNativeDialog
+
         while True:
             stage_path = QtWidgets.QFileDialog.getExistingDirectory(
                 None,
-                globals_.trans.string('ChangeGamePath', 0, '[game]', globals_.gamedef.name)
+                globals_.trans.string('ChangeGamePath', 0, '[game]', globals_.gamedef.name),
+                '',
+                dialog_options
             )
 
             if stage_path == '':
@@ -2475,7 +2494,9 @@ class ReggieWindow(QtWidgets.QMainWindow):
             while not os.path.isdir(texture_path):
                 texture_path = QtWidgets.QFileDialog.getExistingDirectory(
                     None,
-                    globals_.trans.string('ChangeGamePath', 4, '[game]', globals_.gamedef.name)
+                    globals_.trans.string('ChangeGamePath', 4, '[game]', globals_.gamedef.name),
+                    '',
+                    dialog_options
                 )
 
                 if texture_path == "":
@@ -2497,6 +2518,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 self.LoadLevel(None, False, 1)
 
         return True
+
+    def HandlePatchManager(self):
+        """
+        Open the Patch Manager dialog
+        """
+        dlg = PatchManagerDialog()
+        dlg.exec()
 
     def HandlePreferences(self):
         """
@@ -3377,6 +3405,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if not globals_.Level.load(levelData, areaNum):
             raise Exception
 
+        # Check for unknown sprite IDs and show warning icon in status bar
+        if hasattr(globals_.Area, 'unknown_sprite_ids') and globals_.Area.unknown_sprite_ids:
+            sprite_ids = sorted(globals_.Area.unknown_sprite_ids)
+            if len(sprite_ids) == 1:
+                msg = globals_.trans.string('Err_UnknownSprite', 0, '[id]', str(sprite_ids[0]))
+            else:
+                msg = globals_.trans.string('Err_UnknownSprite', 1, '[ids]', ', '.join(map(str, sprite_ids)))
+            self.AddWarningIcon(msg)
+
         self.ResetPalette()
 
     def ResetPalette(self):
@@ -4113,6 +4150,42 @@ class ReggieWindow(QtWidgets.QMainWindow):
                          '[spry]', int(y / 1.5)))
         self.hoverLabel.setText(info)
 
+    def AddWarningIcon(self, message):
+        """
+        Adds a warning icon to the status bar with a tooltip
+        """
+        # Create warning label with icon
+        warningLabel = QtWidgets.QLabel()
+        warningLabel.setPixmap(self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MessageBoxWarning).pixmap(16, 16))
+        warningLabel.setToolTip(message)
+        warningLabel.setStyleSheet("QLabel { margin: 2px; }")
+        warningLabel.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        
+        # Make it clickable to dismiss
+        warningLabel.mousePressEvent = lambda event: self.RemoveWarningIcon(warningLabel)
+        
+        # Add to status bar at the beginning
+        self.statusBar().insertWidget(0, warningLabel)
+        self.warningIcons.append(warningLabel)
+        
+        # Set up auto-dismiss timer (60 seconds)
+        timer = QtCore.QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: self.RemoveWarningIcon(warningLabel))
+        timer.start(60000)
+        warningLabel.dismissTimer = timer
+        
+    def RemoveWarningIcon(self, warningLabel):
+        """
+        Removes a warning icon from the status bar
+        """
+        if warningLabel in self.warningIcons:
+            self.warningIcons.remove(warningLabel)
+            self.statusBar().removeWidget(warningLabel)
+            if hasattr(warningLabel, 'dismissTimer'):
+                warningLabel.dismissTimer.stop()
+            warningLabel.deleteLater()
+
     def keyPressEvent(self, event):
         """
         Handles key press events for the main window if needed
@@ -4549,10 +4622,17 @@ def main():
 
     # Choose a folder for the game
     # Let the user pick a folder without restarting the editor if they fail
+    # On macOS, use DontUseNativeDialog to show the title bar
+    dialog_options = QtWidgets.QFileDialog.Option.ShowDirsOnly
+    if sys.platform == 'darwin':
+        dialog_options |= QtWidgets.QFileDialog.Option.DontUseNativeDialog
+    
     while not areValidGamePaths():
         stage_path = QtWidgets.QFileDialog.getExistingDirectory(
             None,
-            globals_.trans.string('ChangeGamePath', 0, '[game]', globals_.gamedef.name)
+            globals_.trans.string('ChangeGamePath', 0, '[game]', globals_.gamedef.name),
+            '',
+            dialog_options
         )
 
         if stage_path == '':
@@ -4564,7 +4644,9 @@ def main():
         while not os.path.isdir(texture_path):
             texture_path = QtWidgets.QFileDialog.getExistingDirectory(
                 None,
-                globals_.trans.string('ChangeGamePath', 4, '[game]', globals_.gamedef.name)
+                globals_.trans.string('ChangeGamePath', 4, '[game]', globals_.gamedef.name),
+                '',
+                dialog_options
             )
 
             if texture_path == "":
