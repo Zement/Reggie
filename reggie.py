@@ -4507,7 +4507,7 @@ def main():
         copy2('settings.ini', 'settings.ini.bak')
         del copy2
 
-    # Try to get the last commit id - if it failed, we're in a build.
+    # Try to get version from git tags - if it fails, we're in a build or git is not available
     # Only try if we're in a git repository (check in the script's directory)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     git_dir = os.path.join(script_dir, '.git')
@@ -4515,13 +4515,66 @@ def main():
     if os.path.exists(git_dir):
         try:
             import subprocess
-            commit_id = subprocess.check_output(
-                ["git", "rev-parse", "--short", "HEAD"], 
-                stderr=subprocess.DEVNULL, 
-                stdin=subprocess.DEVNULL,
-                cwd=script_dir
-            ).decode('utf-8').strip()
-            globals_.ReggieVersionShort += "-" + commit_id
+            
+            # Try to get the exact tag if we're on a tagged commit
+            try:
+                tag = subprocess.check_output(
+                    ["git", "describe", "--exact-match", "--tags", "HEAD"],
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    cwd=script_dir
+                ).decode('utf-8').strip()
+                # We're on a tagged commit, use the tag as-is
+                globals_.ReggieVersionShort = tag
+            except:
+                # Not on a tagged commit, get the latest tag and append commit info
+                try:
+                    # Get the latest tag
+                    latest_tag = subprocess.check_output(
+                        ["git", "describe", "--tags", "--abbrev=0"],
+                        stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
+                        cwd=script_dir
+                    ).decode('utf-8').strip()
+                    
+                    # Get current commit hash
+                    commit_id = subprocess.check_output(
+                        ["git", "rev-parse", "--short", "HEAD"],
+                        stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
+                        cwd=script_dir
+                    ).decode('utf-8').strip()
+                    
+                    # Extract version parts from tag (e.g., v4.9.1-6-e47e4d9 -> v4.9.1-6)
+                    # Remove the last commit hash part if present
+                    tag_parts = latest_tag.rsplit('-', 1)
+                    if len(tag_parts) == 2 and len(tag_parts[1]) == 7:
+                        # Has commit hash, remove it
+                        base_version = tag_parts[0]
+                    else:
+                        base_version = latest_tag
+                    
+                    # Get minor patch number from tag
+                    version_parts = base_version.split('-')
+                    if len(version_parts) >= 2:
+                        # Has minor patch number (e.g., v4.9.1-6)
+                        minor_patch = int(version_parts[-1])
+                        base_without_minor = '-'.join(version_parts[:-1])
+                        # Increment minor patch for development version
+                        globals_.ReggieVersionShort = f"{base_without_minor}-{minor_patch + 1}-{commit_id}"
+                    else:
+                        # No minor patch number, just append commit
+                        globals_.ReggieVersionShort = f"{base_version}-{commit_id}"
+                except:
+                    # Fallback: just append commit ID to the default version
+                    commit_id = subprocess.check_output(
+                        ["git", "rev-parse", "--short", "HEAD"],
+                        stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
+                        cwd=script_dir
+                    ).decode('utf-8').strip()
+                    globals_.ReggieVersionShort += "-" + commit_id
+            
             del subprocess
         except Exception:
             # Silently ignore any git-related errors (not in repo, git not installed, etc.)

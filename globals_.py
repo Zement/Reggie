@@ -62,7 +62,8 @@ ReggieID = 'Reggie! Next Level Editor by Treeki, Tempus and RoadrunnerWMC'
 ReggieVersionFloat = 4.9
 # Version format: v[Major].[Minor].[Patch]-[MinorPatch]-[CommitID]
 # MinorPatch increments with each commit for proper sorting
-ReggieVersionShort = 'v4.9.1-6'  # Will be updated to include commit ID at runtime
+# Version is determined dynamically from git tags at runtime
+ReggieVersionShort = 'v4.9.1-6'  # Fallback if git is not available (update manually with each release)
 ResetDataWhenHiding = False
 RestoredFromAutoSave = False
 SettingsActions = None
