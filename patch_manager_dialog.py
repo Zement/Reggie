@@ -877,7 +877,7 @@ class PatchManagerDialog(QtWidgets.QDialog):
                     buttonLayout.addWidget(fullModBtn)
                     
                     # Method 1: Individual folders (disabled if full mod is installed)
-                    method1Btn = QtWidgets.QPushButton(f'{btn_prefix} (Parts)')
+                    method1Btn = QtWidgets.QPushButton(f'{btn_prefix} (Stage/Texture)')
                     method1Btn.clicked.connect(lambda checked, e=entry: self._download_patch(e, method=1))
                     method1Btn.setEnabled(not is_full_mod_installed)
                     if is_full_mod_installed:

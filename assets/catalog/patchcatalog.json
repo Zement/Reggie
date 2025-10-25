@@ -20,5 +20,38 @@
     "patch": "https://github.com/Developers-Collective/NSMBWerPlus/tree/master/Reggie! Patches/Reggie! Next 4.90+/NSMBWerPlus/",
     "fullMod": "https://github.com/Developers-Collective/NSMBWerPlus/tree/master/Riivolution/NSMBWer+",
     "fullModRiivolution": "https://github.com/Developers-Collective/NSMBWerPlus/blob/master/Riivolution/riivolution/NSMBWer%2B.xml"
+  },
+  {
+    "name": "Newer Alpine Dream",
+    "version": "v1.0.0",
+    "description": "11-level alpine-themed mini-hack built by ALPHA_T",
+    "author": "ALPHA_T",
+    "stage": "https://github.com/AlphaT12/Newer-Alpine-Dream/tree/main/NewerAD/Stages",
+    "texture": "https://github.com/AlphaT12/Newer-Alpine-Dream/tree/main/NewerAD/Tilesets",
+    "patch": "https://github.com/AlphaT12/Newer-Alpine-Dream/tree/main/NewerAD",
+    "fullMod": "https://github.com/AlphaT12/Newer-Alpine-Dream/tree/main/NewerAD",
+    "fullModRiivolution": "https://github.com/AlphaT12/Newer-Alpine-Dream/blob/main/riivolution/NewerAD.xml"
+  },
+  {
+    "name": "NewerGEM",
+    "version": "v1.0.0",
+    "description": "Feature-rich NewerSMBW expansion bundling community patches and tilesets",
+    "author": "Developers Collective",
+    "stage": "https://github.com/Developers-Collective/NewerGEM/tree/master/riivolution/NewerGEM/Stages",
+    "texture": "https://github.com/Developers-Collective/NewerGEM/tree/master/riivolution/NewerGEM/Tilesets",
+    "patch": "https://github.com/Developers-Collective/NewerGEM/tree/master/Reggie/reggiedata/patches/NewerGEM",
+    "fullMod": "https://github.com/Developers-Collective/NewerGEM/tree/master/riivolution/NewerGEM",
+    "fullModRiivolution": "https://github.com/Developers-Collective/NewerGEM/blob/master/riivolution/riivolution/NewerGEM.xml"
+  },
+  {
+    "name": "BetterSMBW",
+    "version": "v1.3",
+    "description": "Speedrunning practice mod with quick restarts and QoL tweaks",
+    "author": "R0mainMK",
+    "stage": "https://github.com/R0mainMK/BetterSMBW/tree/master/bettersmbw",
+    "texture": "https://github.com/R0mainMK/BetterSMBW/tree/master/bettersmbw",
+    "patch": "https://github.com/R0mainMK/BetterSMBW/tree/master/bettersmbw",
+    "fullMod": "https://github.com/R0mainMK/BetterSMBW/tree/master/bettersmbw",
+    "fullModRiivolution": "https://github.com/R0mainMK/BetterSMBW/blob/master/riivolution/BetterSMBW.xml"
   }
 ]
