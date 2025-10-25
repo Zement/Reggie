@@ -1,0 +1,24 @@
+[
+  {
+    "name": "Newer Super Mario Bros. Wii",
+    "version": "v1.30",
+    "description": "The most popular NSMBW mod with 128 new levels across 14 worlds",
+    "author": "Newer Team",
+    "stage": "https://github.com/Zement/NewerSMBW/tree/main/Newer_W_1.30/NewerSMBW/Stages",
+    "texture": "https://github.com/Zement/NewerSMBW/tree/main/Newer_W_1.30/NewerSMBW/Tilesets",
+    "patch": "https://github.com/Zement/NewerSMBW/tree/main/Newer_W_1.30/patches/NewerSMBW",
+    "fullMod": "https://github.com/Zement/NewerSMBW/tree/main/Newer_W_1.30/NewerSMBW",
+    "fullModRiivolution": "https://github.com/Zement/NewerSMBW/blob/main/Newer_W_1.30/riivolution/NewerSMBW.xml"
+  },
+  {
+    "name": "NSMBWer+",
+    "version": "v1.2.1a",
+    "description": "NewerSMBW mod with original world map support",
+    "author": "Danster64, Ryguy, Nin0",
+    "stage": "https://github.com/Developers-Collective/NSMBWerPlus/tree/master/Riivolution/NSMBWer+/Stage/",
+    "texture": "https://github.com/Developers-Collective/NSMBWerPlus/tree/master/Riivolution/NSMBWer+/Stage/Texture/",
+    "patch": "https://github.com/Developers-Collective/NSMBWerPlus/tree/master/Reggie! Patches/Reggie! Next 4.90+/NSMBWerPlus/",
+    "fullMod": "https://github.com/Developers-Collective/NSMBWerPlus/tree/master/Riivolution/NSMBWer+",
+    "fullModRiivolution": "https://github.com/Developers-Collective/NSMBWerPlus/blob/master/Riivolution/riivolution/NSMBWer%2B.xml"
+  }
+]
