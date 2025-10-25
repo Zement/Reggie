@@ -155,6 +155,42 @@ def isNewerTextureFolder(path):
             os.path.isfile(os.path.join(path, 'Cloudscape.arc.LZ')))
 
 
+def getExistingDirectoryWithSidebar(parent, caption, directory='', options=None):
+    """
+    Helper function to show a directory picker with proper sidebar URLs on macOS.
+    On macOS with DontUseNativeDialog, adds /Volumes to sidebar for external drive access.
+    
+    Args:
+        parent: Parent widget
+        caption: Dialog title
+        directory: Starting directory
+        options: QFileDialog options
+    
+    Returns:
+        Selected directory path or empty string if cancelled
+    """
+    if sys.platform == 'darwin' and options and (options & QtWidgets.QFileDialog.Option.DontUseNativeDialog):
+        # Create a QFileDialog instance to customize sidebar
+        dialog = QtWidgets.QFileDialog(parent, caption, directory)
+        dialog.setFileMode(QtWidgets.QFileDialog.FileMode.Directory)
+        dialog.setOptions(options)
+        
+        # Add /Volumes to sidebar for external drive access
+        sidebar_urls = dialog.sidebarUrls()
+        volumes_url = QtCore.QUrl.fromLocalFile('/Volumes')
+        if volumes_url not in sidebar_urls:
+            sidebar_urls.insert(0, volumes_url)  # Add at top
+            dialog.setSidebarUrls(sidebar_urls)
+        
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            selected = dialog.selectedFiles()
+            return selected[0] if selected else ''
+        return ''
+    else:
+        # Use static method for other platforms or native dialog
+        return QtWidgets.QFileDialog.getExistingDirectory(parent, caption, directory, options)
+
+
 def validateFolderForPatch(folder_path, is_stage, patch_name, parent_widget=None):
     """
     Validates if a folder matches the expected patch type (base game vs Newer).
@@ -1550,6 +1586,7 @@ def LoadActionsLists():
         (globals_.trans.string('MenuItems', 82), False, 'deletearea'),
         (globals_.trans.string('MenuItems', 84), False, 'reloadgfx'),
         (globals_.trans.string('MenuItems', 138), False, 'reloaddata'),
+        ('Game Patches', True, 'gamepatches'),
     )
     globals_.HelpActions = (
         (globals_.trans.string('MenuItems', 86), False, 'infobox'),

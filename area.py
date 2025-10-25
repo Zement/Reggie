@@ -380,7 +380,7 @@ class LoadedSpritesTab(QtWidgets.QWidget):
         and saves the entered values in reggie.py. This code is pretty hacky,
         but at least it works.
         """
-        return ["[%d] %s" % (x, globals_.Sprites[x].name if 0 <= x < globals_.NumSprites else "UNKNOWN") for x in list_of_sprites]
+        return ["[%d] %s" % (x, globals_.Sprites[x].name if 0 <= x < globals_.NumSprites and globals_.Sprites[x] is not None else "UNKNOWN") for x in list_of_sprites]
 
     def handle_add_sprite(self, _):
         """
@@ -398,7 +398,7 @@ class LoadedSpritesTab(QtWidgets.QWidget):
             return
 
         index = self.custom_model.index(self.custom_model.rowCount() - 1, 0)
-        self.custom_model.setData(index, "[%d] %s" % (sprite_id, globals_.Sprites[sprite_id].name if 0 <= sprite_id < globals_.NumSprites else "UNKNOWN"))
+        self.custom_model.setData(index, "[%d] %s" % (sprite_id, globals_.Sprites[sprite_id].name if 0 <= sprite_id < globals_.NumSprites and globals_.Sprites[sprite_id] is not None else "UNKNOWN"))
 
         # Clear the input so the user can enter a new sprite number
         self.sprite_input.clear()

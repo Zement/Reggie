@@ -233,6 +233,11 @@ class GameDefMenu(QtWidgets.QMenu):
             if len(actions) >= 3:  # viewer, separator, patches..., separator, add button
                 self.insertAction(actions[-2], act)  # Insert before last separator
 
+        # Also refresh the main window's patch combo box if it exists
+        if hasattr(globals_, 'mainWindow') and globals_.mainWindow:
+            if hasattr(globals_.mainWindow, 'updatePatchComboBox'):
+                globals_.mainWindow.updatePatchComboBox()
+
 
 class ReggieGameDefinition:
     """

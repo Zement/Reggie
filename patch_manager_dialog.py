@@ -422,7 +422,8 @@ class PatchManagerDialog(QtWidgets.QDialog):
         if sys.platform == 'darwin':
             dialog_options |= QtWidgets.QFileDialog.Option.DontUseNativeDialog
         
-        stage_path = QtWidgets.QFileDialog.getExistingDirectory(
+        from misc import getExistingDirectoryWithSidebar
+        stage_path = getExistingDirectoryWithSidebar(
             self,
             f"Select Stage Folder for {patch['name']}",
             '',
@@ -475,7 +476,8 @@ class PatchManagerDialog(QtWidgets.QDialog):
         if sys.platform == 'darwin':
             dialog_options |= QtWidgets.QFileDialog.Option.DontUseNativeDialog
         
-        texture_path = QtWidgets.QFileDialog.getExistingDirectory(
+        from misc import getExistingDirectoryWithSidebar
+        texture_path = getExistingDirectoryWithSidebar(
             self,
             f"Select Texture Folder for {patch['name']}",
             '',
@@ -1196,10 +1198,11 @@ class PatchManagerDialog(QtWidgets.QDialog):
         if sys.platform == 'darwin':
             dialog_options |= QtWidgets.QFileDialog.Option.DontUseNativeDialog
         
-        dolphin_path = QtWidgets.QFileDialog.getExistingDirectory(
+        from misc import getExistingDirectoryWithSidebar
+        dolphin_path = getExistingDirectoryWithSidebar(
             self,
             'Select Dolphin Riivolution Root Directory',
-            self.dolphinPathEdit.text(),
+            '',
             dialog_options
         )
         
@@ -1220,7 +1223,8 @@ class PatchManagerDialog(QtWidgets.QDialog):
         if sys.platform == 'darwin':
             dialog_options |= QtWidgets.QFileDialog.Option.DontUseNativeDialog
         
-        patch_path = QtWidgets.QFileDialog.getExistingDirectory(
+        from misc import getExistingDirectoryWithSidebar
+        patch_path = getExistingDirectoryWithSidebar(
             self,
             'Select Reggie Patch Folder',
             '',

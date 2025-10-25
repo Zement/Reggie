@@ -792,10 +792,16 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         hmenu = menubar.addMenu(globals_.trans.string('Menubar', 4))
         self.SetupHelpMenu(hmenu)
+        
+        # After setting up the menu bar, adjust its size policy
+        menubar.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, menubar.sizePolicy().verticalPolicy())
 
         # create a toolbar
         self.toolbar = self.addToolBar(globals_.trans.string('Menubar', 5))
         self.toolbar.setObjectName('MainToolbar')
+        
+        # Add the menubar to the toolbar to allow docking behind it
+        self.toolbar.addWidget(menubar)
 
         # Add buttons to the toolbar
         self.addToolbarButtons()
@@ -804,6 +810,116 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.areaComboBox = QtWidgets.QComboBox()
         self.areaComboBox.activated.connect(self.HandleSwitchArea)
         self.toolbar.addWidget(self.areaComboBox)
+
+        # Add the patch combo box (check if enabled in preferences)
+        if setting('ToolbarActs') in (None, 'None', 'none', '', 0):
+            # Default: enabled
+            show_patches = True
+        else:
+            toggled = setting('ToolbarActs')
+            show_patches = toggled.get('gamepatches', True)
+        
+        if show_patches:
+            self.patchComboBox = QtWidgets.QComboBox()
+            self.patchComboBox.setMinimumWidth(200)
+            self.patchComboBox.activated.connect(self.HandleSwitchPatch)
+            self.toolbar.addWidget(self.patchComboBox)
+        else:
+            self.patchComboBox = None
+
+    def HandleSwitchPatch(self, index):
+        """
+        Handle activated signals for patchComboBox
+        """
+        if index < 0:
+            return
+        
+        # Get the selected item data
+        patch_data = self.patchComboBox.itemData(index)
+        
+        if patch_data == 'patchmanager':
+            # Open Patch Manager
+            self.HandlePatchManager()
+            # Reset to current patch
+            self.updatePatchComboBox()
+        elif patch_data is None:
+            # Switch to base game
+            from gamedef import loadNewGameDef
+            success = loadNewGameDef(None)
+            if success:
+                # Update combo box to reflect the change
+                self.updatePatchComboBox()
+            else:
+                # Reset to current patch on failure
+                self.updatePatchComboBox()
+        elif patch_data is not None:
+            # Switch to selected patch
+            from gamedef import loadNewGameDef
+            success = loadNewGameDef(patch_data)
+            if success:
+                # Update combo box to reflect the change
+                self.updatePatchComboBox()
+            else:
+                # Reset to current patch on failure
+                self.updatePatchComboBox()
+
+    def updatePatchComboBox(self):
+        """
+        Updates the patch combo box with current patches and selects the active one
+        """
+        # Check if patch combo box exists (might be disabled in preferences)
+        if not hasattr(self, 'patchComboBox') or self.patchComboBox is None:
+            return
+        
+        from gamedef import getAvailableGameDefs
+        from dirty import setting
+        
+        # Store current selection
+        current_patch = setting('LastGameDef')
+        
+        # Clear and repopulate
+        self.patchComboBox.clear()
+        
+        # Get all patches
+        patches = getAvailableGameDefs()
+        
+        # Find current patch index
+        current_index = 0
+        
+        # Add base game if it exists
+        if None in patches:
+            patches.remove(None)
+            self.patchComboBox.addItem('New Super Mario Bros. Wii', None)
+            if current_patch is None:
+                current_index = self.patchComboBox.count() - 1
+        
+        # Add custom patches
+        for patch_folder in patches:
+            if patch_folder is not None:
+                try:
+                    from gamedef import ReggieGameDefinition
+                    # Check if it's a custom path
+                    custom_path = setting('PatchPath_' + patch_folder)
+                    if custom_path:
+                        patch_def = ReggieGameDefinition(patch_folder, custom_path=custom_path)
+                    else:
+                        patch_def = ReggieGameDefinition(patch_folder)
+                    
+                    if patch_def.custom:
+                        self.patchComboBox.addItem(patch_def.name, patch_folder)
+                        if patch_folder == current_patch:
+                            current_index = self.patchComboBox.count() - 1
+                except:
+                    # Skip invalid patches
+                    continue
+        
+        # Add Patch Manager separator and option
+        self.patchComboBox.insertSeparator(self.patchComboBox.count())
+        self.patchComboBox.addItem('Patch Manager...', 'patchmanager')
+        
+        # Set current selection
+        if current_index < self.patchComboBox.count():
+            self.patchComboBox.setCurrentIndex(current_index)
 
     def SetupHelpMenu(self, menu=None):
         """
@@ -2478,7 +2594,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
             dialog_options |= QtWidgets.QFileDialog.Option.DontUseNativeDialog
 
         while True:
-            stage_path = QtWidgets.QFileDialog.getExistingDirectory(
+            from misc import getExistingDirectoryWithSidebar
+            stage_path = getExistingDirectoryWithSidebar(
                 None,
                 globals_.trans.string('ChangeGamePath', 0, '[game]', globals_.gamedef.name),
                 '',
@@ -3329,6 +3446,9 @@ class ReggieWindow(QtWidgets.QMainWindow):
             self.areaComboBox.addItem(globals_.trans.string('AreaCombobox', 0, '[num]', area.areanum))
 
         self.areaComboBox.setCurrentIndex(areaNum - 1)
+
+        # Update patch combo box
+        self.updatePatchComboBox()
 
         # Refresh object layouts
         for layer in globals_.Area.layers:
@@ -4697,7 +4817,8 @@ def main():
     
     while not areValidGamePaths():
         did_initial_setup = True
-        stage_path = QtWidgets.QFileDialog.getExistingDirectory(
+        from misc import getExistingDirectoryWithSidebar
+        stage_path = getExistingDirectoryWithSidebar(
             None,
             globals_.trans.string('ChangeGamePath', 0, '[game]', globals_.gamedef.name),
             '',
@@ -4718,7 +4839,7 @@ def main():
         texture_path = os.path.join(stage_path, "Texture")
 
         while not os.path.isdir(texture_path):
-            texture_path = QtWidgets.QFileDialog.getExistingDirectory(
+            texture_path = getExistingDirectoryWithSidebar(
                 None,
                 globals_.trans.string('ChangeGamePath', 4, '[game]', globals_.gamedef.name),
                 '',
