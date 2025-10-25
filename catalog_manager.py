@@ -34,39 +34,78 @@ class CatalogManager:
         if not os.path.exists(catalog_dir):
             os.makedirs(catalog_dir, exist_ok=True)
     
-    def fetch_remote_catalog(self) -> bool:
+    def fetch_remote_catalog(self) -> Tuple[bool, Optional[str]]:
         """
         Fetch the catalog from the remote URL and cache it locally
         
         Returns:
-            True if successful, False otherwise
+            Tuple of (success, error_message)
         """
         try:
             print(f"[Catalog] Fetching from: {self.REMOTE_CATALOG_URL}")
             
-            # Fetch from remote
-            with urllib.request.urlopen(self.REMOTE_CATALOG_URL, timeout=10) as response:
-                catalog_data = response.read()
-                print(f"[Catalog] Downloaded {len(catalog_data)} bytes")
+            # Download directly to a temporary file using urlretrieve (same as download_manager)
+            temp_path = self.LOCAL_CATALOG_PATH + '.tmp'
+            urllib.request.urlretrieve(self.REMOTE_CATALOG_URL, temp_path)
+            print(f"[Catalog] Downloaded to temporary file")
             
             # Validate JSON
-            catalog_json = json.loads(catalog_data)
+            with open(temp_path, 'r', encoding='utf-8') as f:
+                catalog_json = json.load(f)
             print(f"[Catalog] Parsed JSON with {len(catalog_json)} entries")
             
-            # Save to local cache
-            with open(self.LOCAL_CATALOG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(catalog_json, f, indent=2)
+            # Move temp file to final location
+            if os.path.exists(self.LOCAL_CATALOG_PATH):
+                os.remove(self.LOCAL_CATALOG_PATH)
+            os.rename(temp_path, self.LOCAL_CATALOG_PATH)
             print(f"[Catalog] Saved to: {self.LOCAL_CATALOG_PATH}")
             
-            return True
+            return True, None
             
-        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError) as e:
-            print(f"[Catalog] Failed to fetch remote catalog: {e}")
+        except urllib.error.HTTPError as e:
+            error_msg = f"HTTP Error {e.code}: {e.reason}"
+            print(f"[Catalog] {error_msg}")
+            # Clean up temp file if it exists
+            temp_path = self.LOCAL_CATALOG_PATH + '.tmp'
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return False, error_msg
+        except urllib.error.URLError as e:
+            error_msg = f"URL Error: {e.reason}"
+            print(f"[Catalog] {error_msg}")
+            # Clean up temp file if it exists
+            temp_path = self.LOCAL_CATALOG_PATH + '.tmp'
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return False, error_msg
+        except json.JSONDecodeError as e:
+            error_msg = f"JSON Parse Error: {str(e)}"
+            print(f"[Catalog] {error_msg}")
+            # Clean up temp file if it exists
+            temp_path = self.LOCAL_CATALOG_PATH + '.tmp'
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return False, error_msg
+        except OSError as e:
+            error_msg = f"File Error: {str(e)}"
+            print(f"[Catalog] {error_msg}")
+            # Clean up temp file if it exists
+            temp_path = self.LOCAL_CATALOG_PATH + '.tmp'
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Unexpected Error: {str(e)}"
+            print(f"[Catalog] {error_msg}")
             import traceback
             traceback.print_exc()
-            return False
+            # Clean up temp file if it exists
+            temp_path = self.LOCAL_CATALOG_PATH + '.tmp'
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return False, error_msg
     
-    def load_catalog(self, force_remote: bool = False) -> bool:
+    def load_catalog(self, force_remote: bool = False) -> Tuple[bool, Optional[str]]:
         """
         Load the catalog from cache or remote
         
@@ -74,34 +113,49 @@ class CatalogManager:
             force_remote: If True, always fetch from remote
         
         Returns:
-            True if catalog was loaded successfully
+            Tuple of (success, error_message)
         """
+        print(f"[Catalog] load_catalog called, force_remote={force_remote}")
+        print(f"[Catalog] LOCAL_CATALOG_PATH={self.LOCAL_CATALOG_PATH}")
+        print(f"[Catalog] Local cache exists: {os.path.exists(self.LOCAL_CATALOG_PATH)}")
+        
+        fetch_error = None
+        
         # Try to fetch from remote if forced or if local cache doesn't exist
         if force_remote or not os.path.exists(self.LOCAL_CATALOG_PATH):
-            if not self.fetch_remote_catalog():
+            print(f"[Catalog] Attempting to fetch from remote...")
+            fetch_success, fetch_error = self.fetch_remote_catalog()
+            if not fetch_success:
                 # If remote fetch fails and no local cache, return False
                 if not os.path.exists(self.LOCAL_CATALOG_PATH):
-                    return False
+                    print(f"[Catalog] Remote fetch failed and no local cache exists")
+                    return False, fetch_error
+                print(f"[Catalog] Remote fetch failed but local cache exists, using cache")
         
         # Load from local cache
         try:
+            print(f"[Catalog] Loading from local cache: {self.LOCAL_CATALOG_PATH}")
             with open(self.LOCAL_CATALOG_PATH, 'r', encoding='utf-8') as f:
                 self.catalog_entries = json.load(f)
+            print(f"[Catalog] Loaded {len(self.catalog_entries)} entries from cache")
         except (OSError, json.JSONDecodeError) as e:
-            print(f"Failed to load local catalog: {e}")
+            error_msg = f"Failed to load local catalog: {str(e)}"
+            print(f"[Catalog] {error_msg}")
             self.catalog_entries = []
-            return False
+            return False, error_msg
         
         # Load user catalog if it exists
         if os.path.exists(self.USER_CATALOG_PATH):
             try:
                 with open(self.USER_CATALOG_PATH, 'r', encoding='utf-8') as f:
                     self.user_entries = json.load(f)
+                print(f"[Catalog] Loaded {len(self.user_entries)} user entries")
             except (OSError, json.JSONDecodeError) as e:
-                print(f"Failed to load user catalog: {e}")
+                print(f"[Catalog] Failed to load user catalog: {e}")
                 self.user_entries = []
         
-        return True
+        # Return success, and include fetch error if there was one (but we still loaded from cache)
+        return True, fetch_error
     
     def get_all_entries(self) -> List[Dict]:
         """

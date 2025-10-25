@@ -45,7 +45,7 @@ MAC_ICON = os.path.join('reggiedata', 'reggie.icns')
 MAC_BUNDLE_IDENTIFIER = 'ca.chronometry.reggie'
 
 SCRIPT_FILE = 'reggie.py'
-DATA_FOLDERS = ['reggiedata', 'reggieextras']
+DATA_FOLDERS = ['reggiedata', 'reggieextras', 'assets']
 DATA_FILES = ['readme.md', 'license.txt']
 
 # macOS only
@@ -141,7 +141,7 @@ print('>>')
 
 # Excludes
 excludes = ['doctest', 'pdb', 'unittest', 'difflib',
-            'os2emxpath', 'optpath', 'multiprocessing', 'ssl',
+            'os2emxpath', 'optpath', 'multiprocessing',
             'PyQt6.QtWebKit', 'PyQt6.QtNetwork']
 
 if sys.platform == 'nt':
@@ -334,7 +334,17 @@ else:
 for f in DATA_FOLDERS:
     if os.path.isdir(os.path.join(dest_folder, f)):
         shutil.rmtree(os.path.join(dest_folder, f))
-    shutil.copytree(f, os.path.join(dest_folder, f))
+    
+    # For assets folder, exclude mods and snapshots subfolders
+    if f == 'assets':
+        def ignore_large_folders(dir, files):
+            # Ignore mods and snapshots folders to keep build size down
+            if os.path.basename(dir) in ['mods', 'snapshots']:
+                return files  # Ignore all files in these folders
+            return []
+        shutil.copytree(f, os.path.join(dest_folder, f), ignore=ignore_large_folders)
+    else:
+        shutil.copytree(f, os.path.join(dest_folder, f))
 
 for f in DATA_FILES:
     shutil.copy(f, dest_folder)

@@ -37,7 +37,11 @@ class PatchManagerDialog(QtWidgets.QDialog):
         self.scanned_riiv_mods = []
         
         # Load catalog
-        self.catalog_manager.load_catalog()
+        catalog_loaded, catalog_error = self.catalog_manager.load_catalog()
+        catalog_entries = self.catalog_manager.get_all_entries()
+        print(f"[PatchManager] Catalog loaded: {catalog_loaded}, Entries: {len(catalog_entries)}")
+        if catalog_error:
+            print(f"[PatchManager] Catalog load warning: {catalog_error}")
         
         # Get all available patches
         self.patches = self._get_all_patches()
@@ -896,12 +900,32 @@ class PatchManagerDialog(QtWidgets.QDialog):
         """
         Refresh the catalog from remote
         """
-        success = self.catalog_manager.load_catalog(force_remote=True)
-        if success:
+        success, error_msg = self.catalog_manager.load_catalog(force_remote=True)
+        entries = self.catalog_manager.get_all_entries()
+        
+        if success and not error_msg:
+            # Successfully fetched from remote
             self._populate_catalog()
-            QtWidgets.QMessageBox.information(self, 'Catalog Refreshed', 'Catalog has been updated successfully.')
+            QtWidgets.QMessageBox.information(
+                self, 
+                'Catalog Refreshed', 
+                f'Catalog has been updated successfully from GitHub.\n\nFound {len(entries)} catalog entries.'
+            )
+        elif success and error_msg:
+            # Loaded from cache but remote fetch failed
+            self._populate_catalog()
+            QtWidgets.QMessageBox.warning(
+                self, 
+                'Using Cached Catalog', 
+                f'Failed to fetch latest catalog from GitHub:\n{error_msg}\n\nUsing cached version with {len(entries)} entries.'
+            )
         else:
-            QtWidgets.QMessageBox.warning(self, 'Refresh Failed', 'Failed to refresh catalog from remote. Using cached version.')
+            # Complete failure
+            QtWidgets.QMessageBox.critical(
+                self, 
+                'Catalog Load Failed', 
+                f'Failed to load catalog:\n{error_msg}\n\nNo catalog entries available.'
+            )
     
     def _scan_riivolution_folder(self):
         """
