@@ -17,7 +17,7 @@ class CatalogManager:
     """
     
     # Catalog URLs
-    REMOTE_CATALOG_URL = "https://raw.githubusercontent.com/Zement/Reggie/master/assets/catalog/patchcatalog.json"
+    REMOTE_CATALOG_URL = "https://github.com/Zement/Reggie/blob/master/assets/catalog/patchcatalog.json"
     LOCAL_CATALOG_PATH = os.path.join("assets", "catalog", "patchcatalog.json")
     USER_CATALOG_PATH = os.path.join("assets", "catalog", "patchcatalog_user.json")
     
