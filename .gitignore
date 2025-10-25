@@ -114,4 +114,6 @@ reggiedata/patches/*
 Reggie-Next.code-workspace
 
 # Assets folder contents (keep folder structure only)
-assets/*
+assets/mods/*
+assets/snapshots/*
+

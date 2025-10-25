@@ -17,9 +17,9 @@ class CatalogManager:
     """
     
     # Catalog URLs
-    REMOTE_CATALOG_URL = "https://raw.githubusercontent.com/Zement/Reggie/master/assets/Catalog/patchcatalog.json"
-    LOCAL_CATALOG_PATH = os.path.join("assets", "Catalog", "patchcatalog.json")
-    USER_CATALOG_PATH = os.path.join("assets", "Catalog", "patchcatalog_user.json")
+    REMOTE_CATALOG_URL = "https://raw.githubusercontent.com/Zement/Reggie/master/assets/catalog/patchcatalog.json"
+    LOCAL_CATALOG_PATH = os.path.join("assets", "catalog", "patchcatalog.json")
+    USER_CATALOG_PATH = os.path.join("assets", "catalog", "patchcatalog_user.json")
     
     def __init__(self):
         """Initialize the catalog manager"""
