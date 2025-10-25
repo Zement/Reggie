@@ -55,6 +55,116 @@
     "fullModRiivolution": "https://github.com/R0mainMK/BetterSMBW/blob/master/riivolution/BetterSMBW.xml"
   },
   {
+    "name": "Non-Github Entries Below (Not Yet Supported)",
+    "version": "v1.3",
+    "description": "Speedrunning practice mod with quick restarts and QoL tweaks",
+    "author": "R0mainMK",
+    "stage": "https://github.com/R0mainMK/BetterSMBW/tree/master/bettersmbw",
+    "texture": "https://github.com/R0mainMK/BetterSMBW/tree/master/bettersmbw",
+    "patch": "https://github.com/R0mainMK/BetterSMBW/tree/master/bettersmbw",
+    "fullMod": "https://github.com/R0mainMK/BetterSMBW/tree/master/bettersmbw",
+    "fullModRiivolution": "https://github.com/R0mainMK/BetterSMBW/blob/master/riivolution/BetterSMBW.xml"
+  },
+  {
+    "name": "Another Super Mario Bros. Wii",
+    "version": "v1.0",
+    "description": "A ROM mod of New Super Mario Bros. Wii with remade levels using the same themes.",
+    "author": "Skawo",
+    "stage": "https://drive.google.com/file/d/1Q94bfUsEinsdZ_pMZBGlnenlUe7kf2fz/view",
+    "texture": "https://drive.google.com/file/d/1Q94bfUsEinsdZ_pMZBGlnenlUe7kf2fz/view",
+    "patch": "https://drive.google.com/file/d/1Q94bfUsEinsdZ_pMZBGlnenlUe7kf2fz/view",
+    "fullMod": "https://drive.google.com/file/d/1Q94bfUsEinsdZ_pMZBGlnenlUe7kf2fz/view",
+    "fullModRiivolution": "https://drive.google.com/file/d/1Q94bfUsEinsdZ_pMZBGlnenlUe7kf2fz/view"
+  },
+  {
+    "name": "Newer Super Luigi Wii: Dark Moon",
+    "version": "v1.0",
+    "description": "A Halloween-themed hack with 8 new levels, Luigi & Wario as playable characters, new World Map.",
+    "author": "Newer Team",
+    "stage": "https://drive.google.com/file/d/1P2BYlU8w7ACw56eHmdfMvPRzFNO5JL7s/view",
+    "texture": "https://drive.google.com/file/d/1P2BYlU8w7ACw56eHmdfMvPRzFNO5JL7s/view",
+    "patch": "https://drive.google.com/file/d/1P2BYlU8w7ACw56eHmdfMvPRzFNO5JL7s/view",
+    "fullMod": "https://drive.google.com/file/d/1P2BYlU8w7ACw56eHmdfMvPRzFNO5JL7s/view",
+    "fullModRiivolution": "https://drive.google.com/file/d/1P2BYlU8w7ACw56eHmdfMvPRzFNO5JL7s/view"
+  },
+  {
+    "name": "Frozen",
+    "version": "v1.0",
+    "description": "A winter-themed mod with icy levels and challenges.",
+    "author": "Unknown",
+    "stage": "https://drive.google.com/file/d/1VVHx3ik9LNnypYxRBqgGBPUYl-pSS85l/view?usp=sharing",
+    "texture": "https://drive.google.com/file/d/1VVHx3ik9LNnypYxRBqgGBPUYl-pSS85l/view?usp=sharing",
+    "patch": "https://drive.google.com/file/d/1VVHx3ik9LNnypYxRBqgGBPUYl-pSS85l/view?usp=sharing",
+    "fullMod": "https://drive.google.com/file/d/1VVHx3ik9LNnypYxRBqgGBPUYl-pSS85l/view?usp=sharing",
+    "fullModRiivolution": "https://drive.google.com/file/d/1VVHx3ik9LNnypYxRBqgGBPUYl-pSS85l/view?usp=sharing"
+  },
+  {
+    "name": "Koopa Country",
+    "version": "v1.0",
+    "description": "A mod featuring Koopa-themed levels and changes.",
+    "author": "Unknown",
+    "stage": "http://www.mediafire.com/file/i370t15wo529r5p/Koopa_country.rar/file",
+    "texture": "http://www.mediafire.com/file/i370t15wo529r5p/Koopa_country.rar/file",
+    "patch": "http://www.mediafire.com/file/i370t15wo529r5p/Koopa_country.rar/file",
+    "fullMod": "http://www.mediafire.com/file/i370t15wo529r5p/Koopa_country.rar/file",
+    "fullModRiivolution": "http://www.mediafire.com/file/i370t15wo529r5p/Koopa_country.rar/file"
+  },
+  {
+    "name": "Mario and the Mysterious Meteorite",
+    "version": "v3.0.1",
+    "description": "An adventure mod where Mario investigates a mysterious meteorite.",
+    "author": "Unknown",
+    "stage": "https://www.mediafire.com/file/imanwse1kxe5f7c/Mario+and+the+Mysterious+Meteorite+%5BV3.0.1%5D.zip/file",
+    "texture": "https://www.mediafire.com/file/imanwse1kxe5f7c/Mario+and+the+Mysterious+Meteorite+%5BV3.0.1%5D.zip/file",
+    "patch": "https://www.mediafire.com/file/imanwse1kxe5f7c/Mario+and+the+Mysterious+Meteorite+%5BV3.0.1%5D.zip/file",
+    "fullMod": "https://www.mediafire.com/file/imanwse1kxe5f7c/Mario+and+the+Mysterious+Meteorite+%5BV3.0.1%5D.zip/file",
+    "fullModRiivolution": "https://www.mediafire.com/file/imanwse1kxe5f7c/Mario+and+the+Mysterious+Meteorite+%5BV3.0.1%5D.zip/file"
+  },
+  {
+    "name": "New Super Mario Bros. Wii 4",
+    "version": "v3.3",
+    "description": "A custom mod with new levels and gameplay elements.",
+    "author": "Orange-Yoshi",
+    "stage": "http://www.mediafire.com/file/6zyskf5y9cvj8sf/New_Super_Mario_Bros._Wii_4_made_by_Orange-Yoshi3.3.zip/file",
+    "texture": "http://www.mediafire.com/file/6zyskf5y9cvj8sf/New_Super_Mario_Bros._Wii_4_made_by_Orange-Yoshi3.3.zip/file",
+    "patch": "http://www.mediafire.com/file/6zyskf5y9cvj8sf/New_Super_Mario_Bros._Wii_4_made_by_Orange-Yoshi3.3.zip/file",
+    "fullMod": "http://www.mediafire.com/file/6zyskf5y9cvj8sf/New_Super_Mario_Bros._Wii_4_made_by_Orange-Yoshi3.3.zip/file",
+    "fullModRiivolution": "http://www.mediafire.com/file/6zyskf5y9cvj8sf/New_Super_Mario_Bros._Wii_4_made_by_Orange-Yoshi3.3.zip/file"
+  },
+  {
+    "name": "New Super Mario Bros Wii Other World",
+    "version": "v1.0",
+    "description": "An alternate world mod with new environments and levels.",
+    "author": "Unknown",
+    "stage": "https://www.mediafire.com/file/7wa607hp7trodp7/New_Super_Mario_Bros_Wii_Other_World.rar/file",
+    "texture": "https://www.mediafire.com/file/7wa607hp7trodp7/New_Super_Mario_Bros_Wii_Other_World.rar/file",
+    "patch": "https://www.mediafire.com/file/7wa607hp7trodp7/New_Super_Mario_Bros_Wii_Other_World.rar/file",
+    "fullMod": "https://www.mediafire.com/file/7wa607hp7trodp7/New_Super_Mario_Bros_Wii_Other_World.rar/file",
+    "fullModRiivolution": "https://www.mediafire.com/file/7wa607hp7trodp7/New_Super_Mario_Bros_Wii_Other_World.rar/file"
+  },
+  {
+    "name": "RetroSMBW",
+    "version": "v1.0",
+    "description": "A retro-styled mod reviving classic Mario elements.",
+    "author": "Unknown",
+    "stage": "http://www.mediafire.com/file/f6kn5nrq4ib8ev1/RetroSMBW.zip/file",
+    "texture": "http://www.mediafire.com/file/f6kn5nrq4ib8ev1/RetroSMBW.zip/file",
+    "patch": "http://www.mediafire.com/file/f6kn5nrq4ib8ev1/RetroSMBW.zip/file",
+    "fullMod": "http://www.mediafire.com/file/f6kn5nrq4ib8ev1/RetroSMBW.zip/file",
+    "fullModRiivolution": "http://www.mediafire.com/file/f6kn5nrq4ib8ev1/RetroSMBW.zip/file"
+  },
+  {
+    "name": "NewerSMB7 Demo",
+    "version": "v1.0",
+    "description": "A demo version of a Newer-themed mod with sample levels.",
+    "author": "Unknown",
+    "stage": "https://www.mediafire.com/file/trtapl6u80h98dl/NewerSMB7_Demo.zip/file",
+    "texture": "https://www.mediafire.com/file/trtapl6u80h98dl/NewerSMB7_Demo.zip/file",
+    "patch": "https://www.mediafire.com/file/trtapl6u80h98dl/NewerSMB7_Demo.zip/file",
+    "fullMod": "https://www.mediafire.com/file/trtapl6u80h98dl/NewerSMB7_Demo.zip/file",
+    "fullModRiivolution": "https://www.mediafire.com/file/trtapl6u80h98dl/NewerSMB7_Demo.zip/file"
+  },
+  {
     "name": "Newer Holiday Special",
     "version": "v1.0",
     "description": "A holiday-themed mini-hack for New Super Mario Bros. Wii with 23 new levels and new music.",
@@ -88,81 +198,15 @@
     "fullModRiivolution": "https://mega.nz/file/SuhRwYBT"
   },
   {
-    "name": "Another Super Mario Bros. Wii",
+    "name": "Newer Super Luigi Wii: Dark Moon Reverse",
     "version": "v1.0",
-    "description": "A ROM mod of New Super Mario Bros. Wii with remade levels using the same themes.",
-    "author": "Skawo",
-    "stage": "https://drive.google.com/file/d/1Q94bfUsEinsdZ_pMZBGlnenlUe7kf2fz/view",
-    "texture": "https://drive.google.com/file/d/1Q94bfUsEinsdZ_pMZBGlnenlUe7kf2fz/view",
-    "patch": "https://drive.google.com/file/d/1Q94bfUsEinsdZ_pMZBGlnenlUe7kf2fz/view",
-    "fullMod": "https://drive.google.com/file/d/1Q94bfUsEinsdZ_pMZBGlnenlUe7kf2fz/view",
-    "fullModRiivolution": "https://drive.google.com/file/d/1Q94bfUsEinsdZ_pMZBGlnenlUe7kf2fz/view"
-  },
-  {
-    "name": "Newer Super Luigi Wii: Dark Moon",
-    "version": "v1.0",
-    "description": "A Halloween-themed hack with 8 new levels, Luigi & Wario as playable characters, new World Map.",
+    "description": "An alternate version of the Dark Moon hack with reversed elements.",
     "author": "Newer Team",
-    "stage": "https://drive.google.com/file/d/1P2BYlU8w7ACw56eHmdfMvPRzFNO5JL7s/view",
-    "texture": "https://drive.google.com/file/d/1P2BYlU8w7ACw56eHmdfMvPRzFNO5JL7s/view",
-    "patch": "https://drive.google.com/file/d/1P2BYlU8w7ACw56eHmdfMvPRzFNO5JL7s/view",
-    "fullMod": "https://drive.google.com/file/d/1P2BYlU8w7ACw56eHmdfMvPRzFNO5JL7s/view",
-    "fullModRiivolution": "https://drive.google.com/file/d/1P2BYlU8w7ACw56eHmdfMvPRzFNO5JL7s/view"
-  },
-  {
-    "name": "Koopa Country",
-    "version": "v1.0",
-    "description": "A mod featuring Koopa-themed levels and changes.",
-    "author": "Unknown",
-    "stage": "http://www.mediafire.com/file/i370t15wo529r5p/Koopa_country.rar/file",
-    "texture": "http://www.mediafire.com/file/i370t15wo529r5p/Koopa_country.rar/file",
-    "patch": "http://www.mediafire.com/file/i370t15wo529r5p/Koopa_country.rar/file",
-    "fullMod": "http://www.mediafire.com/file/i370t15wo529r5p/Koopa_country.rar/file",
-    "fullModRiivolution": "http://www.mediafire.com/file/i370t15wo529r5p/Koopa_country.rar/file"
-  },
-  {
-    "name": "Frozen",
-    "version": "v1.0",
-    "description": "A winter-themed mod with icy levels and challenges.",
-    "author": "Unknown",
-    "stage": "https://drive.google.com/file/d/1VVHx3ik9LNnypYxRBqgGBPUYl-pSS85l/view?usp=sharing",
-    "texture": "https://drive.google.com/file/d/1VVHx3ik9LNnypYxRBqgGBPUYl-pSS85l/view?usp=sharing",
-    "patch": "https://drive.google.com/file/d/1VVHx3ik9LNnypYxRBqgGBPUYl-pSS85l/view?usp=sharing",
-    "fullMod": "https://drive.google.com/file/d/1VVHx3ik9LNnypYxRBqgGBPUYl-pSS85l/view?usp=sharing",
-    "fullModRiivolution": "https://drive.google.com/file/d/1VVHx3ik9LNnypYxRBqgGBPUYl-pSS85l/view?usp=sharing"
-  },
-  {
-    "name": "Mario and the Mysterious Meteorite",
-    "version": "v3.0.1",
-    "description": "An adventure mod where Mario investigates a mysterious meteorite.",
-    "author": "Unknown",
-    "stage": "https://www.mediafire.com/file/imanwse1kxe5f7c/Mario+and+the+Mysterious+Meteorite+%5BV3.0.1%5D.zip/file",
-    "texture": "https://www.mediafire.com/file/imanwse1kxe5f7c/Mario+and+the+Mysterious+Meteorite+%5BV3.0.1%5D.zip/file",
-    "patch": "https://www.mediafire.com/file/imanwse1kxe5f7c/Mario+and+the+Mysterious+Meteorite+%5BV3.0.1%5D.zip/file",
-    "fullMod": "https://www.mediafire.com/file/imanwse1kxe5f7c/Mario+and+the+Mysterious+Meteorite+%5BV3.0.1%5D.zip/file",
-    "fullModRiivolution": "https://www.mediafire.com/file/imanwse1kxe5f7c/Mario+and+the+Mysterious+Meteorite+%5BV3.0.1%5D.zip/file"
-  },
-  {
-    "name": "New Super Mario Bros. Wii 4",
-    "version": "v3.3",
-    "description": "A custom mod with new levels and gameplay elements.",
-    "author": "Orange-Yoshi",
-    "stage": "http://www.mediafire.com/file/6zyskf5y9cvj8sf/New_Super_Mario_Bros._Wii_4_made_by_Orange-Yoshi3.3.zip/file",
-    "texture": "http://www.mediafire.com/file/6zyskf5y9cvj8sf/New_Super_Mario_Bros._Wii_4_made_by_Orange-Yoshi3.3.zip/file",
-    "patch": "http://www.mediafire.com/file/6zyskf5y9cvj8sf/New_Super_Mario_Bros._Wii_4_made_by_Orange-Yoshi3.3.zip/file",
-    "fullMod": "http://www.mediafire.com/file/6zyskf5y9cvj8sf/New_Super_Mario_Bros._Wii_4_made_by_Orange-Yoshi3.3.zip/file",
-    "fullModRiivolution": "http://www.mediafire.com/file/6zyskf5y9cvj8sf/New_Super_Mario_Bros._Wii_4_made_by_Orange-Yoshi3.3.zip/file"
-  },
-  {
-    "name": "RetroSMBW",
-    "version": "v1.0",
-    "description": "A retro-styled mod reviving classic Mario elements.",
-    "author": "Unknown",
-    "stage": "http://www.mediafire.com/file/f6kn5nrq4ib8ev1/RetroSMBW.zip/file",
-    "texture": "http://www.mediafire.com/file/f6kn5nrq4ib8ev1/RetroSMBW.zip/file",
-    "patch": "http://www.mediafire.com/file/f6kn5nrq4ib8ev1/RetroSMBW.zip/file",
-    "fullMod": "http://www.mediafire.com/file/f6kn5nrq4ib8ev1/RetroSMBW.zip/file",
-    "fullModRiivolution": "http://www.mediafire.com/file/f6kn5nrq4ib8ev1/RetroSMBW.zip/file"
+    "stage": "https://mega.nz/file/BG9WCRxZ",
+    "texture": "https://mega.nz/file/BG9WCRxZ",
+    "patch": "https://mega.nz/file/BG9WCRxZ",
+    "fullMod": "https://mega.nz/file/BG9WCRxZ",
+    "fullModRiivolution": "https://mega.nz/file/BG9WCRxZ"
   },
   {
     "name": "Devil Mario Winter Special",
@@ -187,17 +231,6 @@
     "fullModRiivolution": "http://riivolution.nanolx.org/MSMBWii.zip"
   },
   {
-    "name": "New Super Mario Bros Wii Other World",
-    "version": "v1.0",
-    "description": "An alternate world mod with new environments and levels.",
-    "author": "Unknown",
-    "stage": "https://www.mediafire.com/file/7wa607hp7trodp7/New_Super_Mario_Bros_Wii_Other_World.rar/file",
-    "texture": "https://www.mediafire.com/file/7wa607hp7trodp7/New_Super_Mario_Bros_Wii_Other_World.rar/file",
-    "patch": "https://www.mediafire.com/file/7wa607hp7trodp7/New_Super_Mario_Bros_Wii_Other_World.rar/file",
-    "fullMod": "https://www.mediafire.com/file/7wa607hp7trodp7/New_Super_Mario_Bros_Wii_Other_World.rar/file",
-    "fullModRiivolution": "https://www.mediafire.com/file/7wa607hp7trodp7/New_Super_Mario_Bros_Wii_Other_World.rar/file"
-  },
-  {
     "name": "New Super Spike Wii",
     "version": "v1.0",
     "description": "A mod featuring Spike enemies and spiked challenges.",
@@ -207,27 +240,5 @@
     "patch": "https://www.dropbox.com/s/jbmx8ph2hirs3lw/New%20Super%20Spike%20Wii%20Release.zip?dl=0",
     "fullMod": "https://www.dropbox.com/s/jbmx8ph2hirs3lw/New%20Super%20Spike%20Wii%20Release.zip?dl=0",
     "fullModRiivolution": "https://www.dropbox.com/s/jbmx8ph2hirs3lw/New%20Super%20Spike%20Wii%20Release.zip?dl=0"
-  },
-  {
-    "name": "NewerSMB7 Demo",
-    "version": "v1.0",
-    "description": "A demo version of a Newer-themed mod with sample levels.",
-    "author": "Unknown",
-    "stage": "https://www.mediafire.com/file/trtapl6u80h98dl/NewerSMB7_Demo.zip/file",
-    "texture": "https://www.mediafire.com/file/trtapl6u80h98dl/NewerSMB7_Demo.zip/file",
-    "patch": "https://www.mediafire.com/file/trtapl6u80h98dl/NewerSMB7_Demo.zip/file",
-    "fullMod": "https://www.mediafire.com/file/trtapl6u80h98dl/NewerSMB7_Demo.zip/file",
-    "fullModRiivolution": "https://www.mediafire.com/file/trtapl6u80h98dl/NewerSMB7_Demo.zip/file"
-  },
-  {
-    "name": "Newer Super Luigi Wii: Dark Moon Reverse",
-    "version": "v1.0",
-    "description": "An alternate version of the Dark Moon hack with reversed elements.",
-    "author": "Newer Team",
-    "stage": "https://mega.nz/file/BG9WCRxZ",
-    "texture": "https://mega.nz/file/BG9WCRxZ",
-    "patch": "https://mega.nz/file/BG9WCRxZ",
-    "fullMod": "https://mega.nz/file/BG9WCRxZ",
-    "fullModRiivolution": "https://mega.nz/file/BG9WCRxZ"
   }
 ]
