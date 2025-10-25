@@ -88,7 +88,7 @@ import globals_
 
 from libs import lh, lib_versions, lz77
 from ui import GetIcon, SetAppStyle, ListWidgetWithToolTipSignal, LoadNumberFont, LoadTheme, IconsOnlyTabBar
-from misc import LoadActionsLists, LoadSpriteData, LoadTilesetInfo, FilesAreMissing, module_path, IsNSMBLevel, ChooseLevelNameDialog, LoadLevelNames, PreferencesDialog, LoadSpriteCategories, ZoomWidget, ZoomStatusWidget, RecentFilesMenu, SetGamePaths, areValidGamePaths, LoadZoneThemes
+from misc import LoadActionsLists, LoadSpriteData, LoadTilesetInfo, FilesAreMissing, module_path, IsNSMBLevel, ChooseLevelNameDialog, LoadLevelNames, PreferencesDialog, LoadSpriteCategories, ZoomWidget, ZoomStatusWidget, RecentFilesMenu, SetGamePaths, areValidGamePaths, LoadZoneThemes, validateFolderForPatch
 from misc2 import LevelScene, LevelViewWidget
 from dirty import setting, setSetting, SetDirty
 from gamedef import GameDefMenu, LoadGameDef
@@ -2489,6 +2489,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 return False
 
             stage_path = str(stage_path)
+            
+            # Validate folder type (just shows warning, doesn't change anything)
+            # User can manually switch patches via the Patch Manager if needed
+            validated_path, validated_patch_name = validateFolderForPatch(
+                stage_path, True, globals_.gamedef.name, None
+            )
+            
             texture_path = os.path.join(stage_path, "Texture")
 
             while not os.path.isdir(texture_path):
@@ -2501,6 +2508,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
                 if texture_path == "":
                     return False
+                
+                # Validate texture folder type as well
+                validated_texture_path, validated_patch_name = validateFolderForPatch(
+                    texture_path, False, globals_.gamedef.name, None
+                )
 
             if (not areValidGamePaths(stage_path, texture_path)) and (not globals_.gamedef.custom):  # custom gamedefs can use incomplete folders
                 QtWidgets.QMessageBox.information(
@@ -4680,7 +4692,11 @@ def main():
     if sys.platform == 'darwin':
         dialog_options |= QtWidgets.QFileDialog.Option.DontUseNativeDialog
     
+    # Track if we did initial setup
+    did_initial_setup = False
+    
     while not areValidGamePaths():
+        did_initial_setup = True
         stage_path = QtWidgets.QFileDialog.getExistingDirectory(
             None,
             globals_.trans.string('ChangeGamePath', 0, '[game]', globals_.gamedef.name),
@@ -4692,6 +4708,13 @@ def main():
             sys.exit(0)
 
         stage_path = str(stage_path)
+        
+        # Validate folder type (just shows warning, doesn't change anything)
+        # User can manually switch patches via the Patch Manager if needed
+        validated_path, validated_patch_name = validateFolderForPatch(
+            stage_path, True, globals_.gamedef.name, None
+        )
+        
         texture_path = os.path.join(stage_path, "Texture")
 
         while not os.path.isdir(texture_path):
@@ -4704,6 +4727,11 @@ def main():
 
             if texture_path == "":
                 sys.exit(0)
+            
+            # Validate texture folder type as well
+            validated_texture_path, validated_patch_name = validateFolderForPatch(
+                texture_path, False, globals_.gamedef.name, None
+            )
 
         SetGamePaths(stage_path, texture_path)
         if areValidGamePaths():
@@ -4713,6 +4741,12 @@ def main():
             None, globals_.trans.string('ChangeGamePath', 1),
             globals_.trans.string('ChangeGamePath', 3)
         )
+    
+    # Open Patch Manager only if we just did initial setup
+    if did_initial_setup:
+        from patch_manager_dialog import PatchManagerDialog
+        patch_dialog = PatchManagerDialog()
+        patch_dialog.exec()
 
     # Check to see if we have anything saved
     autofile = setting('AutoSaveFilePath')

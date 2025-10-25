@@ -357,8 +357,15 @@ class ReggieGameDefinition:
             addpath = self.custom_patch_path
             path = os.path.join(addpath, "main.xml")
         else:
-            addpath = os.path.join("reggiedata", "patches", self.gamepath)
-            path = os.path.join(addpath, "main.xml")
+            # Check settings for custom path
+            custom_setting_path = setting('PatchPath_' + self.gamepath)
+            if custom_setting_path and os.path.isfile(os.path.join(custom_setting_path, "main.xml")):
+                addpath = custom_setting_path
+                self.custom_patch_path = custom_setting_path
+                path = os.path.join(addpath, "main.xml")
+            else:
+                addpath = os.path.join("reggiedata", "patches", self.gamepath)
+                path = os.path.join(addpath, "main.xml")
             
         tree = etree.parse(path)
         root = tree.getroot()
@@ -398,6 +405,7 @@ class ReggieGameDefinition:
 
         # Load sprites.py if provided
         if 'sprites' in self.files:
+            print(f"[DEBUG] Loading sprites.py from: {self.files['sprites'].path}")
             with open(self.files['sprites'].path, 'r', encoding='utf-8') as f:
                 filedata = f.read()
             
@@ -416,6 +424,9 @@ class ReggieGameDefinition:
             new_module = importlib.util.module_from_spec(spec)
 
             exec(filedata, new_module.__dict__)
+            
+            # Assign the loaded module to self.sprites
+            self.sprites = new_module
 
     def LoadPlugins(self, addpath):
         """

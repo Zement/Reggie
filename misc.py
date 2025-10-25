@@ -135,6 +135,84 @@ def areValidGamePaths(stage_check='ug', texture_check='ug'):
     return False
 
 
+def isNewerStageFolder(path):
+    """
+    Check if the Stage folder is from Newer Super Mario Bros. Wii
+    Returns True if it contains 10-01.arc or 10-01.arc.LH
+    """
+    return (os.path.isfile(os.path.join(path, '10-01.arc')) or 
+            os.path.isfile(os.path.join(path, '10-01.arc.LH')) or 
+            os.path.isfile(os.path.join(path, '10-01.arc.LZ')))
+
+
+def isNewerTextureFolder(path):
+    """
+    Check if the Texture folder is from Newer Super Mario Bros. Wii
+    Returns True if it contains Cloudscape.arc or Cloudscape.arc.LH
+    """
+    return (os.path.isfile(os.path.join(path, 'Cloudscape.arc')) or 
+            os.path.isfile(os.path.join(path, 'Cloudscape.arc.LH')) or 
+            os.path.isfile(os.path.join(path, 'Cloudscape.arc.LZ')))
+
+
+def validateFolderForPatch(folder_path, is_stage, patch_name, parent_widget=None):
+    """
+    Validates if a folder matches the expected patch type (base game vs Newer).
+    Returns a tuple: (validated_path, validated_patch_name)
+    
+    Args:
+        folder_path: The selected folder path
+        is_stage: True if this is a Stage folder, False if Texture folder
+        patch_name: The name of the patch being configured
+        parent_widget: Parent widget for message boxes
+    
+    Returns:
+        Tuple of (folder_path, patch_name) - may be modified if user chooses to switch patches
+    """
+    from PyQt6 import QtWidgets
+    
+    # Only validate for base game and Newer Super Mario Bros. Wii
+    if patch_name not in ['New Super Mario Bros. Wii', 'Newer Super Mario Bros. Wii']:
+        return (folder_path, patch_name)
+    
+    # Check if this is a Newer folder
+    if is_stage:
+        is_newer = isNewerStageFolder(folder_path)
+    else:
+        is_newer = isNewerTextureFolder(folder_path)
+    
+    is_base_expected = (patch_name == 'New Super Mario Bros. Wii')
+    
+    # If mismatch, ask user
+    if is_newer and is_base_expected:
+        # User selected Newer folder for base game
+        result = QtWidgets.QMessageBox.question(
+            parent_widget,
+            'Wrong Folder Type',
+            f'The selected folder appears to be from Newer Super Mario Bros. Wii, not the base game.\n\n'
+            f'Do you want to set this folder for Newer Super Mario Bros. Wii instead?',
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
+        )
+        
+        if result == QtWidgets.QMessageBox.StandardButton.Yes:
+            return (folder_path, 'Newer Super Mario Bros. Wii')
+    
+    elif not is_newer and not is_base_expected:
+        # User selected base game folder for Newer
+        result = QtWidgets.QMessageBox.question(
+            parent_widget,
+            'Wrong Folder Type',
+            f'The selected folder appears to be from the base game (New Super Mario Bros. Wii), not Newer Super Mario Bros. Wii.\n\n'
+            f'Do you want to set this folder for the base game instead?',
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
+        )
+        
+        if result == QtWidgets.QMessageBox.StandardButton.Yes:
+            return (folder_path, 'New Super Mario Bros. Wii')
+    
+    return (folder_path, patch_name)
+
+
 def getResourcePaths(res_name):
     """
     Returns an iterable containing the paths that have the specified resource.

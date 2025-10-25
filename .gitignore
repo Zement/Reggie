@@ -111,3 +111,7 @@ settings.ini.bak
 git-workflow-standards.md
 BRANCH_MERGE_ANALYSIS.md
 reggiedata/patches/*
+Reggie-Next.code-workspace
+
+# Assets folder contents (keep folder structure only)
+assets/*
