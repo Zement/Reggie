@@ -1586,7 +1586,7 @@ def LoadActionsLists():
         (globals_.trans.string('MenuItems', 82), False, 'deletearea'),
         (globals_.trans.string('MenuItems', 84), False, 'reloadgfx'),
         (globals_.trans.string('MenuItems', 138), False, 'reloaddata'),
-        ('Game Patches', True, 'gamepatches'),
+        (globals_.trans.string('MenuItems', 142), True, 'gamepatches'),
     )
     globals_.HelpActions = (
         (globals_.trans.string('MenuItems', 86), False, 'infobox'),

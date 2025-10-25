@@ -793,15 +793,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
         hmenu = menubar.addMenu(globals_.trans.string('Menubar', 4))
         self.SetupHelpMenu(hmenu)
         
-        # After setting up the menu bar, adjust its size policy
-        menubar.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, menubar.sizePolicy().verticalPolicy())
-
         # create a toolbar
         self.toolbar = self.addToolBar(globals_.trans.string('Menubar', 5))
         self.toolbar.setObjectName('MainToolbar')
         
-        # Add the menubar to the toolbar to allow docking behind it
-        self.toolbar.addWidget(menubar)
+        # On Windows, add menubar to toolbar to allow docking behind it
+        # On macOS, the menubar is integrated into the system menu bar
+        if sys.platform == 'win32':
+            menubar.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, menubar.sizePolicy().verticalPolicy())
+            self.toolbar.addWidget(menubar)
 
         # Add buttons to the toolbar
         self.addToolbarButtons()

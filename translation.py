@@ -563,6 +563,7 @@ class ReggieTranslation:
                 139: 'Reload the spritedata file, including any changes made since the level was loaded',
                 140: 'Camera Profiles...',
                 141: 'Edit event-activated camera settings',
+                142: 'Game Patches',
             },
             'Objects': {
                 0: '[b]Tileset [tileset], object [obj]:[/b][br][width]x[height] on layer [layer]',
