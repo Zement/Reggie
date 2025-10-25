@@ -1,14 +1,11 @@
 /* ####################### */
  *{
     outline: none;
-     font-size: 16px;
+     /* font-size: 16px; */
      font-family: "Segoe UI";
 }
-/* Lock size of sidebar */
- QDockWidget {
-     min-width: 550px;
-     max-width: 550px;
-}
+
+
 /* Fix for main window, prevents window height >100% */
  QMainWindow {
     min-height: 1px;
