@@ -17,7 +17,8 @@ class CatalogManager:
     """
     
     # Catalog URLs
-    REMOTE_CATALOG_URL = "https://github.com/Zement/Reggie/blob/master/assets/catalog/patchcatalog.json"
+    # Note: Must use raw.githubusercontent.com for direct file download, not github.com/blob
+    REMOTE_CATALOG_URL = "https://raw.githubusercontent.com/Zement/Reggie/master/assets/catalog/patchcatalog.json"
     LOCAL_CATALOG_PATH = os.path.join("assets", "catalog", "patchcatalog.json")
     USER_CATALOG_PATH = os.path.join("assets", "catalog", "patchcatalog_user.json")
     
@@ -41,21 +42,28 @@ class CatalogManager:
             True if successful, False otherwise
         """
         try:
+            print(f"[Catalog] Fetching from: {self.REMOTE_CATALOG_URL}")
+            
             # Fetch from remote
             with urllib.request.urlopen(self.REMOTE_CATALOG_URL, timeout=10) as response:
                 catalog_data = response.read()
+                print(f"[Catalog] Downloaded {len(catalog_data)} bytes")
             
             # Validate JSON
             catalog_json = json.loads(catalog_data)
+            print(f"[Catalog] Parsed JSON with {len(catalog_json)} entries")
             
             # Save to local cache
             with open(self.LOCAL_CATALOG_PATH, 'w', encoding='utf-8') as f:
                 json.dump(catalog_json, f, indent=2)
+            print(f"[Catalog] Saved to: {self.LOCAL_CATALOG_PATH}")
             
             return True
             
         except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError) as e:
-            print(f"Failed to fetch remote catalog: {e}")
+            print(f"[Catalog] Failed to fetch remote catalog: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def load_catalog(self, force_remote: bool = False) -> bool:
