@@ -26,6 +26,13 @@ class PatchManagerDialog(QtWidgets.QDialog):
         self.setMinimumWidth(1200)
         self.setMinimumHeight(700)
         
+        # Enable native window controls (minimize, maximize, close)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMinMaxButtonsHint)
+        
+        # Clean up orphaned patch paths before loading patches
+        from gamedef import cleanupOrphanedPatchPaths
+        cleanupOrphanedPatchPaths()
+        
         # Initialize managers
         self.catalog_manager = CatalogManager()
         self.download_manager = DownloadManager()
@@ -51,10 +58,10 @@ class PatchManagerDialog(QtWidgets.QDialog):
         
         # Info label
         infoLabel = QtWidgets.QLabel(
-            'Manage folder paths and plugins for each game patch. Select a patch to view/edit its plugins.'
+            'Manage folder paths and plugins for each game patch. Select a patch to view/edit its plugins.<br><font color="orange"><b>Warning:</b> Do not use the catalog feature yet, only Newer, NSMBWer and NewerGem Downloads currently supported.</font>'
         )
         infoLabel.setWordWrap(True)
-        infoLabel.setFixedHeight(30)
+        infoLabel.setFixedHeight(40)
         mainLayout.addWidget(infoLabel)
         
         # Create splitter for table and plugin editor
