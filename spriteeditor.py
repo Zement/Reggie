@@ -2498,6 +2498,32 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
 
+    def keyPressEvent(self, event):
+        """
+        Handles key press events for the sprite editor widget.
+        On Mac, the Delete key maps to Key_Backspace, and we need to ensure
+        it can delete sprites when the focus is not on a text input field.
+        """
+        from PyQt6.QtCore import Qt
+        
+        # Check if Delete or Backspace was pressed
+        if event.key() == Qt.Key.Key_Delete or event.key() == Qt.Key.Key_Backspace:
+            # Get the currently focused widget
+            focused = QtWidgets.QApplication.focusWidget()
+            
+            # Check if the focused widget is a text input field (QLineEdit, QTextEdit, etc.)
+            # If it is, let the widget handle the key event normally (for text editing)
+            if isinstance(focused, (QtWidgets.QLineEdit, QtWidgets.QTextEdit, QtWidgets.QPlainTextEdit)):
+                # Let the text widget handle the key event
+                QtWidgets.QWidget.keyPressEvent(self, event)
+            else:
+                # Not a text input field, so ignore the event to let it propagate
+                # to the main window, which will delete the selected sprite
+                event.ignore()
+        else:
+            # For all other keys, use default behavior
+            QtWidgets.QWidget.keyPressEvent(self, event)
+
 
 class ExternalSpriteOptionDialog(QtWidgets.QDialog):
     """

@@ -354,6 +354,32 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         SetDirty()
         self.ent.cpdirection = i
 
+    def keyPressEvent(self, event):
+        """
+        Handles key press events for the entrance editor widget.
+        On Mac, the Delete key maps to Key_Backspace, and we need to ensure
+        it can delete entrances when the focus is not on a text input field.
+        """
+        from PyQt6.QtCore import Qt
+        
+        # Check if Delete or Backspace was pressed
+        if event.key() == Qt.Key.Key_Delete or event.key() == Qt.Key.Key_Backspace:
+            # Get the currently focused widget
+            focused = QtWidgets.QApplication.focusWidget()
+            
+            # Check if the focused widget is a text input field (QLineEdit, QTextEdit, etc.)
+            # If it is, let the widget handle the key event normally (for text editing)
+            if isinstance(focused, (QtWidgets.QLineEdit, QtWidgets.QTextEdit, QtWidgets.QPlainTextEdit)):
+                # Let the text widget handle the key event
+                QtWidgets.QWidget.keyPressEvent(self, event)
+            else:
+                # Not a text input field, so ignore the event to let it propagate
+                # to the main window, which will delete the selected entrance
+                event.ignore()
+        else:
+            # For all other keys, use default behavior
+            QtWidgets.QWidget.keyPressEvent(self, event)
+
 
 class PathNodeEditorWidget(QtWidgets.QWidget):
     """
@@ -516,6 +542,32 @@ class PathNodeEditorWidget(QtWidgets.QWidget):
 
         self.path_node.path.move_node(self.path_node, i)
         SetDirty()
+
+    def keyPressEvent(self, event):
+        """
+        Handles key press events for the path node editor widget.
+        On Mac, the Delete key maps to Key_Backspace, and we need to ensure
+        it can delete path nodes when the focus is not on a text input field.
+        """
+        from PyQt6.QtCore import Qt
+        
+        # Check if Delete or Backspace was pressed
+        if event.key() == Qt.Key.Key_Delete or event.key() == Qt.Key.Key_Backspace:
+            # Get the currently focused widget
+            focused = QtWidgets.QApplication.focusWidget()
+            
+            # Check if the focused widget is a text input field (QLineEdit, QTextEdit, etc.)
+            # If it is, let the widget handle the key event normally (for text editing)
+            if isinstance(focused, (QtWidgets.QLineEdit, QtWidgets.QTextEdit, QtWidgets.QPlainTextEdit)):
+                # Let the text widget handle the key event
+                QtWidgets.QWidget.keyPressEvent(self, event)
+            else:
+                # Not a text input field, so ignore the event to let it propagate
+                # to the main window, which will delete the selected path node
+                event.ignore()
+        else:
+            # For all other keys, use default behavior
+            QtWidgets.QWidget.keyPressEvent(self, event)
 
 
 class LocationEditorWidget(QtWidgets.QWidget):
@@ -711,4 +763,30 @@ class LocationEditorWidget(QtWidgets.QWidget):
         loc.UpdateRects()
         loc.update()
         self.setLocation(loc)  # updates the fields
+
+    def keyPressEvent(self, event):
+        """
+        Handles key press events for the location editor widget.
+        On Mac, the Delete key maps to Key_Backspace, and we need to ensure
+        it can delete locations when the focus is not on a text input field.
+        """
+        from PyQt6.QtCore import Qt
+        
+        # Check if Delete or Backspace was pressed
+        if event.key() == Qt.Key.Key_Delete or event.key() == Qt.Key.Key_Backspace:
+            # Get the currently focused widget
+            focused = QtWidgets.QApplication.focusWidget()
+            
+            # Check if the focused widget is a text input field (QLineEdit, QTextEdit, etc.)
+            # If it is, let the widget handle the key event normally (for text editing)
+            if isinstance(focused, (QtWidgets.QLineEdit, QtWidgets.QTextEdit, QtWidgets.QPlainTextEdit)):
+                # Let the text widget handle the key event
+                QtWidgets.QWidget.keyPressEvent(self, event)
+            else:
+                # Not a text input field, so ignore the event to let it propagate
+                # to the main window, which will delete the selected location
+                event.ignore()
+        else:
+            # For all other keys, use default behavior
+            QtWidgets.QWidget.keyPressEvent(self, event)
 
