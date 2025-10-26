@@ -2517,9 +2517,13 @@ class SpriteEditorWidget(QtWidgets.QWidget):
                 # Let the text widget handle the key event
                 QtWidgets.QWidget.keyPressEvent(self, event)
             else:
-                # Not a text input field, so ignore the event to let it propagate
-                # to the main window, which will delete the selected sprite
-                event.ignore()
+                # Not a text input field, so forward the event to the main window
+                # to delete the selected sprite
+                main_window = globals_.mainWindow
+                if main_window:
+                    main_window.keyPressEvent(event)
+                else:
+                    event.ignore()
         else:
             # For all other keys, use default behavior
             QtWidgets.QWidget.keyPressEvent(self, event)
