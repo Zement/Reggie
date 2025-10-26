@@ -1617,9 +1617,11 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.infoLabel = QtWidgets.QLabel()
         self.generalTab = self.getGeneralTab()
         self.toolbarTab = self.getToolbarTab()
+        self.interfaceTab = self.getInterfaceTab()
         self.themesTab = self.getThemesTab(QtWidgets.QWidget)()
         self.tabWidget.addTab(self.generalTab, globals_.trans.string('PrefsDlg', 1))
         self.tabWidget.addTab(self.toolbarTab, globals_.trans.string('PrefsDlg', 2))
+        self.tabWidget.addTab(self.interfaceTab, globals_.trans.string('PrefsDlg', 42))
         self.tabWidget.addTab(self.themesTab, globals_.trans.string('PrefsDlg', 3))
 
         # Create the buttonbox
@@ -1864,6 +1866,67 @@ class PreferencesDialog(QtWidgets.QDialog):
                         box.setChecked(default[1])
 
         return ToolbarTab()
+
+    def getInterfaceTab(self):
+        """
+        Returns the Interface Tab
+        """
+
+        class InterfaceTab(QtWidgets.QWidget):
+            """
+            Interface Tab
+            """
+            info = 'Configure interface and window behavior settings.'  # TODO: Add to translations
+
+            def __init__(self):
+                """
+                Initializes the Interface Tab
+                """
+                QtWidgets.QWidget.__init__(self)
+
+                # Create toolbar docking mode radio buttons
+                self.toolbarDockingLabel = QtWidgets.QLabel('<b>Toolbar Layout:</b>')
+                
+                self.toolbarCombinedRadio = QtWidgets.QRadioButton('1-Line Combined Bar')
+                self.toolbarCombinedRadio.setToolTip('Combine menu and toolbar into a single line (Windows only)')
+                
+                self.toolbarSeparateRadio = QtWidgets.QRadioButton('2-Line Menu and Toolbar')
+                self.toolbarSeparateRadio.setToolTip('Separate menu bar and toolbar on two lines (recommended for Mac/Linux)')
+
+                # Create a button group for the radio buttons
+                self.toolbarDockingGroup = QtWidgets.QButtonGroup()
+                self.toolbarDockingGroup.addButton(self.toolbarCombinedRadio, 0)
+                self.toolbarDockingGroup.addButton(self.toolbarSeparateRadio, 1)
+
+                # Create the main layout
+                L = QtWidgets.QVBoxLayout()
+                L.addWidget(self.toolbarDockingLabel)
+                L.addWidget(self.toolbarCombinedRadio)
+                L.addWidget(self.toolbarSeparateRadio)
+                L.addStretch(1)
+                self.setLayout(L)
+
+                # Set the current values
+                self.Reset()
+
+            def Reset(self):
+                """
+                Read the preferences and set the radio buttons
+                """
+                # Get the current toolbar docking setting
+                # Default to combined (False) on Windows, separate (True) on other platforms
+                import sys
+                default_separate = sys.platform != 'win32'
+                toolbar_separate = setting('ToolbarSeparate')
+                if toolbar_separate is None:
+                    toolbar_separate = default_separate
+                
+                if toolbar_separate:
+                    self.toolbarSeparateRadio.setChecked(True)
+                else:
+                    self.toolbarCombinedRadio.setChecked(True)
+
+        return InterfaceTab()
 
     @staticmethod
     def getThemesTab(parent):

@@ -425,6 +425,7 @@ class ReggieTranslation:
                 3: '&Settings',
                 4: '&Help',
                 5: 'Editor Toolbar',
+                6: 'Patch Toolbar',
             },
             'MenuItems': {
                 0: 'New Level',
@@ -675,6 +676,7 @@ class ReggieTranslation:
                 39: 'Insert new path node after selected node',
                 40: 'Themes',
                 41: 'Theme:',
+                42: 'Interface',
             },
             'ScrShtDlg': {
                 0: 'Choose a Screenshot source',

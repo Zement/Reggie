@@ -185,6 +185,11 @@ class Level_NSMBW(AbstractLevel):
         # Add new area
         new_area = Area(len(self.areas) + 1)
         new_area.set_data(course_new, L0_new, L1_new, L2_new)
+        
+        # If creating a completely new area (all None), load defaults
+        if course_new is None and L0_new is None and L1_new is None and L2_new is None:
+            new_area.load_defaults()
+        
         self.areas.append(new_area)
 
     def changeArea(self, number):
@@ -344,6 +349,45 @@ class Area:
         # already initialised self.blocks)
         if self.course is not None:
             self.LoadBlocks(self.course)
+        else:
+            # If course is None and blocks don't exist (e.g., after unload()),
+            # reinitialize them with default values
+            if not hasattr(self, 'blocks'):
+                self.blocks = [b''] * 14
+                self.blocks[0] = b'Pa0_jyotyu' + bytes(128 - len('Pa0_jyotyu'))
+                self.blocks[1] = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x2c\x00\x00\x00\x00\x00\x00\x00\x00'
+                self.blocks[3] = bytes(8)
+                self.blocks[7] = b'\xff\xff\xff\xff'
+            
+            # Also reinitialize other attributes that may have been deleted by unload()
+            if not hasattr(self, 'spriteSettings'):
+                self.spriteSettings = []
+            if not hasattr(self, 'entrances'):
+                self.entrances = []
+            if not hasattr(self, 'sprites'):
+                self.sprites = []
+            if not hasattr(self, 'bounding'):
+                self.bounding = []
+            if not hasattr(self, 'bgA'):
+                self.bgA = []
+            if not hasattr(self, 'bgB'):
+                self.bgB = []
+            if not hasattr(self, 'zones'):
+                self.zones = []
+            if not hasattr(self, 'locations'):
+                self.locations = []
+            if not hasattr(self, 'camprofiles'):
+                self.camprofiles = []
+            if not hasattr(self, 'paths'):
+                self.paths = []
+            if not hasattr(self, 'comments'):
+                self.comments = []
+            if not hasattr(self, 'loaded_sprites'):
+                self.loaded_sprites = set()
+            if not hasattr(self, 'force_loaded_sprites'):
+                self.force_loaded_sprites = set()
+            if not hasattr(self, 'sprite_idtypes'):
+                self.sprite_idtypes = {}
 
         # Load the editor metadata
         if self.course is not None and self.block1pos[0] != 0x70:

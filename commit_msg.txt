@@ -1,0 +1,17 @@
+fix(core): resolve multiple UI and data management issues
+
+- Add native window controls to Patch Manager dialog
+- Fix toolbar docking preferences not applying on startup
+- Fix area creation crash in new unsaved levels
+- Fix sprite editor tooltip AttributeErrors for missing notes
+- Implement automatic cleanup of orphaned patch paths from settings
+- Handle URL-encoded patch names in settings cleanup
+- Remove @Invalid() entries from settings automatically
+- Clean up orphaned LastLevel_ entries
+
+The orphaned path cleanup runs at boot and when Patch Manager opens,
+preventing errors from manually deleted patches. Supports URL-encoded
+names like NSMBWer%2B and removes all related settings (PatchPath_,
+StageGamePath_, TextureGamePath_, LastLevel_).
+
+Note: NewerSMBW patch files removed from repository (patches folder now empty)

@@ -771,6 +771,68 @@ class ReggieGameDefinition:
         return images
 
 
+def cleanupOrphanedPatchPaths():
+    """
+    Remove PatchPath_ and other game path settings from settings.ini that point to non-existent patches.
+    This prevents errors when patches are deleted manually outside Reggie.
+    Also handles URL-encoded patch names (e.g., NSMBWer%2B -> NSMBWer+) and @Invalid() entries.
+    """
+    from dirty import setSetting
+    from urllib.parse import unquote
+    
+    patches_dir = os.path.join('reggiedata', 'patches')
+    orphaned_keys = []
+    
+    # Prefixes to check for patch-related settings
+    path_prefixes = ['PatchPath_', 'StageGamePath_', 'TextureGamePath_', 'LastLevel_']
+    
+    # Check all patch-related settings
+    all_keys = globals_.settings.allKeys()
+    for key in all_keys:
+        # Handle both grouped (GamePaths/PatchPath_X) and flat (PatchPath_X) keys
+        key_name = key.split('/')[-1] if '/' in key else key
+        
+        # Check if this is a patch-related setting
+        for prefix in path_prefixes:
+            if key_name.startswith(prefix):
+                # Extract patch name (may be URL-encoded)
+                patch_name_encoded = key_name[len(prefix):]
+                patch_name = unquote(patch_name_encoded)  # Decode URL encoding
+                patch_path = setting(key_name)  # Use setting() which handles groups
+                
+                # Check for @Invalid() entries or empty settings
+                if not patch_path or str(patch_path) == '@Invalid()':
+                    orphaned_keys.append((key_name, patch_path))
+                elif patch_path:
+                    # Normalize the path to handle different slash conventions
+                    patch_path = os.path.normpath(str(patch_path))
+                    
+                    # For LastLevel_, just check if the file exists
+                    if prefix == 'LastLevel_':
+                        if not os.path.isfile(patch_path):
+                            orphaned_keys.append((key_name, patch_path))
+                    # For path settings, check if the directory exists
+                    elif not os.path.exists(patch_path):
+                        # Path doesn't exist - mark for removal
+                        orphaned_keys.append((key_name, patch_path))
+                    elif prefix == 'PatchPath_':
+                        # For PatchPath_, also check if main.xml exists
+                        if not os.path.isfile(os.path.join(patch_path, 'main.xml')):
+                            # Also check if it exists in the patches directory (redundant setting)
+                            patches_dir_path = os.path.join(patches_dir, patch_name)
+                            if not os.path.isfile(os.path.join(patches_dir_path, 'main.xml')):
+                                # Orphaned path - mark for removal
+                                orphaned_keys.append((key_name, patch_path))
+                
+                break  # Found a matching prefix, no need to check others
+    
+    # Remove orphaned settings
+    for key_name, path in orphaned_keys:
+        setSetting(key_name, None)
+    
+    return len(orphaned_keys)
+
+
 def getAvailableGameDefs():
     game_defs = []
     patches_dir = os.path.join('reggiedata', 'patches')

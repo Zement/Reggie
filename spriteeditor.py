@@ -2325,7 +2325,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         Show notes
         """
         self.com_dep.setVisible(False)
-        self.com_main.setText(self.notes)
+        self.com_main.setText(self.notes if hasattr(self, 'notes') else '')
         self.com_main.setVisible(True)
         self.com_more.setVisible(False)
         self.com_extra.setVisible(False)
@@ -2336,7 +2336,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         Show related obj files
         """
         self.com_dep.setVisible(False)
-        self.com_main.setText(self.relatedObjFiles)
+        self.com_main.setText(self.relatedObjFiles if hasattr(self, 'relatedObjFiles') else '')
         self.com_more.setVisible(False)
         self.com_box.setVisible(True)
 
@@ -2345,7 +2345,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         Show the Yoshi info
         """
         self.com_dep.setVisible(False)
-        self.com_main.setText(self.yoshiNotes)
+        self.com_main.setText(self.yoshiNotes if hasattr(self, 'yoshiNotes') else '')
         self.com_more.setVisible(False)
         self.com_box.setVisible(True)
 
@@ -2354,7 +2354,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         Show the advanced notes
         """
         self.com_dep.setVisible(False)
-        self.com_main.setText(self.advNotes)
+        self.com_main.setText(self.advNotes if hasattr(self, 'advNotes') else '')
         self.com_more.setVisible(False)
         self.com_box.setVisible(True)
 
@@ -2378,7 +2378,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         """
         Show dependencies
         """
-        self.com_main.setText(self.dependencyNotes)
+        self.com_main.setText(self.dependencyNotes if hasattr(self, 'dependencyNotes') else '')
         self.com_main.setVisible(True)
         self.com_extra.setVisible(False)
         self.com_deplist_w.setVisible(False)

@@ -797,9 +797,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.toolbar = self.addToolBar(globals_.trans.string('Menubar', 5))
         self.toolbar.setObjectName('MainToolbar')
         
-        # On Windows, add menubar to toolbar to allow docking behind it
-        # On macOS, the menubar is integrated into the system menu bar
-        if sys.platform == 'win32':
+        # Check user preference for toolbar layout
+        # Default: combined on Windows, separate on other platforms
+        toolbar_separate = setting('ToolbarSeparate')
+        if toolbar_separate is None:
+            toolbar_separate = sys.platform != 'win32'
+        
+        # Add menubar to toolbar if combined mode is selected (and not on macOS)
+        # On macOS, the menubar is always integrated into the system menu bar
+        if not toolbar_separate and sys.platform == 'win32':
             menubar.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, menubar.sizePolicy().verticalPolicy())
             self.toolbar.addWidget(menubar)
 
@@ -820,10 +826,12 @@ class ReggieWindow(QtWidgets.QMainWindow):
             show_patches = toggled.get('gamepatches', True)
         
         if show_patches:
+            self.patchToolbar = self.addToolBar(globals_.trans.string('Menubar', 6))
+            self.patchToolbar.setObjectName('PatchToolbar')
             self.patchComboBox = QtWidgets.QComboBox()
             self.patchComboBox.setMinimumWidth(200)
             self.patchComboBox.activated.connect(self.HandleSwitchPatch)
-            self.toolbar.addWidget(self.patchComboBox)
+            self.patchToolbar.addWidget(self.patchComboBox)
         else:
             self.patchComboBox = None
 
@@ -2709,6 +2717,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
             for box in boxList:
                 ToolbarSettings[box.InternalName] = box.isChecked()
         setSetting('ToolbarActs', ToolbarSettings)
+
+        # Get the Interface tab settings
+        toolbar_separate = dlg.interfaceTab.toolbarSeparateRadio.isChecked()
+        setSetting('ToolbarSeparate', toolbar_separate)
 
         # Get the theme settings
         setSetting('Theme', dlg.themesTab.themeBox.currentText())
@@ -4740,6 +4752,10 @@ def main():
     # Ensure all important settings are visible in the file
     ensureSettingsVisible()
     globals_.settings.sync()
+    
+    # Clean up orphaned patch paths (patches deleted outside Reggie)
+    from gamedef import cleanupOrphanedPatchPaths
+    cleanupOrphanedPatchPaths()
 
     # 4.0 -> oldest version with settings.ini compatible with the current version
     if setting("ReggieVersion") < 4.0 or setting("ReggieVersion") > globals_.ReggieVersionFloat:
