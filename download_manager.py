@@ -15,57 +15,124 @@ from PyQt6 import QtCore
 from PyQt6.QtCore import QThread, pyqtSignal
 
 
-def parse_github_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def parse_sourceforge_url(url: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Parse a GitHub URL to extract owner, repo, and branch
+    Parse a Sourceforge URL to extract the ZIP download URL and the path within the ZIP
+    
+    Format: https://sourceforge.net/projects/PROJECT/files/PATH/TO/FILE.zip/download/PATH/WITHIN/ZIP
+    or: https://sourceforge.net/projects/PROJECT/files/PATH/TO/FILE.zip/PATH/WITHIN/ZIP
     
     Args:
-        url: GitHub URL (e.g., https://github.com/owner/repo/tree/branch/path)
+        url: Sourceforge URL with embedded zip path and internal path
     
     Returns:
-        Tuple of (owner, repo, branch) or (None, None, None) if not a GitHub URL
+        Tuple of (zip_download_url, subfolder_path) or (None, None) if not a valid Sourceforge URL
     """
-    # Match GitHub tree URLs
-    match = re.match(r'https://github\.com/([^/]+)/([^/]+)/tree/([^/]+)', url)
-    if match:
-        return match.group(1), match.group(2), match.group(3)
+    print(f"[parse_sourceforge_url] Input: {url}")
     
-    # Match GitHub blob URLs (for single files)
-    match = re.match(r'https://github\.com/([^/]+)/([^/]+)/blob/([^/]+)', url)
-    if match:
-        return match.group(1), match.group(2), match.group(3)
-    
-    # Match basic GitHub repo URLs
-    match = re.match(r'https://github\.com/([^/]+)/([^/]+)/?$', url)
-    if match:
-        return match.group(1), match.group(2), 'main'
-    
-    return None, None, None
-
-
-def github_folder_to_zip_url(url: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Convert a GitHub folder URL to a downloadable ZIP URL and extract the subfolder path
-    
-    Args:
-        url: GitHub folder URL
-    
-    Returns:
-        Tuple of (zip_url, subfolder_path) or (None, None) if not a GitHub URL
-    """
-    owner, repo, branch = parse_github_url(url)
-    if not owner or not repo or not branch:
+    if 'sourceforge.net' not in url:
+        print(f"[parse_sourceforge_url] Not a Sourceforge URL")
         return None, None
     
-    # Extract the subfolder path from the URL
-    # e.g., https://github.com/owner/repo/tree/branch/path/to/folder -> path/to/folder
-    match = re.match(r'https://github\.com/[^/]+/[^/]+/tree/[^/]+/(.+)', url)
-    subfolder = match.group(1) if match else ''
+    # Find the .zip in the URL
+    zip_index = url.find('.zip')
+    if zip_index == -1:
+        print(f"[parse_sourceforge_url] No .zip found in URL")
+        return None, None
     
-    # Create ZIP download URL
-    zip_url = f'https://github.com/{owner}/{repo}/archive/refs/heads/{branch}.zip'
+    # Extract base ZIP URL (everything up to and including .zip)
+    zip_base_url = url[:zip_index + 4]  # +4 to include '.zip'
     
-    return zip_url, subfolder
+    # Everything after .zip is the path
+    remainder = url[zip_index + 4:]
+    
+    # Check if /download is present and remove it
+    if remainder.startswith('/download/'):
+        subfolder = remainder[10:]  # Remove '/download/'
+    elif remainder.startswith('/download'):
+        subfolder = remainder[9:].lstrip('/')  # Remove '/download' and any leading slashes
+    elif remainder.startswith('/'):
+        subfolder = remainder[1:]  # Remove leading slash
+    else:
+        subfolder = remainder
+    
+    # Sourceforge requires /download suffix for direct downloads
+    zip_download_url = zip_base_url + '/download'
+    
+    print(f"[parse_sourceforge_url] Parsed:")
+    print(f"  zip_download_url: {zip_download_url}")
+    print(f"  subfolder: {subfolder}")
+    
+    return zip_download_url, subfolder
+
+
+def normalize_catalog_url(url: str, zip_file: str = None) -> str:
+    """
+    Convert a relative path or full URL to a full Sourceforge URL
+    
+    Args:
+        url: Either a relative path (e.g., "/Newer_W_1.30/NewerSMBW/Stages") 
+             or a full Sourceforge URL
+        zip_file: Optional explicit ZIP filename (e.g., "newer_w_1.30.zip")
+    
+    Returns:
+        Full Sourceforge URL with embedded zip path and internal path
+    """
+    print(f"[normalize_catalog_url] Input: {url}, zip_file: {zip_file}")
+    
+    # If it's already a full URL, return as-is
+    if url.startswith('http://') or url.startswith('https://'):
+        print(f"[normalize_catalog_url] Already full URL, returning as-is")
+        return url
+    
+    # If it's a relative path, convert to full Sourceforge URL
+    if url.startswith('/'):
+        # Use explicit zip_file if provided, otherwise derive from first folder
+        if zip_file:
+            zip_name = zip_file
+            print(f"[normalize_catalog_url] Using explicit zip_file: {zip_name}")
+        else:
+            # Extract the first folder name as the zip file name
+            # E.g., "/Newer_W_1.30/NewerSMBW/Stages" -> "Newer_W_1.30" -> "newer_w_1.30.zip"
+            parts = url.strip('/').split('/', 1)
+            if parts:
+                zip_folder = parts[0]
+                # Convert to lowercase and add .zip extension
+                zip_name = zip_folder.lower().replace(' ', '%20') + '.zip'
+                print(f"[normalize_catalog_url] Derived zip_name from path: {zip_name}")
+        
+        # Format: https://sourceforge.net/projects/reggie-patch-catalog/files/assets/patches/ZIP_NAME.zip/PATH
+        base_url = f"https://sourceforge.net/projects/reggie-patch-catalog/files/assets/patches/{zip_name}"
+        result = base_url + url
+        print(f"[normalize_catalog_url] Converted relative path:")
+        print(f"  base_url: {base_url}")
+        print(f"  result: {result}")
+        return result
+    
+    print(f"[normalize_catalog_url] No conversion needed, returning: {url}")
+    return url
+
+
+def github_folder_to_zip_url(url: str, zip_file: str = None) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Convert a URL (Sourceforge) to a downloadable ZIP URL and extract the subfolder path
+    
+    Args:
+        url: Sourceforge URL with embedded paths (can be relative or absolute)
+        zip_file: Optional explicit ZIP filename (e.g., "newer_w_1.30.zip")
+    
+    Returns:
+        Tuple of (zip_url, subfolder_path) or (None, None) if not a valid URL
+    """
+    # First normalize the URL (convert relative paths to full Sourceforge URLs)
+    url = normalize_catalog_url(url, zip_file)
+    
+    # Try Sourceforge format
+    zip_url, subfolder = parse_sourceforge_url(url)
+    if zip_url:
+        return zip_url, subfolder
+    
+    return None, None
 
 
 def extract_folder_name_from_url(url: str) -> Optional[str]:
@@ -278,6 +345,16 @@ class DownloadManager:
         thread.start()
         
         return thread
+    
+    def cancel_download(self, thread: DownloadThread):
+        """
+        Cancel a specific download thread
+        
+        Args:
+            thread: The DownloadThread to cancel
+        """
+        if thread:
+            thread.cancel()
     
     def cancel_all(self):
         """Cancel all active downloads and extractions"""

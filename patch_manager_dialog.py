@@ -43,6 +43,13 @@ class PatchManagerDialog(QtWidgets.QDialog):
         # Track scanned Riivolution mods (temporary, cleared on close)
         self.scanned_riiv_mods = []
         
+        # Track temp directories for reuse and cleanup
+        self.temp_dirs = {}  # {zip_url: temp_dir_path}
+        
+        # Track active download thread for cancellation
+        self.active_download_thread = None
+        self.active_download_button = None  # Track which button initiated download
+        
         # Load catalog
         catalog_loaded, catalog_error = self.catalog_manager.load_catalog()
         catalog_entries = self.catalog_manager.get_all_entries()
@@ -58,7 +65,7 @@ class PatchManagerDialog(QtWidgets.QDialog):
         
         # Info label
         infoLabel = QtWidgets.QLabel(
-            'Manage folder paths and plugins for each game patch. Select a patch to view/edit its plugins.<br><font color="orange"><b>Warning:</b> Do not use the catalog feature yet, only Newer, NSMBWer and NewerGem Downloads currently supported.</font>'
+            'Manage folder paths and plugins for each game patch. Select a patch to view/edit its plugins.<br><font color="orange"><b>Patch Manager Catalog Beta:</b> Updated to support Horizon mod database. Post problems to Discord.</font>'
         )
         infoLabel.setWordWrap(True)
         infoLabel.setFixedHeight(40)
@@ -114,6 +121,12 @@ class PatchManagerDialog(QtWidgets.QDialog):
         catalogHeaderLayout = QtWidgets.QHBoxLayout()
         catalogLabel = QtWidgets.QLabel('<b>Available Patches (Catalog)</b>')
         catalogHeaderLayout.addWidget(catalogLabel)
+        
+        # Download status label
+        self.downloadStatusLabel = QtWidgets.QLabel('')
+        self.downloadStatusLabel.setStyleSheet('color: #4A90E2; font-weight: bold;')
+        catalogHeaderLayout.addWidget(self.downloadStatusLabel)
+        
         catalogHeaderLayout.addStretch()
         
         refreshBtn = QtWidgets.QPushButton('Refresh Catalog')
@@ -196,20 +209,26 @@ class PatchManagerDialog(QtWidgets.QDialog):
         mainLayout.addWidget(splitter)
         
         # Button box
-        buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
-        buttonBox.rejected.connect(self.accept)
+        self.buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
+        self.buttonBox.rejected.connect(self.accept)
         
         # Add "Scan Riivolution Folder" button to the left of Close
-        scanRiivBtn = QtWidgets.QPushButton('Scan Riivolution Folder')
-        scanRiivBtn.clicked.connect(self._scan_riivolution_folder)
-        buttonBox.addButton(scanRiivBtn, QtWidgets.QDialogButtonBox.ButtonRole.ActionRole)
+        self.scanRiivBtn = QtWidgets.QPushButton('Scan Riivolution Folder')
+        self.scanRiivBtn.clicked.connect(self._scan_riivolution_folder)
+        self.buttonBox.addButton(self.scanRiivBtn, QtWidgets.QDialogButtonBox.ButtonRole.ActionRole)
         
         # Add "Add Patch Folder" button to the left of Close
-        addPatchBtn = QtWidgets.QPushButton('Add Patch Folder')
-        addPatchBtn.clicked.connect(self._add_patch_folder)
-        buttonBox.addButton(addPatchBtn, QtWidgets.QDialogButtonBox.ButtonRole.ActionRole)
+        self.addPatchBtn = QtWidgets.QPushButton('Add Patch Folder')
+        self.addPatchBtn.clicked.connect(self._add_patch_folder)
+        self.buttonBox.addButton(self.addPatchBtn, QtWidgets.QDialogButtonBox.ButtonRole.ActionRole)
         
-        mainLayout.addWidget(buttonBox)
+        # Add "Cancel Download" button (initially hidden)
+        self.cancelDownloadBtn = QtWidgets.QPushButton('Cancel Download')
+        self.cancelDownloadBtn.clicked.connect(self._cancel_download)
+        self.cancelDownloadBtn.setVisible(False)
+        self.buttonBox.addButton(self.cancelDownloadBtn, QtWidgets.QDialogButtonBox.ButtonRole.ActionRole)
+        
+        mainLayout.addWidget(self.buttonBox)
         
         # Track plugin widgets
         self.plugin_widgets = {}
@@ -871,7 +890,7 @@ class PatchManagerDialog(QtWidgets.QDialog):
                 if entry.get('fullMod'):
                     # Method 2: Full mod download (disabled if no Dolphin path or already up to date)
                     fullModBtn = QtWidgets.QPushButton(f'{btn_prefix} (Full)')
-                    fullModBtn.clicked.connect(lambda checked, e=entry: self._download_patch(e, method=2))
+                    fullModBtn.clicked.connect(lambda checked, e=entry, btn=fullModBtn: self._download_patch(e, method=2, button=btn))
                     
                     # Enable only if: Dolphin path set AND (new download OR update available)
                     # Disable if full mod is already installed and no update is available
@@ -887,7 +906,7 @@ class PatchManagerDialog(QtWidgets.QDialog):
                     
                     # Method 1: Individual folders (disabled if full mod is installed)
                     method1Btn = QtWidgets.QPushButton(f'{btn_prefix} (Stage/Texture)')
-                    method1Btn.clicked.connect(lambda checked, e=entry: self._download_patch(e, method=1))
+                    method1Btn.clicked.connect(lambda checked, e=entry, btn=method1Btn: self._download_patch(e, method=1, button=btn))
                     method1Btn.setEnabled(not is_full_mod_installed)
                     if is_full_mod_installed:
                         method1Btn.setToolTip('Full mod already installed - Parts download not needed')
@@ -895,7 +914,7 @@ class PatchManagerDialog(QtWidgets.QDialog):
                 else:
                     # Only Method 1 available
                     downloadBtn = QtWidgets.QPushButton(btn_prefix)
-                    downloadBtn.clicked.connect(lambda checked, e=entry: self._download_patch(e, method=1))
+                    downloadBtn.clicked.connect(lambda checked, e=entry, btn=downloadBtn: self._download_patch(e, method=1, button=btn))
                     buttonLayout.addWidget(downloadBtn)
             else:
                 # Show status button (Downloading, Installed, etc.)
@@ -918,7 +937,7 @@ class PatchManagerDialog(QtWidgets.QDialog):
             QtWidgets.QMessageBox.information(
                 self, 
                 'Catalog Refreshed', 
-                f'Catalog has been updated successfully from GitHub.\n\nFound {len(entries)} catalog entries.'
+                f'Catalog has been updated successfully.\n\nFound {len(entries)} catalog entries.'
             )
         elif success and error_msg:
             # Loaded from cache but remote fetch failed
@@ -926,7 +945,7 @@ class PatchManagerDialog(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(
                 self, 
                 'Using Cached Catalog', 
-                f'Failed to fetch latest catalog from GitHub:\n{error_msg}\n\nUsing cached version with {len(entries)} entries.'
+                f'Failed to fetch latest catalog:\n{error_msg}\n\nUsing cached version with {len(entries)} entries.'
             )
         else:
             # Complete failure
@@ -1076,33 +1095,17 @@ class PatchManagerDialog(QtWidgets.QDialog):
                             if not os.path.isdir(texture_path):
                                 texture_path = None
                         
-                        # Extract mod name from XML (try multiple patterns, skip generic names)
+                        # Extract mod name from section name in Riivolution XML
                         mod_name = None
                         
-                        # Try <wiidisc name="..."> first
-                        name_match = re.search(r'<wiidisc[^>]+name="([^"]+)"', xml_content)
-                        if name_match and name_match.group(1).lower() not in ['game', 'new super mario bros. wii']:
+                        # Always use <section name="..."> for patch name
+                        name_match = re.search(r'<section[^>]+name="([^"]+)"', xml_content)
+                        if name_match:
                             mod_name = name_match.group(1)
-                            print(f"  Found name in <wiidisc>: {mod_name}")
-                        
-                        # Try <section name="...">
-                        if not mod_name:
-                            name_match = re.search(r'<section[^>]+name="([^"]+)"', xml_content)
-                            if name_match and name_match.group(1).lower() not in ['game', 'new super mario bros. wii']:
-                                mod_name = name_match.group(1)
-                                print(f"  Found name in <section>: {mod_name}")
-                        
-                        # Try <option name="..."> (but skip generic "Game")
-                        if not mod_name:
-                            name_match = re.search(r'<option[^>]+name="([^"]+)"', xml_content)
-                            if name_match and name_match.group(1).lower() not in ['game', 'new super mario bros. wii']:
-                                mod_name = name_match.group(1)
-                                print(f"  Found name in <option>: {mod_name}")
-                        
-                        # Fallback to root folder name
-                        if not mod_name:
-                            mod_name = root_folder
-                            print(f"  Using root folder name: {mod_name}")
+                            print(f"  Found patch name in <section>: {mod_name}")
+                        else:
+                            print(f"  Warning: No <section name=\"...\"> found in {filename}")
+                            continue
                         
                         # Check if already added (avoid duplicates)
                         if any(mod['name'] == mod_name and mod['root_folder'] == root_folder for mod in self.scanned_riiv_mods):
@@ -1322,15 +1325,22 @@ class PatchManagerDialog(QtWidgets.QDialog):
         
         return 'Download'
     
-    def _download_patch(self, entry: dict, method: int = 1):
+    def _download_patch(self, entry: dict, method: int = 1, button=None):
         """
         Download and install a patch from the catalog
         
         Args:
             entry: Catalog entry dictionary
             method: Download method (1=Stage/Texture/Patch, 2=Full mod)
+            button: The button that initiated the download (for progress updates)
         """
         patch_name = entry.get('name', '')
+        
+        # Store the button for progress updates
+        self.active_download_button = button
+        self.active_download_patch_name = patch_name  # Store patch name for status display
+        if button:
+            self.original_button_text = button.text()
         
         # Check if already installed
         if self.catalog_manager.is_patch_installed(patch_name):
@@ -1381,45 +1391,98 @@ class PatchManagerDialog(QtWidgets.QDialog):
             entry: Catalog entry dictionary
         """
         patch_name = entry.get('name', '')
-        stage_url = entry.get('stage', '')
-        texture_url = entry.get('texture', '')
-        patch_url = entry.get('patch', '')
+        stage_path = entry.get('stage', '')
+        texture_path = entry.get('texture', '')
+        patch_path = entry.get('patch', '')
         
-        # Extract patch folder name from URL
-        patch_folder_name = extract_folder_name_from_url(patch_url)
+        # Get the base ZIP URL from the new 'url' field
+        base_zip_url = entry.get('url', '')
+        
+        # For backward compatibility: if no 'url' field, try old format
+        if not base_zip_url:
+            # Extract ZIP filename from any full URL in the entry (for backward compatibility)
+            zip_file = entry.get('zipFile', None)
+            if not zip_file:
+                # Try to extract from stage URL if it's a full URL
+                if stage_path and 'sourceforge.net' in stage_path:
+                    import re
+                    match = re.search(r'/patches/([^/]+\.zip)/', stage_path)
+                    if match:
+                        zip_file = match.group(1)
+            
+            # Parse URLs to get ZIP download URL and subfolder paths (old format)
+            stage_zip_url, stage_subfolder = github_folder_to_zip_url(stage_path, zip_file)
+            texture_zip_url, texture_subfolder = github_folder_to_zip_url(texture_path, zip_file) if texture_path else (None, None)
+            patch_zip_url, patch_subfolder = github_folder_to_zip_url(patch_path, zip_file) if patch_path else (None, None)
+        else:
+            # New format: combine base URL with relative paths
+            stage_zip_url = base_zip_url
+            stage_subfolder = stage_path.lstrip('/')
+            texture_zip_url = base_zip_url if texture_path else None
+            texture_subfolder = texture_path.lstrip('/') if texture_path else None
+            patch_zip_url = base_zip_url if patch_path else None
+            patch_subfolder = patch_path.lstrip('/') if patch_path else None
+        
+        # Extract patch folder name from path (or use patch name if no path)
+        patch_folder_name = extract_folder_name_from_url(patch_path) if patch_path else None
         if not patch_folder_name:
             patch_folder_name = patch_name.replace(' ', '')
         
-        # Create temp directory for downloads
+        # Reuse temp directory if already downloaded, otherwise create new one
         import tempfile
-        temp_dir = tempfile.mkdtemp(prefix='reggie_download_')
+        if stage_zip_url in self.temp_dirs and os.path.exists(self.temp_dirs[stage_zip_url]):
+            temp_dir = self.temp_dirs[stage_zip_url]
+            print(f"[_download_method1] Reusing temp dir: {temp_dir}")
+        else:
+            temp_dir = tempfile.mkdtemp(prefix='reggie_download_')
+            self.temp_dirs[stage_zip_url] = temp_dir
+            print(f"[_download_method1] Created new temp dir: {temp_dir}")
         
-        # Parse GitHub URLs to get ZIP download URL
-        stage_zip_url, stage_subfolder = github_folder_to_zip_url(stage_url)
-        texture_zip_url, texture_subfolder = github_folder_to_zip_url(texture_url) if texture_url else (None, None)
-        patch_zip_url, patch_subfolder = github_folder_to_zip_url(patch_url)
-        
-        if not stage_zip_url or not patch_zip_url:
+        if not stage_zip_url:
             self.catalog_status[patch_name] = 'Error'
             self._populate_catalog()
-            QtWidgets.QMessageBox.warning(self, 'Invalid URLs', 'Stage or Patch URLs are not valid GitHub URLs.')
+            QtWidgets.QMessageBox.warning(self, 'Invalid URLs', 'Stage URL is not valid.')
             return
+        
+        print(f"[_download_method1] Final URLs:")
+        print(f"  stage_zip_url: {stage_zip_url}")
+        print(f"  stage_subfolder: {stage_subfolder}")
+        print(f"  texture_zip_url: {texture_zip_url}")
+        print(f"  texture_subfolder: {texture_subfolder}")
         
         # Download the repo ZIP (stage and patch might be from same repo)
         repo_zip = os.path.join(temp_dir, 'repo.zip')
         
-        def on_repo_downloaded(success, message):
-            if not success:
-                self.catalog_status[patch_name] = 'Error'
-                self._populate_catalog()
-                QtWidgets.QMessageBox.warning(self, 'Download Failed', f'Failed to download: {message}')
-                return
-            
-            # Extract and install
+        # Check if already downloaded
+        if os.path.exists(repo_zip):
+            print(f"[_download_method1] ZIP already exists, skipping download: {repo_zip}")
+            # Directly install from existing ZIP
             self._install_patch_files(entry, repo_zip, temp_dir, stage_subfolder, texture_subfolder, patch_subfolder, patch_folder_name)
-        
-        # Start download (use stage URL as they're likely from same repo)
-        thread = self.download_manager.download_file(stage_zip_url, repo_zip, on_repo_downloaded)
+        else:
+            print(f"[_download_method1] Downloading to: {repo_zip}")
+            
+            # Set UI to downloading state
+            self._set_download_ui_state(True)
+            self.downloadStatusLabel.setText(f"📥 Starting download of {patch_name}...")
+            
+            def on_repo_downloaded(success, message):
+                self._set_download_ui_state(False)
+                self.active_download_thread = None
+                
+                if not success:
+                    self.catalog_status[patch_name] = 'Error'
+                    self._populate_catalog()
+                    QtWidgets.QMessageBox.warning(self, 'Download Failed', f'Failed to download: {message}')
+                    return
+                
+                # Extract and install
+                self._install_patch_files(entry, repo_zip, temp_dir, stage_subfolder, texture_subfolder, patch_subfolder, patch_folder_name)
+            
+            # Start download (use stage URL as they're likely from same repo)
+            self.active_download_thread = self.download_manager.download_file(stage_zip_url, repo_zip, on_repo_downloaded)
+            
+            # Connect progress signal
+            self.active_download_thread.progress.connect(self._update_download_progress)
     
     def _download_method2(self, entry: dict):
         """
@@ -1429,8 +1492,33 @@ class PatchManagerDialog(QtWidgets.QDialog):
             entry: Catalog entry dictionary
         """
         patch_name = entry.get('name', '')
-        fullmod_url = entry.get('fullMod', '')
-        riiv_xml_url = entry.get('fullModRiivolution', '')
+        fullmod_path = entry.get('fullMod', '')
+        riiv_xml_path = entry.get('fullModRiivolution', '')
+        
+        # Get the base ZIP URL from the new 'url' field
+        base_zip_url = entry.get('url', '')
+        
+        # For backward compatibility: if no 'url' field, try old format
+        if not base_zip_url:
+            # Extract ZIP filename from any full URL in the entry (for backward compatibility)
+            zip_file = entry.get('zipFile', None)
+            if not zip_file:
+                # Try to extract from fullmod URL if it's a full URL
+                if fullmod_path and 'sourceforge.net' in fullmod_path:
+                    import re
+                    match = re.search(r'/patches/([^/]+\.zip)/', fullmod_path)
+                    if match:
+                        zip_file = match.group(1)
+            
+            # Parse URL to get ZIP download URL and subfolder path (old format)
+            fullmod_zip_url, fullmod_subfolder = github_folder_to_zip_url(fullmod_path, zip_file)
+            riiv_xml_url = riiv_xml_path
+        else:
+            # New format: combine base URL with relative paths
+            fullmod_zip_url = base_zip_url
+            fullmod_subfolder = fullmod_path.lstrip('/')
+            riiv_xml_url = base_zip_url if riiv_xml_path else None
+            riiv_xml_subfolder = riiv_xml_path.lstrip('/') if riiv_xml_path else None
         
         # Get Dolphin path
         dolphin_path = setting('DolphinRiivolutionRoot', '')
@@ -1440,36 +1528,60 @@ class PatchManagerDialog(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(self, 'No Dolphin Path', 'Dolphin Riivolution Root path is not set.')
             return
         
-        # Create temp directory for downloads
+        # Reuse temp directory if already downloaded, otherwise create new one
         import tempfile
-        temp_dir = tempfile.mkdtemp(prefix='reggie_download_')
-        
-        # Parse GitHub URL to get ZIP download URL
-        fullmod_zip_url, fullmod_subfolder = github_folder_to_zip_url(fullmod_url)
+        if fullmod_zip_url in self.temp_dirs and os.path.exists(self.temp_dirs[fullmod_zip_url]):
+            temp_dir = self.temp_dirs[fullmod_zip_url]
+            print(f"[_download_method2] Reusing temp dir: {temp_dir}")
+        else:
+            temp_dir = tempfile.mkdtemp(prefix='reggie_download_')
+            self.temp_dirs[fullmod_zip_url] = temp_dir
+            print(f"[_download_method2] Created new temp dir: {temp_dir}")
         
         if not fullmod_zip_url:
             self.catalog_status[patch_name] = 'Error'
             self._populate_catalog()
-            QtWidgets.QMessageBox.warning(self, 'Invalid URL', 'Full mod URL is not a valid GitHub URL.')
+            QtWidgets.QMessageBox.warning(self, 'Invalid URL', 'Full mod URL is not valid.')
             return
         
         # Download the repo ZIP
         repo_zip = os.path.join(temp_dir, 'fullmod.zip')
         
-        def on_fullmod_downloaded(success, message):
-            if not success:
-                self.catalog_status[patch_name] = 'Error'
-                self._populate_catalog()
-                QtWidgets.QMessageBox.warning(self, 'Download Failed', f'Failed to download: {message}')
-                return
+        # Check if already downloaded
+        if os.path.exists(repo_zip):
+            print(f"[_download_method2] ZIP already exists, skipping download: {repo_zip}")
+            # Directly install from existing ZIP
+            xml_subfolder = riiv_xml_subfolder if base_zip_url else None
+            self._install_fullmod(entry, repo_zip, temp_dir, fullmod_subfolder, dolphin_path, riiv_xml_url, xml_subfolder)
+        else:
+            print(f"[_download_method2] Downloading to: {repo_zip}")
             
-            # Extract entire mod to Riivolution folder
-            self._install_fullmod(entry, repo_zip, temp_dir, fullmod_subfolder, dolphin_path, riiv_xml_url)
-        
-        # Start download
-        thread = self.download_manager.download_file(fullmod_zip_url, repo_zip, on_fullmod_downloaded)
+            # Set UI to downloading state
+            self._set_download_ui_state(True)
+            self.downloadStatusLabel.setText(f"📥 Starting download of {patch_name}...")
+            
+            def on_fullmod_downloaded(success, message):
+                self._set_download_ui_state(False)
+                self.active_download_thread = None
+                
+                if not success:
+                    self.catalog_status[patch_name] = 'Error'
+                    self._populate_catalog()
+                    QtWidgets.QMessageBox.warning(self, 'Download Failed', f'Failed to download: {message}')
+                    return
+                
+                # Extract entire mod to Riivolution folder
+                # For new format, pass riiv_xml_subfolder; for old format, it will be None
+                xml_subfolder = riiv_xml_subfolder if base_zip_url else None
+                self._install_fullmod(entry, repo_zip, temp_dir, fullmod_subfolder, dolphin_path, riiv_xml_url, xml_subfolder)
+            
+            # Start download
+            self.active_download_thread = self.download_manager.download_file(fullmod_zip_url, repo_zip, on_fullmod_downloaded)
+            
+            # Connect progress signal
+            self.active_download_thread.progress.connect(self._update_download_progress)
     
-    def _install_fullmod(self, entry: dict, repo_zip: str, temp_dir: str, fullmod_subfolder: str, dolphin_path: str, riiv_xml_url: str):
+    def _install_fullmod(self, entry: dict, repo_zip: str, temp_dir: str, fullmod_subfolder: str, dolphin_path: str, riiv_xml_url: str, riiv_xml_subfolder: str = None):
         """
         Install full mod to Riivolution folder (Method 2)
         
@@ -1497,57 +1609,79 @@ class PatchManagerDialog(QtWidgets.QDialog):
             xml_dest = None
             
             if riiv_xml_url:
-                # Extract XML filename from URL
-                xml_filename = extract_folder_name_from_url(riiv_xml_url)
-                if not xml_filename:
-                    xml_filename = 'riivolution.xml'
-                
                 # Create riivolution subdirectory
                 riiv_xml_dir = os.path.join(dolphin_path, 'riivolution')
                 os.makedirs(riiv_xml_dir, exist_ok=True)
                 
-                # Download XML file
-                xml_dest = os.path.join(riiv_xml_dir, xml_filename)
-                try:
-                    # Convert GitHub tree URL to raw URL
-                    raw_xml_url = riiv_xml_url
-                    if 'github.com' in raw_xml_url and '/tree/' in raw_xml_url:
-                        # Convert tree URL to raw URL
-                        raw_xml_url = raw_xml_url.replace('github.com', 'raw.githubusercontent.com').replace('/tree/', '/')
-                    elif 'github.com' in raw_xml_url and '/blob/' in raw_xml_url:
-                        raw_xml_url = raw_xml_url.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/')
+                # Extract XML filename
+                if riiv_xml_subfolder:
+                    # New format: extract from ZIP using subfolder path
+                    xml_filename = os.path.basename(riiv_xml_subfolder)
+                    xml_dest = os.path.join(riiv_xml_dir, xml_filename)
                     
-                    print(f"Downloading XML from: {raw_xml_url}")
-                    print(f"Saving to: {xml_dest}")
-                    urllib.request.urlretrieve(raw_xml_url, xml_dest)
-                    print(f"XML downloaded successfully")
+                    # Extract XML from ZIP
+                    repo_root = os.path.join(temp_dir, 'extracted')
+                    with zipfile.ZipFile(repo_zip, 'r') as zip_ref:
+                        zip_ref.extractall(repo_root)
                     
-                    # Parse XML to extract root folder name and Stage/Texture paths
-                    with open(xml_dest, 'r', encoding='utf-8') as f:
-                        xml_content = f.read()
+                    xml_source = os.path.join(repo_root, riiv_xml_subfolder)
+                    if os.path.exists(xml_source):
+                        shutil.copy2(xml_source, xml_dest)
+                        print(f"XML extracted from ZIP: {xml_dest}")
+                    else:
+                        print(f"WARNING: XML not found in ZIP at: {riiv_xml_subfolder}")
+                else:
+                    # Old format: download XML separately
+                    xml_filename = extract_folder_name_from_url(riiv_xml_url)
+                    if not xml_filename:
+                        xml_filename = 'riivolution.xml'
+                    
+                    xml_dest = os.path.join(riiv_xml_dir, xml_filename)
+                    try:
+                        # Normalize URL (convert relative paths to full Sourceforge URLs)
+                        from download_manager import normalize_catalog_url
+                        raw_xml_url = normalize_catalog_url(riiv_xml_url, None)
                         
-                        # Search for root="/ pattern
-                        match = re.search(r'root="\/([^"]+)"', xml_content)
-                        if match:
-                            riiv_root_name = match.group(1)
-                            print(f"Extracted root folder name: {riiv_root_name}")
+                        # Convert Sourceforge URL to direct download URL if needed
+                        if 'sourceforge.net' in raw_xml_url and not raw_xml_url.endswith('/download'):
+                            # Ensure we have the direct download URL
+                            if raw_xml_url.endswith('.xml'):
+                                raw_xml_url = raw_xml_url + '/download'
                         
-                        # Search for Stage folder: <folder external="..." disc="/Stage/..." or disc="/Stage">
-                        stage_match = re.search(r'<folder[^>]+external="([^"]+)"[^>]+disc="/Stage"[^>]*>', xml_content)
-                        if stage_match:
-                            stage_folder = stage_match.group(1)
-                            print(f"Extracted Stage folder: {stage_folder}")
-                        
-                        # Search for Texture folder: <folder external="..." disc="/Stage/Texture">
-                        texture_match = re.search(r'<folder[^>]+external="([^"]+)"[^>]+disc="/Stage/Texture"[^>]*>', xml_content)
-                        if texture_match:
-                            texture_folder = texture_match.group(1)
-                            print(f"Extracted Texture folder: {texture_folder}")
-                        
-                except Exception as xml_error:
-                    print(f"Warning: Failed to download/parse Riivolution XML: {xml_error}")
-                    import traceback
-                    traceback.print_exc()
+                        print(f"Downloading XML from: {raw_xml_url}")
+                        print(f"Saving to: {xml_dest}")
+                        urllib.request.urlretrieve(raw_xml_url, xml_dest)
+                        print(f"XML downloaded successfully")
+                    except Exception as e:
+                        print(f"Failed to download XML: {e}")
+                
+                # Parse XML to extract root folder name and Stage/Texture paths (both formats)
+                if xml_dest and os.path.exists(xml_dest):
+                    try:
+                        with open(xml_dest, 'r', encoding='utf-8') as f:
+                            xml_content = f.read()
+                            
+                            # Search for root="/ pattern
+                            match = re.search(r'root="\/([^"]+)"', xml_content)
+                            if match:
+                                riiv_root_name = match.group(1)
+                                print(f"Extracted root folder name: {riiv_root_name}")
+                            
+                            # Search for Stage folder: <folder external="..." disc="/Stage/..." or disc="/Stage">
+                            stage_match = re.search(r'<folder[^>]+external="([^"]+)"[^>]+disc="/Stage"[^>]*>', xml_content)
+                            if stage_match:
+                                stage_folder = stage_match.group(1)
+                                print(f"Extracted Stage folder: {stage_folder}")
+                            
+                            # Search for Texture folder: <folder external="..." disc="/Stage/Texture">
+                            texture_match = re.search(r'<folder[^>]+external="([^"]+)"[^>]+disc="/Stage/Texture"[^>]*>', xml_content)
+                            if texture_match:
+                                texture_folder = texture_match.group(1)
+                                print(f"Extracted Texture folder: {texture_folder}")
+                    except Exception as xml_error:
+                        print(f"Warning: Failed to parse Riivolution XML: {xml_error}")
+                        import traceback
+                        traceback.print_exc()
             
             # Fallback to patch name if we couldn't extract from XML
             if not riiv_root_name:
@@ -1559,12 +1693,9 @@ class PatchManagerDialog(QtWidgets.QDialog):
             with zipfile.ZipFile(repo_zip, 'r') as zip_ref:
                 zip_ref.extractall(extract_dir)
             
-            # Find the root folder in the extracted ZIP
-            extracted_items = os.listdir(extract_dir)
-            if len(extracted_items) == 1 and os.path.isdir(os.path.join(extract_dir, extracted_items[0])):
-                repo_root = os.path.join(extract_dir, extracted_items[0])
-            else:
-                repo_root = extract_dir
+            # For Sourceforge ZIPs, files are extracted directly without a wrapper folder
+            # The subfolder path already points to the correct location within the ZIP
+            repo_root = extract_dir
             
             # Navigate to the fullmod subfolder
             fullmod_root = os.path.join(repo_root, fullmod_subfolder) if fullmod_subfolder else repo_root
@@ -1586,18 +1717,35 @@ class PatchManagerDialog(QtWidgets.QDialog):
                 else:
                     shutil.copy2(src, dst)
             
-            # Step 4: Update Stage/Texture paths in settings if extracted from XML
+            # Step 4: Update Stage/Texture paths in settings
+            # First try paths extracted from XML, then fall back to common folder names
             if stage_folder:
                 stage_path = os.path.join(riiv_mod_dir, stage_folder)
                 if os.path.isdir(stage_path):
                     setSetting('StageGamePath_' + patch_name, stage_path)
-                    print(f"Set Stage path: {stage_path}")
+                    print(f"Set Stage path from XML: {stage_path}")
+            else:
+                # Try common folder names: Stage, Stages, stage
+                for folder_name in ['Stage', 'Stages', 'stage']:
+                    stage_path = os.path.join(riiv_mod_dir, folder_name)
+                    if os.path.isdir(stage_path):
+                        setSetting('StageGamePath_' + patch_name, stage_path)
+                        print(f"Set Stage path (fallback): {stage_path}")
+                        break
             
             if texture_folder:
                 texture_path = os.path.join(riiv_mod_dir, texture_folder)
                 if os.path.isdir(texture_path):
                     setSetting('TextureGamePath_' + patch_name, texture_path)
-                    print(f"Set Texture path: {texture_path}")
+                    print(f"Set Texture path from XML: {texture_path}")
+            else:
+                # Try common folder names: Stage/Texture, Texture, Tilesets
+                for folder_path in ['Stage/Texture', 'Texture', 'Tilesets', 'Stage/Tilesets']:
+                    texture_path = os.path.join(riiv_mod_dir, folder_path)
+                    if os.path.isdir(texture_path):
+                        setSetting('TextureGamePath_' + patch_name, texture_path)
+                        print(f"Set Texture path (fallback): {texture_path}")
+                        break
             
             # Step 5: Install patch files if available
             if patch_url:
@@ -1619,12 +1767,8 @@ class PatchManagerDialog(QtWidgets.QDialog):
                         with zipfile.ZipFile(patch_zip, 'r') as zip_ref:
                             zip_ref.extractall(patch_extract_dir)
                         
-                        # Find repo root
-                        patch_items = os.listdir(patch_extract_dir)
-                        if len(patch_items) == 1 and os.path.isdir(os.path.join(patch_extract_dir, patch_items[0])):
-                            patch_repo_root = os.path.join(patch_extract_dir, patch_items[0])
-                        else:
-                            patch_repo_root = patch_extract_dir
+                        # For Sourceforge ZIPs, files are extracted directly
+                        patch_repo_root = patch_extract_dir
                         
                         # Copy patch files
                         patch_source = os.path.join(patch_repo_root, patch_subfolder)
@@ -1666,8 +1810,8 @@ class PatchManagerDialog(QtWidgets.QDialog):
             self._populate_catalog()
             self._populate_table()
             
-            # Clean up temp directory
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            # Temp directory will be cleaned up when Patch Manager closes
+            print(f"[_install_fullmod] Installation complete, temp dir will be cleaned on exit: {temp_dir}")
             
             QtWidgets.QMessageBox.information(self, 'Installation Complete', 
                 f'{patch_name} has been installed!\n\n'
@@ -1703,12 +1847,9 @@ class PatchManagerDialog(QtWidgets.QDialog):
             with zipfile.ZipFile(repo_zip, 'r') as zip_ref:
                 zip_ref.extractall(extract_dir)
             
-            # Find the root folder in the extracted ZIP (GitHub adds repo-branch prefix)
-            extracted_items = os.listdir(extract_dir)
-            if len(extracted_items) == 1 and os.path.isdir(os.path.join(extract_dir, extracted_items[0])):
-                repo_root = os.path.join(extract_dir, extracted_items[0])
-            else:
-                repo_root = extract_dir
+            # For Sourceforge ZIPs, files are extracted directly without a wrapper folder
+            # The subfolder path already points to the correct location within the ZIP
+            repo_root = extract_dir
             
             # Create target directories using mod name for assets, folder name for patch
             mod_dir = os.path.join('assets', 'mods', patch_name)
@@ -1722,16 +1863,23 @@ class PatchManagerDialog(QtWidgets.QDialog):
             
             # Copy stage files
             stage_source = os.path.join(repo_root, stage_subfolder)
+            print(f"[_install_patch_files] Stage source: {stage_source}")
+            print(f"[_install_patch_files] Stage source exists: {os.path.exists(stage_source)}")
             if os.path.exists(stage_source):
-                for item in os.listdir(stage_source):
+                items = os.listdir(stage_source)
+                print(f"[_install_patch_files] Stage items found: {len(items)}")
+                for item in items:
                     src = os.path.join(stage_source, item)
                     dst = os.path.join(stage_dir, item)
+                    print(f"[_install_patch_files] Copying stage: {item}")
                     if os.path.isdir(src):
                         if os.path.exists(dst):
                             shutil.rmtree(dst)
                         shutil.copytree(src, dst)
                     else:
                         shutil.copy2(src, dst)
+            else:
+                print(f"[_install_patch_files] WARNING: Stage source does not exist!")
             
             # Copy texture files (if different from stage)
             if texture_subfolder and texture_subfolder != stage_subfolder:
@@ -1752,18 +1900,24 @@ class PatchManagerDialog(QtWidgets.QDialog):
                 if os.path.exists(texture_source):
                     setSetting('TextureGamePath_' + patch_name, texture_source)
             
-            # Copy patch files (entire folder contents)
-            patch_source = os.path.join(repo_root, patch_subfolder)
-            if os.path.exists(patch_source):
-                for item in os.listdir(patch_source):
-                    src = os.path.join(patch_source, item)
-                    dst = os.path.join(patch_dir, item)
-                    if os.path.isdir(src):
-                        if os.path.exists(dst):
-                            shutil.rmtree(dst)
-                        shutil.copytree(src, dst)
-                    else:
-                        shutil.copy2(src, dst)
+            # Copy patch files (entire folder contents) if patch subfolder exists
+            if patch_subfolder:
+                patch_source = os.path.join(repo_root, patch_subfolder)
+                if os.path.exists(patch_source):
+                    for item in os.listdir(patch_source):
+                        src = os.path.join(patch_source, item)
+                        dst = os.path.join(patch_dir, item)
+                        if os.path.isdir(src):
+                            if os.path.exists(dst):
+                                shutil.rmtree(dst)
+                            shutil.copytree(src, dst)
+                        else:
+                            shutil.copy2(src, dst)
+            else:
+                # No patch URL - create basic main.xml
+                main_xml_path = os.path.join(patch_dir, 'main.xml')
+                if not os.path.exists(main_xml_path):
+                    self._create_basic_patch(patch_name, patch_dir, entry)
             
             # Update settings
             setSetting('StageGamePath_' + patch_name, stage_dir)
@@ -1783,8 +1937,8 @@ class PatchManagerDialog(QtWidgets.QDialog):
             self._populate_catalog()
             self._populate_table()
             
-            # Clean up temp directory
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            # Temp directory will be cleaned up when Patch Manager closes
+            print(f"[_install_patch_files] Installation complete, temp dir will be cleaned on exit: {temp_dir}")
             
             QtWidgets.QMessageBox.information(self, 'Installation Complete', f'{patch_name} has been installed successfully!')
             
@@ -1804,9 +1958,22 @@ class PatchManagerDialog(QtWidgets.QDialog):
         """
         main_xml_path = os.path.join(patch_dir, 'main.xml')
         
+        # Determine base game from entry
+        base_game_value = entry.get('baseGame', '')
+        if not base_game_value:
+            # Default to Newer
+            base_game = 'Newer Super Mario Bros. Wii'
+        elif base_game_value.lower() == 'newer':
+            base_game = 'Newer Super Mario Bros. Wii'
+        elif base_game_value.lower() == 'base':
+            base_game = 'New Super Mario Bros. Wii'
+        else:
+            # Custom value
+            base_game = base_game_value
+        
         # Create XML
         root = etree.Element('game')
-        root.set('base', 'Newer Super Mario Bros. Wii')
+        root.set('base', base_game)
         root.set('name', patch_name)
         root.set('version', entry.get('version', '1.0'))
         root.set('description', entry.get('description', ''))
@@ -1814,3 +1981,98 @@ class PatchManagerDialog(QtWidgets.QDialog):
         # Write to file
         tree = etree.ElementTree(root)
         tree.write(main_xml_path, encoding='utf-8', xml_declaration=True)
+    
+    def _cancel_download(self):
+        """Cancel the active download"""
+        if self.active_download_thread:
+            print("[PatchManager] Cancelling download...")
+            self.download_manager.cancel_download(self.active_download_thread)
+            self.active_download_thread = None
+            self._set_download_ui_state(False)
+            QtWidgets.QMessageBox.information(self, 'Download Cancelled', 'The download has been cancelled.')
+    
+    def _update_download_progress(self, percent: int):
+        """
+        Update the download progress display
+        
+        Args:
+            percent: Progress percentage (0-100)
+        """
+        # Update status label (always visible)
+        patch_name = getattr(self, 'active_download_patch_name', 'Patch')
+        self.downloadStatusLabel.setText(f"📥 Downloading {patch_name}... {percent}%")
+        
+        # Also update button if it still exists
+        if self.active_download_button:
+            try:
+                # Check if button still exists (might be deleted if table refreshed)
+                self.active_download_button.setText(f"Downloading... {percent}%")
+                self.active_download_button.setEnabled(False)  # Gray out during download
+            except RuntimeError:
+                # Button was deleted, clear reference
+                self.active_download_button = None
+    
+    def _reset_download_button(self):
+        """Reset the download button to its original text"""
+        # Clear status label
+        self.downloadStatusLabel.setText('')
+        
+        # Reset button if it exists
+        if self.active_download_button and hasattr(self, 'original_button_text'):
+            try:
+                self.active_download_button.setText(self.original_button_text)
+                self.active_download_button.setEnabled(True)  # Re-enable button
+            except RuntimeError:
+                # Button was deleted, just clear reference
+                pass
+            self.active_download_button = None
+    
+    def _set_download_ui_state(self, downloading: bool):
+        """
+        Enable/disable UI elements during download
+        
+        Args:
+            downloading: True if download is in progress, False otherwise
+        """
+        # Disable/enable bottom buttons
+        self.scanRiivBtn.setEnabled(not downloading)
+        self.addPatchBtn.setEnabled(not downloading)
+        self.buttonBox.button(QtWidgets.QDialogButtonBox.StandardButton.Close).setEnabled(not downloading)
+        
+        # Show/hide cancel button
+        self.cancelDownloadBtn.setVisible(downloading)
+        
+        # Reset button if download is finished
+        if not downloading:
+            self._reset_download_button()
+    
+    def _cleanup_temp_dirs(self):
+        """Clean up all temp directories"""
+        import shutil
+        if not self.temp_dirs:
+            return
+            
+        print(f"[PatchManager] Cleaning up {len(self.temp_dirs)} temp directories...")
+        for zip_url, temp_dir in list(self.temp_dirs.items()):
+            if os.path.exists(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    print(f"[PatchManager] Deleted temp dir: {temp_dir}")
+                except Exception as e:
+                    print(f"[PatchManager] Failed to delete temp dir {temp_dir}: {e}")
+        self.temp_dirs.clear()
+    
+    def accept(self):
+        """Override accept to clean up temp directories before closing"""
+        self._cleanup_temp_dirs()
+        super().accept()
+    
+    def reject(self):
+        """Override reject to clean up temp directories before closing"""
+        self._cleanup_temp_dirs()
+        super().reject()
+    
+    def closeEvent(self, event):
+        """Clean up temp directories when dialog closes"""
+        self._cleanup_temp_dirs()
+        event.accept()

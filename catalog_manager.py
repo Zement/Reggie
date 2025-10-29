@@ -17,8 +17,7 @@ class CatalogManager:
     """
     
     # Catalog URLs
-    # Note: Must use raw.githubusercontent.com for direct file download, not github.com/blob
-    REMOTE_CATALOG_URL = "https://raw.githubusercontent.com/Zement/Reggie/master/assets/catalog/patchcatalog.json"
+    REMOTE_CATALOG_URL = "https://sourceforge.net/projects/reggie-patch-catalog/files/assets/catalog/patchcatalog.json"
     LOCAL_CATALOG_PATH = os.path.join("assets", "catalog", "patchcatalog.json")
     USER_CATALOG_PATH = os.path.join("assets", "catalog", "patchcatalog_user.json")
     
@@ -197,9 +196,9 @@ class CatalogManager:
             if field not in entry:
                 return False, f"Missing required field: {field}"
         
-        # Check that at least stage and patch URLs exist for Method 1
-        if 'stage' not in entry or 'patch' not in entry:
-            return False, "Missing stage or patch URL (required for Method 1)"
+        # Check that at least stage URL exists for Method 1 (patch is optional)
+        if 'stage' not in entry:
+            return False, "Missing stage URL (required for Method 1)"
         
         return True, ""
     
