@@ -1008,6 +1008,22 @@ def LoadEntranceNames(reload_=False):
                 id_, name = line.strip().split(':')
                 names[int(id_)] = name
 
+        if os.path.exists(os.path.join(os.path.dirname(path), 'entrances.png')):
+            ei = []
+            entrance_img_path = os.path.join(os.path.dirname(path), 'entrances.png')
+            src = QtGui.QPixmap(entrance_img_path)
+            
+            # Calculate total number of 24x24 tiles in the image (supports multiple rows)
+            cols = src.width() // 24
+            rows = src.height() // 24
+            
+            # Load images row by row, left to right
+            for row in range(rows):
+                for col in range(cols):
+                    ei.append(src.copy(col * 24, row * 24, 24, 24))
+            
+            globals_.EntranceImages = ei
+
     globals_.EntranceTypeNames = collections.OrderedDict()
     for idx in names:
         globals_.EntranceTypeNames[idx] = globals_.trans.string('EntranceDataEditor', 28, '[id]', idx, '[name]', names[idx])

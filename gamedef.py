@@ -1060,6 +1060,17 @@ def LoadGameDef(name=None, dlg=None):
         # Load entrance names
         if dlg: dlg.setLabelText(globals_.trans.string('Gamedefs', 16))  # Loading entrance names...
         LoadEntranceNames(True)
+        
+        # Reload the entrance editor to update entrance types and images
+        if globals_.mainWindow is not None and hasattr(globals_.mainWindow, 'entranceEditor'):
+            globals_.mainWindow.entranceEditor.reloadEntranceTypes()
+        
+        # Update all entrance items in the current area to use new images
+        if globals_.Area is not None:
+            for ent in globals_.Area.entrances:
+                ent.update()  # Redraws the entrance with new images
+                ent.UpdateListItem()  # Updates the list item text
+        
         if dlg: dlg.setValue(7)
 
     except Exception as e:

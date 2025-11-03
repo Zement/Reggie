@@ -136,6 +136,28 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         self.ent = None
         self.UpdateFlag = False
 
+    def reloadEntranceTypes(self):
+        """
+        Reloads the entrance type names from globals (called when switching patches)
+        """
+        # Save the current entrance type if we have an entrance selected
+        current_enttype = None
+        if self.ent is not None:
+            current_enttype = self.ent.enttype
+        
+        # Clear and reload the combo box
+        self.entranceType.clear()
+        self.entranceType.addItems(globals_.EntranceTypeNames.values())
+        
+        # Restore the selection if we had an entrance selected
+        if current_enttype is not None:
+            try:
+                idx = list(globals_.EntranceTypeNames).index(current_enttype)
+                self.entranceType.setCurrentIndex(idx)
+            except (ValueError, IndexError):
+                # The entrance type doesn't exist in the new patch, default to 0
+                self.entranceType.setCurrentIndex(0)
+
     def setEntrance(self, ent):
         """
         Change the entrance being edited by the editor, update all fields
