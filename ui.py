@@ -1,6 +1,7 @@
 from PyQt6 import QtGui, QtWidgets, QtCore
 from xml.etree import ElementTree
 import os
+import sys
 
 import globals_
 from dirty import setting
@@ -287,8 +288,12 @@ class ReggieTheme:
         cache = self.iconCacheLg if big else self.iconCacheSm
 
         if name not in cache:
-            path = os.path.join('reggiedata', 'ico', 'lg' if big else 'sm', 'icon-')
-            path += name
+            # Special case: use native .icns for main Reggie icon on macOS
+            if name == 'reggie' and sys.platform == 'darwin':
+                path = os.path.join('reggiedata', 'reggie.icns')
+            else:
+                path = os.path.join('reggiedata', 'ico', 'lg' if big else 'sm', 'icon-')
+                path += name
             cache[name] = QtGui.QIcon(path)
 
         return cache[name]

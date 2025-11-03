@@ -204,7 +204,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         QtWidgets.QMainWindow.__init__(self, None)
         # Don't include version here - Qt automatically appends application display name
         self.setWindowTitle('Reggie! Next Level Editor')
-        self.setWindowIcon(QtGui.QIcon('reggiedata/icon.png'))
+        # Use native .icns on macOS for proper dock icon appearance
+        if sys.platform == 'darwin':
+            self.setWindowIcon(QtGui.QIcon('reggiedata/reggie.icns'))
+        else:
+            self.setWindowIcon(QtGui.QIcon('reggiedata/icon.png'))
         self.setIconSize(QtCore.QSize(16, 16))
         self.setUnifiedTitleAndToolBarOnMac(True)
 
