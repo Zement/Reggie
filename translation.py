@@ -796,6 +796,8 @@ class ReggieTranslation:
                     'Entrance ID',
                     'Path Node ID',
                 ),
+                24: 'Show Sprite Images',
+                25: 'Sprite Image',
             },
             'Statusbar': {
                 0: '- 1 object selected',

@@ -907,8 +907,12 @@ def LoadGameDef(name=None, dlg=None):
     # Put the whole thing into a try-except clause
     # to catch whatever errors may happen
     try:
+        sprite_images_enabled = False
+        if globals_.mainWindow is not None and hasattr(globals_.mainWindow, 'sprPicker'):
+            sprite_images_enabled = globals_.mainWindow.sprPicker.show_sprite_images
+            if sprite_images_enabled:
+                globals_.mainWindow.sprPicker.show_sprite_images = False
 
-        # Load the globals_.gamedef
         if dlg: dlg.setLabelText(globals_.trans.string('Gamedefs', 1))  # Loading game patch...
 
         # Clear any existing warning icons when changing patches
@@ -1074,8 +1078,10 @@ def LoadGameDef(name=None, dlg=None):
         if dlg: dlg.setValue(7)
 
     except Exception as e:
-        # Something went wrong loading the patch
-        if dlg: dlg.setValue(7)  # autocloses it
+        if dlg: dlg.setValue(7)
+        
+        if sprite_images_enabled and globals_.mainWindow is not None and hasattr(globals_.mainWindow, 'sprPicker'):
+            globals_.mainWindow.sprPicker.show_sprite_images = True
         
         # If we were trying to load a specific patch and it failed, show a message
         # and fall back to the base game
@@ -1095,8 +1101,11 @@ def LoadGameDef(name=None, dlg=None):
             raise
 
 
-    # Success!
     if dlg: setSetting('LastGameDef', name)
+    
+    if sprite_images_enabled and globals_.mainWindow is not None and hasattr(globals_.mainWindow, 'sprPicker'):
+        globals_.mainWindow.sprPicker.show_sprite_images = True
+    
     return True
 
 @functools.lru_cache(maxsize=None)

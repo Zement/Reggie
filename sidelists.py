@@ -7,6 +7,7 @@ from tiles import RenderObject, TilesetTile
 from ui import ListWidgetWithToolTipSignal
 from misc import LoadSpriteData, LoadSpriteListData, LoadSpriteCategories
 from spriteeditor import SpriteEditorWidget
+from dirty import setting, setSetting
 
 class LevelOverviewWidget(QtWidgets.QWidget):
     """
@@ -748,6 +749,9 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
     Widget that shows a list of available sprites
     """
 
+    # Signal emitted when show sprite images setting changes
+    ShowSpriteListImagesChanged = QtCore.pyqtSignal(bool)
+
     def __init__(self):
         """
         Initializes the widget
@@ -757,6 +761,13 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
         self.setHeaderHidden(True)
         self.setIndentation(16)
         self.currentItemChanged.connect(self.HandleItemChange)
+        
+        # Set icon size for sprite images
+        # Don't set uniform row heights so rows can auto-size based on icon
+        self.setIconSize(QtCore.QSize(48, 48))
+
+        # Load setting for showing sprite images
+        self.show_sprite_images = setting('ShowSpriteListImages', False)
 
         LoadSpriteData()
         LoadSpriteListData()
@@ -843,6 +854,27 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
         self.itemClicked.connect(self.HandleSprReplace)
 
         self.SwitchView(globals_.SpriteCategories[0])
+        
+        # Connect to itemExpanded signal to render search results when expanded
+        self.itemExpanded.connect(self.onItemExpanded)
+
+    def updateAllVisibleItems(self):
+        """
+        Updates sprite images for all visible items in the tree
+        """
+        def updateItemsRecursive(item):
+            # Update this item if it's a sprite (has a valid sprite ID)
+            sprite_id = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+            if sprite_id is not None and sprite_id >= 0:
+                self.updateSpriteImageForItem(item, sprite_id)
+            
+            # Recursively update children
+            for i in range(item.childCount()):
+                updateItemsRecursive(item.child(i))
+        
+        # Update all top-level items
+        for i in range(self.topLevelItemCount()):
+            updateItemsRecursive(self.topLevelItem(i))
 
     def SwitchView(self, view):
         """
@@ -853,6 +885,23 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
 
         for node in view[2]:
             node.setHidden(False)
+        
+        # Update images for newly visible items (only if scene is ready)
+        if self.show_sprite_images:
+            import spritelib as SLib
+            if SLib.Tiles and not all(tile is None for tile in SLib.Tiles):
+                for node in view[2]:
+                    self.updateItemsInCategory(node)
+    
+    def updateItemsInCategory(self, category_item):
+        """
+        Updates sprite images for all items in a category
+        """
+        for i in range(category_item.childCount()):
+            item = category_item.child(i)
+            sprite_id = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+            if sprite_id is not None and sprite_id >= 0:
+                self.updateSpriteImageForItem(item, sprite_id)
 
     def HandleItemChange(self, current, previous):
         """
@@ -879,6 +928,17 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
         self.NoSpritesFound.setHidden(bool(results))
         self.SearchResultsCategory.setExpanded(True)
 
+    def onItemExpanded(self, item):
+        """
+        Called when a tree item is expanded - render images for that category
+        """
+        if not self.show_sprite_images:
+            return
+        
+        # Only render if it's the search results category
+        if hasattr(self, 'SearchResultsCategory') and item == self.SearchResultsCategory:
+            self.updateItemsInCategory(item)
+
     def HandleSprReplace(self, item, column):
         """
         Throws a signal when the selected sprite is used as a replacement
@@ -887,6 +947,90 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
             id_ = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
             if id_ != -1:
                 self.SpriteReplace.emit(id_)
+
+    def toggleSpriteImages(self, state):
+        """
+        Toggles the display of sprite images in the list
+        """
+        # state is 0 (unchecked) or 2 (checked) from stateChanged signal
+        self.show_sprite_images = state == 2
+        setSetting('ShowSpriteListImages', self.show_sprite_images)
+        self.ShowSpriteListImagesChanged.emit(self.show_sprite_images)
+        
+        # Only update images if scene is ready (tiles loaded)
+        import spritelib as SLib
+        if SLib.Tiles and not all(tile is None for tile in SLib.Tiles):
+            # Update all visible items to show/hide images
+            self.updateAllVisibleItems()
+
+    def updateSpriteImageForItem(self, item, sprite_id):
+        """
+        Updates the sprite image for a specific tree item
+        """
+        if not self.show_sprite_images:
+            return
+        
+        try:
+            from levelitems import SpriteItem
+            from raw_data import RawData
+            
+            if globals_.Area is None:
+                return
+            
+            if not hasattr(globals_.Area, 'preview_loaded_sprites'):
+                globals_.Area.preview_loaded_sprites = set()
+            
+            if sprite_id not in globals_.Area.preview_loaded_sprites:
+                globals_.Area.preview_loaded_sprites.add(sprite_id)
+            
+            temp_sprite = None
+            try:
+                temp_data = RawData(b'\x00\x00\x00\x00\x00\x00\x00\x00', format=RawData.Format.Vanilla)
+                temp_sprite = SpriteItem(sprite_id, 0, 0, temp_data)
+            except:
+                return
+            
+            try:
+                globals_.mainWindow.scene.addItem(temp_sprite)
+            except:
+                return
+            
+            img = None
+            try:
+                img = temp_sprite.renderInLevelIcon()
+                if img is None:
+                    return
+            except:
+                return
+            finally:
+                try:
+                    if temp_sprite is not None:
+                        globals_.mainWindow.scene.removeItem(temp_sprite)
+                except:
+                    pass
+            
+            background = QtGui.QPixmap(48, 48)
+            background.fill(globals_.theme.color('bg'))
+            
+            scaled_img = img.scaled(
+                80, 80,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation
+            )
+            
+            scaled_pixmap = QtGui.QPixmap.fromImage(scaled_img)
+            
+            painter = QtGui.QPainter(background)
+            try:
+                x = (48 - scaled_pixmap.width()) // 2
+                y = (48 - scaled_pixmap.height()) // 2
+                painter.drawPixmap(x, y, scaled_pixmap)
+            finally:
+                painter.end()
+            
+            item.setIcon(0, QtGui.QIcon(background))
+        except:
+            pass
 
     SpriteChanged = QtCore.pyqtSignal(int)
     SpriteReplace = QtCore.pyqtSignal(int)

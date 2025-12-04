@@ -1279,6 +1279,16 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.sprPicker.SpriteChanged.connect(self.SpriteChoiceChanged)
         self.sprPicker.SpriteReplace.connect(self.SpriteReplace)
         self.sprPicker.SwitchView(globals_.SpriteCategories[0])
+        
+        # Add checkbox for showing sprite images
+        showImagesCheckbox = QtWidgets.QCheckBox(globals_.trans.string('Sprites', 24))
+        showImagesCheckbox.stateChanged.connect(self.sprPicker.toggleSpriteImages)
+        # Block signals while setting initial state to avoid rendering during initialization
+        showImagesCheckbox.blockSignals(True)
+        showImagesCheckbox.setChecked(self.sprPicker.show_sprite_images)
+        showImagesCheckbox.blockSignals(False)
+        spl.addWidget(showImagesCheckbox)
+        
         spl.addWidget(self.sprPicker, 1)
 
         self.defaultPropButton = QtWidgets.QPushButton(globals_.trans.string('Palette', 6))

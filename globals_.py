@@ -64,7 +64,7 @@ ReggieVersionFloat = 4.9
 # Version format: v[Major].[Minor].[Patch]-[MinorPatch]-[CommitID]
 # MinorPatch increments with each commit for proper sorting
 # Version is determined dynamically from git tags at runtime
-ReggieVersionShort = 'v4.9.1-12'  # Fallback if git is not available (update manually with each release)
+ReggieVersionShort = 'v4.9.1-16'  # Fallback if git is not available (update manually with each release)
 ResetDataWhenHiding = False
 RestoredFromAutoSave = False
 SettingsActions = None

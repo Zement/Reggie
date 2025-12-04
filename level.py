@@ -267,6 +267,7 @@ class Area:
         self.loaded_sprites = set()
         self.force_loaded_sprites = set()
         self.sprite_idtypes = {}  # {idtype: {id: number of usages of id}}
+        self.preview_loaded_sprites = set()  # Internal: sprites loaded for preview rendering only
 
         self.MetaData = None
         self._is_loaded = False
@@ -283,6 +284,9 @@ class Area:
         """
         Loads default data.
         """
+        # Clear preview loaded sprites from previous level/patch
+        self.preview_loaded_sprites = set()
+        
         # Metadata
         self.LoadReggieInfo(None)
 
@@ -388,6 +392,8 @@ class Area:
                 self.force_loaded_sprites = set()
             if not hasattr(self, 'sprite_idtypes'):
                 self.sprite_idtypes = {}
+            if not hasattr(self, 'preview_loaded_sprites'):
+                self.preview_loaded_sprites = set()
 
         # Load the editor metadata
         if self.course is not None and self.block1pos[0] != 0x70:
@@ -1068,7 +1074,8 @@ class Area:
         """
         Saves the list of loaded sprites back to block 9
         """
-        ls = sorted(set(sprite.type for sprite in self.sprites) | self.force_loaded_sprites)
+        # Include sprites in level, force-loaded sprites, and preview-loaded sprites (for rendering)
+        ls = sorted(set(sprite.type for sprite in self.sprites) | self.force_loaded_sprites | self.preview_loaded_sprites)
 
         offset = 0
         sprstruct = struct.Struct('>Hxx')

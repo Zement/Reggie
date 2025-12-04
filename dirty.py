@@ -18,7 +18,7 @@ def SetDirty(noautosave = False):
 # Define which group each setting belongs to
 # Note: Using 'Main' instead of 'General' to avoid QSettings URL encoding to %General
 SETTING_GROUPS = {
-    'View': ['ShowSprites', 'ShowSpriteImages', 'ShowLocations', 'ShowComments', 
+    'View': ['ShowSprites', 'ShowSpriteImages', 'ShowSpriteListImages', 'ShowLocations', 'ShowComments', 
              'ShowPaths', 'ShowCollisions', 'RealViewEnabled', 'GridType'],
     'Freeze': ['FreezeObjects', 'FreezeSprites', 'FreezeEntrances', 
                'FreezeLocations', 'FreezePaths', 'FreezeComments'],
