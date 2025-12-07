@@ -8,8 +8,6 @@ from quickpaint.core.brush import SmartBrush, TilesetCategory
 from quickpaint.core.presets import PresetManager
 from quickpaint.core.modes import SmartPaintMode, SingleTileMode, ShapeCreator, PaintingDirection
 
-from quickpaint.ui.tile_picker import TilePicker
-
 
 class QuickPaintWidget(QtWidgets.QWidget):
     """
