@@ -1,0 +1,36 @@
+{
+  "name": "Pa1_kaigan",
+  "tileset_names": [
+    "Pa1_kaigan"
+  ],
+  "category": "cat3",
+  "terrain": {
+    "center": 1,
+    "top": 2,
+    "bottom": 3,
+    "left": 4,
+    "right": 5,
+    "top_left": 6,
+    "top_right": 7,
+    "bottom_left": 8,
+    "bottom_right": 9,
+    "inner_top_left": 10,
+    "inner_top_right": 11,
+    "inner_bottom_left": 12,
+    "inner_bottom_right": 13
+  },
+  "slopes": {
+    "floor_up_1x1": 0,
+    "floor_up_2x1": 0,
+    "floor_up_4x1": 0,
+    "floor_down_1x1": 0,
+    "floor_down_2x1": 0,
+    "floor_down_4x1": 0,
+    "ceiling_up_1x1": 0,
+    "ceiling_up_2x1": 0,
+    "ceiling_up_4x1": 0,
+    "ceiling_down_1x1": 0,
+    "ceiling_down_2x1": 0,
+    "ceiling_down_4x1": 0
+  }
+}

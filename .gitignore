@@ -160,6 +160,9 @@ BRANCH_MERGE_ANALYSIS.md
 reggiedata/patches/*
 Reggie-Next.code-workspace
 
+# Documentation and test files (moved to _docs folder)
+_docs/
+
 # Assets folder contents (keep folder structure only)
 assets/mods/*
 assets/snapshots/*

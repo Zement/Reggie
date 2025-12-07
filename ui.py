@@ -6,6 +6,16 @@ import sys
 import globals_
 from dirty import setting
 
+# Lazy QColor creation to avoid creating Qt objects before QApplication exists
+_color_cache = {}
+
+def _make_color(*args):
+    """Create a QColor, caching the result"""
+    key = args
+    if key not in _color_cache:
+        _color_cache[key] = QtGui.QColor(*args)
+    return _color_cache[key]
+
 def LoadTheme():
     """
     Loads the theme
@@ -43,52 +53,67 @@ class ReggieTheme:
         self.useRoundedRectangles = True
         self.overridesFile = os.path.join('reggiedata', 'overrides.png')
 
-        # Add the colors                                                       # Descriptions:
-        self.colors = {
-            'bg': QtGui.QColor(119, 136, 153),  # Main scene background fill
-            'comment_fill': QtGui.QColor(220, 212, 135, 120),  # Unselected comment fill
-            'comment_fill_s': QtGui.QColor(254, 240, 240, 240),  # Selected comment fill
-            'comment_lines': QtGui.QColor(192, 192, 192, 120),  # Unselected comment lines
-            'comment_lines_s': QtGui.QColor(220, 212, 135, 240),  # Selected comment lines
-            'entrance_fill': QtGui.QColor(190, 0, 0, 120),  # Unselected entrance fill
-            'entrance_fill_s': QtGui.QColor(190, 0, 0, 240),  # Selected entrance fill
-            'entrance_lines': QtGui.QColor(0, 0, 0),  # Unselected entrance lines
-            'entrance_lines_s': QtGui.QColor(255, 255, 255),  # Selected entrance lines
-            'grid': QtGui.QColor(255, 255, 255, 100),  # Grid
-            'location_fill': QtGui.QColor(114, 42, 188, 70),  # Unselected location fill
-            'location_fill_s': QtGui.QColor(170, 128, 215, 100),  # Selected location fill
-            'location_lines': QtGui.QColor(0, 0, 0),  # Unselected location lines
-            'location_lines_s': QtGui.QColor(255, 255, 255),  # Selected location lines
-            'location_text': QtGui.QColor(255, 255, 255),  # Location text
-            'object_fill_s': QtGui.QColor(255, 255, 255, 64),  # Select object fill
-            'object_lines_s': QtGui.QColor(255, 255, 255),  # Selected object lines
-            'object_lines_r': QtGui.QColor(0, 148, 255),  # Clicked object corner
-            'overview_entrance': QtGui.QColor(255, 0, 0),  # Overview entrance fill
-            'overview_location_fill': QtGui.QColor(114, 42, 188, 50),  # Overview location fill
-            'overview_location_lines': QtGui.QColor(0, 0, 0),  # Overview location lines
-            'overview_object': QtGui.QColor(255, 255, 255),  # Overview object fill
-            'overview_sprite': QtGui.QColor(0, 92, 196),  # Overview sprite fill
-            'overview_viewbox': QtGui.QColor(0, 0, 255),  # Overview background fill
-            'overview_zone_fill': QtGui.QColor(47, 79, 79, 120),  # Overview zone fill
-            'overview_zone_lines': QtGui.QColor(0, 255, 255),  # Overview zone lines
-            'path_connector': QtGui.QColor(6, 249, 20),  # Path node connecting lines
-            'path_fill': QtGui.QColor(6, 249, 20, 120),  # Unselected path node fill
-            'path_fill_s': QtGui.QColor(6, 249, 20, 240),  # Selected path node fill
-            'path_lines': QtGui.QColor(0, 0, 0),  # Unselected path node lines
-            'path_lines_s': QtGui.QColor(255, 255, 255),  # Selected path node lines
-            'smi': QtGui.QColor(255, 255, 255, 80),  # Sprite movement indicator
-            'sprite_fill_s': QtGui.QColor(255, 255, 255, 64),  # Selected sprite w/ image fill
-            'sprite_lines_s': QtGui.QColor(255, 255, 255),  # Selected sprite w/ image lines
-            'spritebox_fill': QtGui.QColor(0, 92, 196, 120),  # Unselected sprite w/o image fill
-            'spritebox_fill_s': QtGui.QColor(0, 92, 196, 240),  # Selected sprite w/o image fill
-            'spritebox_lines': QtGui.QColor(0, 0, 0),  # Unselected sprite w/o image fill
-            'spritebox_lines_s': QtGui.QColor(255, 255, 255),  # Selected sprite w/o image fill
-            'zone_entrance_helper': QtGui.QColor(190, 0, 0, 120),  # Zone entrance-placement left border indicator
-            'zone_lines': QtGui.QColor(145, 200, 255, 176),  # Zone lines
-            'zone_corner': QtGui.QColor(255, 255, 255),  # Zone grabbers/corners
-            'zone_dark_fill': QtGui.QColor(0, 0, 0, 48),  # Zone fill when dark
-            'zone_text': QtGui.QColor(44, 64, 84),  # Zone text
+        # Don't create colors dict yet - do it lazily
+        self._colors = None
+
+    def _init_colors(self):
+        """Initialize colors lazily after QApplication is created"""
+        if self._colors is not None:
+            return
+        
+        # Add the colors (created lazily after QApplication is created)
+        # Descriptions:
+        self._colors = {
+            'bg': _make_color(119, 136, 153),  # Main scene background fill
+            'comment_fill': _make_color(220, 212, 135, 120),  # Unselected comment fill
+            'comment_fill_s': _make_color(254, 240, 240, 240),  # Selected comment fill
+            'comment_lines': _make_color(192, 192, 192, 120),  # Unselected comment lines
+            'comment_lines_s': _make_color(220, 212, 135, 240),  # Selected comment lines
+            'entrance_fill': _make_color(190, 0, 0, 120),  # Unselected entrance fill
+            'entrance_fill_s': _make_color(190, 0, 0, 240),  # Selected entrance fill
+            'entrance_lines': _make_color(0, 0, 0),  # Unselected entrance lines
+            'entrance_lines_s': _make_color(255, 255, 255),  # Selected entrance lines
+            'grid': _make_color(255, 255, 255, 100),  # Grid
+            'location_fill': _make_color(114, 42, 188, 70),  # Unselected location fill
+            'location_fill_s': _make_color(170, 128, 215, 100),  # Selected location fill
+            'location_lines': _make_color(0, 0, 0),  # Unselected location lines
+            'location_lines_s': _make_color(255, 255, 255),  # Selected location lines
+            'location_text': _make_color(255, 255, 255),  # Location text
+            'object_fill_s': _make_color(255, 255, 255, 64),  # Select object fill
+            'object_lines_s': _make_color(255, 255, 255),  # Selected object lines
+            'object_lines_r': _make_color(0, 148, 255),  # Clicked object corner
+            'overview_entrance': _make_color(255, 0, 0),  # Overview entrance fill
+            'overview_location_fill': _make_color(114, 42, 188, 50),  # Overview location fill
+            'overview_location_lines': _make_color(0, 0, 0),  # Overview location lines
+            'overview_object': _make_color(255, 255, 255),  # Overview object fill
+            'overview_sprite': _make_color(0, 92, 196),  # Overview sprite fill
+            'overview_viewbox': _make_color(0, 0, 255),  # Overview background fill
+            'overview_zone_fill': _make_color(47, 79, 79, 120),  # Overview zone fill
+            'overview_zone_lines': _make_color(0, 255, 255),  # Overview zone lines
+            'path_connector': _make_color(6, 249, 20),  # Path node connecting lines
+            'path_fill': _make_color(6, 249, 20, 120),  # Unselected path node fill
+            'path_fill_s': _make_color(6, 249, 20, 240),  # Selected path node fill
+            'path_lines': _make_color(0, 0, 0),  # Unselected path node lines
+            'path_lines_s': _make_color(255, 255, 255),  # Selected path node lines
+            'smi': _make_color(255, 255, 255, 80),  # Sprite movement indicator
+            'sprite_fill_s': _make_color(255, 255, 255, 64),  # Selected sprite w/ image fill
+            'sprite_lines_s': _make_color(255, 255, 255),  # Selected sprite w/ image lines
+            'spritebox_fill': _make_color(0, 92, 196, 120),  # Unselected sprite w/o image fill
+            'spritebox_fill_s': _make_color(0, 92, 196, 240),  # Selected sprite w/o image fill
+            'spritebox_lines': _make_color(0, 0, 0),  # Unselected sprite w/o image fill
+            'spritebox_lines_s': _make_color(255, 255, 255),  # Selected sprite w/o image fill
+            'zone_entrance_helper': _make_color(190, 0, 0, 120),  # Zone entrance-placement left border indicator
+            'zone_lines': _make_color(145, 200, 255, 176),  # Zone lines
+            'zone_corner': _make_color(255, 255, 255),  # Zone grabbers/corners
+            'zone_dark_fill': _make_color(0, 0, 0, 48),  # Zone fill when dark
+            'zone_text': _make_color(44, 64, 84),  # Zone text
         }
+
+    @property
+    def colors(self):
+        """Lazy-load colors dictionary"""
+        self._init_colors()
+        return self._colors
 
     def initFromFolder(self, folder):
         """

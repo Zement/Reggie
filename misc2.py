@@ -148,6 +148,14 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
         """
         Overrides mouse pressing events if needed
         """
+        # Check if Quick Paint Tool should handle this event
+        try:
+            import reggie
+            if reggie._qpt_functions and reggie._qpt_functions['press'](event):
+                event.accept()
+                return
+        except (ImportError, Exception, AttributeError):
+            pass
 
         if event.button() == QtCore.Qt.MouseButton.BackButton:
             self.xButtonScrollTimer = QtCore.QTimer()
@@ -366,6 +374,15 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
         """
         Overrides mouse movement events if needed
         """
+        # Check if Quick Paint Tool should handle this event
+        try:
+            import reggie
+            if reggie._qpt_functions and reggie._qpt_functions['move'](event):
+                event.accept()
+                return
+        except (ImportError, Exception, AttributeError):
+            pass
+
         pos = self.mapToScene(event.pos())
         if pos.x() < 0: pos.setX(0)
         if pos.y() < 0: pos.setY(0)
@@ -398,6 +415,15 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
         """
         Overrides mouse release events if needed
         """
+        # Check if Quick Paint Tool should handle this event
+        try:
+            import reggie
+            if reggie._qpt_functions and reggie._qpt_functions['release'](event):
+                event.accept()
+                return
+        except (ImportError, Exception, AttributeError):
+            pass
+
         if event.button() in (QtCore.Qt.MouseButton.BackButton, QtCore.Qt.MouseButton.ForwardButton):
             self.xButtonScrollTimer.stop()
             return

@@ -1,0 +1,351 @@
+================================================================================
+                    QUICK PAINT TOOL (QPT) ARCHITECTURE
+================================================================================
+
+1. PACKAGE STRUCTURE
+================================================================================
+
+quickpaint/
+│
+├── __init__.py                          # Package initialization
+│
+├── core/                                # Core painting logic
+│   ├── __init__.py
+│   ├── brush.py                         # SmartBrush data structure
+│   │   └── class SmartBrush
+│   │       ├── terrain: dict (8 positions)
+│   │       ├── slopes: dict (6 slope types)
+│   │       ├── to_json()
+│   │       └── from_json()
+│   │
+│   ├── painter.py                       # Painting operations
+│   │   └── class QuickPainter
+│   │       ├── bresenham_line()         # Interpolation
+│   │       ├── auto_tile_8neighbor()    # Auto-tiling logic
+│   │       ├── paint_smart()            # Mode A: Smart Paint
+│   │       ├── paint_single_tile()      # Mode B: Single-Tile
+│   │       ├── create_shape()           # Mode C: Shape Creator
+│   │       └── paint_deferred()         # Batch operations
+│   │
+│   └── presets.py                       # Preset management
+│       ├── load_builtin_presets()
+│       ├── load_user_presets()
+│       ├── save_preset()
+│       ├── delete_preset()
+│       └── get_preset()
+│
+├── ui/                                  # User interface
+│   ├── __init__.py
+│   ├── widget.py                        # Main QPT dock widget
+│   │   └── class QuickPaintWidget
+│   │       ├── mode_selector
+│   │       ├── brush_selector
+│   │       ├── tile_picker
+│   │       ├── mousePressEvent()
+│   │       ├── mouseMoveEvent()
+│   │       └── mouseReleaseEvent()
+│   │
+│   ├── tile_picker.py                   # Tile picker UI
+│   │   └── class TilePickerWidget
+│   │       ├── display_tileset()
+│   │       ├── on_tile_selected()
+│   │       └── show_preview()
+│   │
+│   └── dialogs.py                       # Dialogs
+│       ├── class SavePresetDialog
+│       ├── class LoadPresetDialog
+│       └── class DeletePresetDialog
+│
+├── utils/                               # Utilities
+│   ├── __init__.py
+│   └── constants.py                     # Enums, constants
+│       ├── PaintMode (SMART, SINGLE, SHAPE)
+│       ├── ShapeType (RECTANGLE, ELLIPSE)
+│       └── SlopeType (FLOOR_1x1, FLOOR_1x2, ...)
+│
+└── tests/                               # Unit tests
+    ├── test_brush.py
+    ├── test_painter.py
+    └── test_presets.py
+
+
+2. DATA FLOW DIAGRAM
+================================================================================
+
+USER INPUT (Mouse Events)
+    │
+    ├─→ QuickPaintWidget.mousePressEvent()
+    │   └─→ Store initial position
+    │
+    ├─→ QuickPaintWidget.mouseMoveEvent() [repeated]
+    │   ├─→ QuickPainter.bresenham_line()
+    │   │   └─→ Interpolate coordinates
+    │   └─→ Store path points (deferred)
+    │
+    └─→ QuickPaintWidget.mouseReleaseEvent()
+        ├─→ Get selected SmartBrush
+        ├─→ Get selected PaintMode
+        │
+        ├─→ if SMART mode:
+        │   └─→ QuickPainter.paint_smart(path, brush)
+        │       └─→ for each point in path:
+        │           ├─→ QuickPainter.auto_tile_8neighbor()
+        │           └─→ Determine tile ID
+        │
+        ├─→ if SINGLE mode:
+        │   └─→ QuickPainter.paint_single_tile(path, tile_id)
+        │
+        ├─→ if SHAPE mode:
+        │   └─→ QuickPainter.create_shape(shape_type, start, end, brush)
+        │
+        └─→ QuickPainter.paint_deferred(deferred_tiles)
+            └─→ for each tile in deferred_tiles:
+                └─→ reggie.MainWindow.CreateObject()
+
+
+3. SMARTBRUSH DATA STRUCTURE
+================================================================================
+
+SmartBrush
+├── name: str                            # Preset name
+├── tileset_index: int                   # 0-3 (Pa0, Pa1, Pa2, Pa3)
+│
+├── terrain: dict                        # 8-neighbor positions
+│   ├── 'center': int                    # Center tile
+│   ├── 'top': int                       # Top edge
+│   ├── 'bottom': int                    # Bottom edge
+│   ├── 'left': int                      # Left edge
+│   ├── 'right': int                     # Right edge
+│   ├── 'top_left': int                  # Top-left corner (outer)
+│   ├── 'top_right': int                 # Top-right corner (outer)
+│   ├── 'bottom_left': int               # Bottom-left corner (outer)
+│   └── 'bottom_right': int              # Bottom-right corner (outer)
+│
+└── slopes: dict                         # Slope tiles
+    ├── 'floor_1x1': int                 # 1x1 floor slope
+    ├── 'floor_1x2': int                 # 1x2 floor slope
+    ├── 'floor_1x4': int                 # 1x4 floor slope
+    ├── 'ceiling_1x1': int               # 1x1 ceiling slope
+    ├── 'ceiling_1x2': int               # 1x2 ceiling slope
+    └── 'ceiling_1x4': int               # 1x4 ceiling slope
+
+
+4. AUTO-TILING BITMASKING
+================================================================================
+
+8-Neighbor Positions:
+    TL  T  TR
+    L   X  R
+    BL  B  BR
+
+Bit Flags:
+    Bit 0 (0x01) = TopLeft
+    Bit 1 (0x02) = Top
+    Bit 2 (0x04) = TopRight
+    Bit 3 (0x08) = Left
+    Bit 4 (0x10) = Right
+    Bit 5 (0x20) = BottomLeft
+    Bit 6 (0x40) = Bottom
+    Bit 7 (0x80) = BottomRight
+
+Example:
+    If neighbors are:  X . X
+                       . X .
+                       X . X
+    
+    Flag = 0x01 | 0x04 | 0x20 | 0x80 = 0xA5
+    
+    Lookup table maps 0xA5 → 'top_left' corner tile
+
+
+5. PAINTING MODES
+================================================================================
+
+MODE A: Smart Paint (Outline & Slopes)
+├── Logic: 8-neighbor auto-tiling
+├── Output: Outline of terrain structure
+├── Slope Detection: Mouse vector angle
+│   ├── 45°-135°: Vertical slope (ceiling)
+│   ├── 225°-315°: Vertical slope (floor)
+│   ├── 315°-45°: Horizontal slope (right)
+│   └── 135°-225°: Horizontal slope (left)
+├── Size Detection: Stroke length/speed
+│   ├── Short: 1x1 slope
+│   ├── Medium: 1x2 slope
+│   └── Long: 1x4 slope
+└── Constraint: Only paints outline, not fill
+
+MODE B: Single-Tile Mode
+├── Logic: Paint same tile ID at every point
+├── Input: Selected tile ID
+├── Output: Continuous line of same tile
+└── Use Case: Quick terrain painting without auto-tiling
+
+MODE C: Shape Creator (Island Maker)
+├── Logic: Drag to create shape
+├── Shapes: Rectangle, Ellipse
+├── Output: Shape with auto-tiled borders
+├── Process:
+│   ├── 1. User drags from start to end
+│   ├── 2. Shape outline calculated
+│   ├── 3. Auto-tiling applied to borders
+│   ├── 4. Fill applied to interior
+│   └── 5. Finalized on mouse release
+└── Use Case: Quick island/platform creation
+
+
+6. PRESET SYSTEM
+================================================================================
+
+Builtin Presets (assets/qpt/builtin/)
+├── Pa0_nohara.json
+├── Pa1_nohara.json
+├── Pa2_nohara.json
+└── Pa3_nohara.json
+
+User Presets (assets/qpt/presets/)
+├── MyCustomBrush.json
+├── AnotherBrush.json
+└── ...
+
+JSON Format:
+{
+  "name": "Pa1_nohara",
+  "tileset_index": 1,
+  "terrain": {
+    "center": 0,
+    "top": 1,
+    "bottom": 2,
+    ...
+  },
+  "slopes": {
+    "floor_1x1": 10,
+    "floor_1x2": 11,
+    ...
+  }
+}
+
+
+7. INTEGRATION WITH REGGIE
+================================================================================
+
+Reggie Main Window
+├── SetupDocksAndPanels()
+│   └── Create QuickPaintWidget dock
+│
+├── mousePressEvent() → misc2.py
+│   └── Check globals_.CurrentPaintType == 9 (QPT mode)
+│
+├── CreateObject()
+│   └── Called by QuickPainter.paint_deferred()
+│
+└── Undo/Redo System
+    └── Each CreateObject() call is undoable
+
+Global State
+├── globals_.CurrentPaintType = 9        # QPT mode
+├── globals_.CurrentLayer = 0-2          # Layer selection
+└── globals_.Area.layers[layer]          # Level access
+
+Settings Persistence
+├── dirty.py: Save selected brush
+├── assets/qpt/presets/: Save user presets
+└── Load on startup, save on exit
+
+
+8. PERFORMANCE CONSIDERATIONS
+================================================================================
+
+Deferred Painting System:
+├── Collect all tile coordinates during mouse drag
+├── Store in deferred_tiles dict: (x, y, layer) → tile_id
+├── Execute all at once on mouse release
+├── Prevents lag from immediate painting
+└── Enables undo/redo integration
+
+Object Search Database:
+├── Maintain (x, y, layer) → object mapping
+├── O(1) lookup for neighbor checking
+├── Updated after each paint operation
+└── Critical for auto-tiling performance
+
+Chunk Updates:
+├── Only update affected tiles
+├── Don't redraw entire level
+├── Batch updates on mouse release
+└── Reduces rendering overhead
+
+Bresenham Interpolation:
+├── Prevents gaps in fast strokes
+├── Interpolates between frames
+├── Maintains SMM-like feel
+└── Minimal performance impact
+
+
+9. TESTING STRATEGY
+================================================================================
+
+Unit Tests:
+├── test_brush.py
+│   ├── SmartBrush.to_json()
+│   ├── SmartBrush.from_json()
+│   └── SmartBrush validation
+│
+├── test_painter.py
+│   ├── bresenham_line() correctness
+│   ├── auto_tile_8neighbor() logic
+│   ├── paint_smart() output
+│   ├── paint_single_tile() output
+│   └── create_shape() output
+│
+└── test_presets.py
+    ├── load_builtin_presets()
+    ├── load_user_presets()
+    ├── save_preset()
+    └── delete_preset()
+
+Integration Tests:
+├── QPT with Reggie level system
+├── Undo/redo compatibility
+├── External patch compatibility
+└── Performance profiling
+
+Manual Testing:
+├── All three painting modes
+├── All preset types
+├── Fast strokes (Bresenham)
+├── Large shapes
+└── External patches
+
+
+10. TIMELINE ESTIMATE
+================================================================================
+
+Phase 1: Foundation (2-3 days)
+├── SmartBrush class
+├── Preset system
+└── Hardcoded presets
+
+Phase 2: Painting Engine (3-4 days)
+├── Bresenham algorithm
+├── Auto-tiling logic
+└── Deferred painting
+
+Phase 3: Painting Modes (4-5 days)
+├── Mode A: Smart Paint
+├── Mode B: Single-Tile
+└── Mode C: Shape Creator
+
+Phase 4: UI Integration (3-4 days)
+├── Tile picker
+├── Main widget
+└── Dock integration
+
+Phase 5: Testing & Refinement (2-3 days)
+├── Unit tests
+├── Integration tests
+└── Performance profiling
+
+TOTAL: 15-20 days
+
+================================================================================

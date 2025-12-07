@@ -1,0 +1,37 @@
+{
+  "name": "Nohara basically",
+  "tileset_names": [
+    "Pa1_nohara.*",
+    "Pa2_nohara"
+  ],
+  "category": "cat1",
+  "terrain": {
+    "center": 1,
+    "top": 0,
+    "bottom": 2,
+    "left": 3,
+    "right": 4,
+    "top_left": 5,
+    "top_right": 6,
+    "bottom_left": 7,
+    "bottom_right": 8,
+    "inner_top_left": 9,
+    "inner_top_right": 10,
+    "inner_bottom_left": 11,
+    "inner_bottom_right": 12
+  },
+  "slopes": {
+    "floor_up_1x1": 0,
+    "floor_up_2x1": 0,
+    "floor_up_4x1": 0,
+    "floor_down_1x1": 0,
+    "floor_down_2x1": 0,
+    "floor_down_4x1": 0,
+    "ceiling_up_1x1": 0,
+    "ceiling_up_2x1": 0,
+    "ceiling_up_4x1": 0,
+    "ceiling_down_1x1": 0,
+    "ceiling_down_2x1": 0,
+    "ceiling_down_4x1": 0
+  }
+}
