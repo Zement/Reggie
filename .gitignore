@@ -155,6 +155,7 @@ settings.ini.bak
 /reggiedata/patches/NSMLW/
 
 # Development and analysis files
+.gitignore
 git-workflow-standards.md
 BRANCH_MERGE_ANALYSIS.md
 reggiedata/patches/*
@@ -166,4 +167,5 @@ _docs/
 # Assets folder contents (keep folder structure only)
 assets/mods/*
 assets/snapshots/*
+assets/qpt/presets/*
 
