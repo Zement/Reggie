@@ -74,7 +74,8 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
     
     def init_ui(self):
         """Initialize the UI"""
-        self.setMinimumHeight(300)
+        self.setMinimumHeight(200)
+        self.setMaximumHeight(200)
         self.setStyleSheet("QGraphicsView { background-color: #2a2a2a; border: 1px solid #555; }")
         
         # Draw empty grid placeholder
@@ -95,7 +96,7 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         print("[QPT] Empty grid with tile outlines drawn")
     
     def _draw_tile_outlines(self):
-        """Draw minimalistic tile position outlines using QPaint"""
+        """Draw minimalistic tile position outlines using QPaint with grass details"""
         # Colors: Color 2 (80% opaque gray) for outlines, Color 3 (50% opaque gray) for inner tiles
         outline_color = QtGui.QColor(128, 128, 128, 204)  # 80% opaque gray
         inner_color = QtGui.QColor(128, 128, 128, 127)    # 50% opaque gray
@@ -120,35 +121,118 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                 if position_type == 'center':
                     # Center: empty (transparent)
                     pass
-                elif position_type in ['top', 'bottom', 'left', 'right']:
-                    # Edge tiles: horizontal or vertical line
+                elif position_type == 'top':
+                    # Top edge: horizontal line with grass blades
                     pen = QtGui.QPen(outline_color)
                     pen.setWidth(2)
                     painter.setPen(pen)
+                    painter.drawLine(2, 4, 22, 4)  # Main edge line
                     
-                    if position_type in ['top', 'bottom']:
-                        # Horizontal line
-                        y_pos = 2 if position_type == 'top' else 22
-                        painter.drawLine(2, y_pos, 22, y_pos)
-                    else:
-                        # Vertical line
-                        x_pos = 2 if position_type == 'left' else 22
-                        painter.drawLine(x_pos, 2, x_pos, 22)
+                    # Draw grass blades (3 blades = 6 strokes)
+                    painter.drawLine(6, 2, 8, 4)
+                    painter.drawLine(8, 4, 10, 2)
+                    painter.drawLine(12, 2, 14, 4)
+                    painter.drawLine(14, 4, 16, 2)
+                    painter.drawLine(18, 2, 20, 4)
+                    painter.drawLine(20, 4, 22, 2)
                 
-                elif position_type in ['top_left', 'top_right', 'bottom_left', 'bottom_right']:
-                    # Corner tiles: diagonal line
+                elif position_type == 'bottom':
+                    # Bottom edge: horizontal line with grass blades
+                    pen = QtGui.QPen(outline_color)
+                    pen.setWidth(2)
+                    painter.setPen(pen)
+                    painter.drawLine(2, 20, 22, 20)  # Main edge line
+                    
+                    # Draw grass blades
+                    painter.drawLine(6, 22, 8, 20)
+                    painter.drawLine(8, 20, 10, 22)
+                    painter.drawLine(12, 22, 14, 20)
+                    painter.drawLine(14, 20, 16, 22)
+                    painter.drawLine(18, 22, 20, 20)
+                    painter.drawLine(20, 20, 22, 22)
+                
+                elif position_type in ['left', 'right']:
+                    # Side edges: vertical line
                     pen = QtGui.QPen(outline_color)
                     pen.setWidth(2)
                     painter.setPen(pen)
                     
-                    if position_type == 'top_left':
-                        painter.drawLine(2, 22, 22, 2)
-                    elif position_type == 'top_right':
-                        painter.drawLine(2, 2, 22, 22)
-                    elif position_type == 'bottom_left':
-                        painter.drawLine(2, 2, 22, 22)
-                    else:  # bottom_right
-                        painter.drawLine(2, 22, 22, 2)
+                    if position_type == 'left':
+                        painter.drawLine(4, 2, 4, 22)
+                    else:  # right
+                        painter.drawLine(20, 2, 20, 22)
+                
+                elif position_type == 'top_left':
+                    # Top-left corner: diagonal with rounded corner and grass
+                    pen = QtGui.QPen(outline_color)
+                    pen.setWidth(2)
+                    painter.setPen(pen)
+                    
+                    # Draw diagonal with rounded corner
+                    path = QtGui.QPainterPath()
+                    path.moveTo(4, 22)
+                    path.lineTo(4, 8)
+                    path.arcTo(4, 2, 8, 8, 180, 90)  # Rounded corner
+                    path.lineTo(22, 2)
+                    painter.drawPath(path)
+                    
+                    # Grass blade
+                    painter.drawLine(20, 2, 22, 4)
+                    painter.drawLine(22, 4, 20, 6)
+                
+                elif position_type == 'top_right':
+                    # Top-right corner: diagonal with rounded corner and grass
+                    pen = QtGui.QPen(outline_color)
+                    pen.setWidth(2)
+                    painter.setPen(pen)
+                    
+                    # Draw diagonal with rounded corner
+                    path = QtGui.QPainterPath()
+                    path.moveTo(20, 22)
+                    path.lineTo(20, 8)
+                    path.arcTo(12, 2, 8, 8, 0, 90)  # Rounded corner
+                    path.lineTo(2, 2)
+                    painter.drawPath(path)
+                    
+                    # Grass blade
+                    painter.drawLine(4, 2, 2, 4)
+                    painter.drawLine(2, 4, 4, 6)
+                
+                elif position_type == 'bottom_left':
+                    # Bottom-left corner: diagonal with rounded corner and grass
+                    pen = QtGui.QPen(outline_color)
+                    pen.setWidth(2)
+                    painter.setPen(pen)
+                    
+                    # Draw diagonal with rounded corner
+                    path = QtGui.QPainterPath()
+                    path.moveTo(4, 2)
+                    path.lineTo(4, 16)
+                    path.arcTo(4, 14, 8, 8, 180, -90)  # Rounded corner
+                    path.lineTo(22, 22)
+                    painter.drawPath(path)
+                    
+                    # Grass blade
+                    painter.drawLine(20, 22, 22, 20)
+                    painter.drawLine(22, 20, 20, 18)
+                
+                elif position_type == 'bottom_right':
+                    # Bottom-right corner: diagonal with rounded corner and grass
+                    pen = QtGui.QPen(outline_color)
+                    pen.setWidth(2)
+                    painter.setPen(pen)
+                    
+                    # Draw diagonal with rounded corner
+                    path = QtGui.QPainterPath()
+                    path.moveTo(20, 2)
+                    path.lineTo(20, 16)
+                    path.arcTo(12, 14, 8, 8, 0, -90)  # Rounded corner
+                    path.lineTo(2, 22)
+                    painter.drawPath(path)
+                    
+                    # Grass blade
+                    painter.drawLine(4, 22, 2, 20)
+                    painter.drawLine(2, 20, 4, 18)
                 
                 elif position_type in ['inner_top_left', 'inner_top_right', 'inner_bottom_left', 'inner_bottom_right']:
                     # Inner tiles: solid fill
@@ -467,6 +551,9 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         
         self.scene.clear()
         self.tile_map.clear()
+        
+        # First, redraw the tile position outlines
+        self._draw_tile_outlines()
         
         obj_defs = globals_.ObjectDefinitions[self.tileset_idx]
         if not obj_defs:
