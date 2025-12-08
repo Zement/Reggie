@@ -80,6 +80,9 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         
         # Draw empty grid placeholder
         self.draw_empty_grid()
+        
+        # Add status indicator and clear button to the scene
+        self._add_ui_elements()
     
     def draw_empty_grid(self):
         """Draw an empty 6x8 grid with tile position outlines"""
@@ -88,6 +91,9 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         
         # Draw tile position outlines for each cell in the CAT1 layout
         self._draw_tile_outlines()
+        
+        # Redraw status indicator after clearing
+        self._add_ui_elements()
         
         # Set scene rect to match 6x8 grid at 24x24 cells
         self.scene.setSceneRect(0, 0, 6 * 24, 8 * 24)
@@ -119,9 +125,10 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                 
                 # Draw based on position type
                 if position_type == 'center':
-                    # Center: empty (transparent)
-                    pass
+                    painter.fillRect(1, 1, 23, 23, inner_color)
+
                 elif position_type == 'top':
+                    painter.fillRect(1, 1, 23, 23, inner_color)
                     # Top edge: horizontal line with grass blades going downward
                     pen = QtGui.QPen(outline_color)
                     pen.setWidth(2)
@@ -137,19 +144,12 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                     painter.drawLine(17, 6, 19, 2)
                 
                 elif position_type == 'bottom':
+                    painter.fillRect(1, 1, 23, 23, inner_color)
                     # Bottom edge: horizontal line with increased zig-zag verticality
                     pen = QtGui.QPen(outline_color)
-                    pen.setWidth(2)
+                    pen.setWidth(4)
                     painter.setPen(pen)
-                    painter.drawLine(2, 22, 22, 22)  # Main edge line at bottom
-                    
-                    # Draw zig-zag with more verticality
-                    painter.drawLine(6, 22, 5, 18)
-                    painter.drawLine(5, 18, 7, 22)
-                    painter.drawLine(12, 22, 11, 18)
-                    painter.drawLine(11, 18, 13, 22)
-                    painter.drawLine(18, 22, 17, 18)
-                    painter.drawLine(17, 18, 19, 22)
+                    painter.drawLine(4, 22, 22, 22)  # Main edge line at bottom
                 
                 elif position_type in ['left', 'right']:
                     # Side edges: vertical line
@@ -158,30 +158,36 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                     painter.setPen(pen)
                     
                     if position_type == 'left':
+                        painter.fillRect(4, 1, 23, 23, inner_color)
                         painter.drawLine(4, 2, 4, 22)
                     else:  # right
+                        painter.fillRect(1, 1, 20, 23, inner_color)
                         painter.drawLine(20, 2, 20, 22)
                 
                 elif position_type == 'top_left':
-                    # Top-left corner: same as top_right but rotated 180 degrees
+                    painter.fillRect(4, 3, 23, 23, inner_color)
+                    # Top-left corner: diagonal with rounded corner and grass blades
                     pen = QtGui.QPen(outline_color)
                     pen.setWidth(2)
                     painter.setPen(pen)
                     
-                    # Draw diagonal with rounded corner (rotated 180 degrees from top_right)
+                    # Draw diagonal with rounded corner (mirror of top_right)
                     path = QtGui.QPainterPath()
-                    path.moveTo(20, 22)
-                    path.lineTo(20, 8)
-                    path.arcTo(12, 2, 8, 8, 0, 90)  # Rounded corner
-                    path.lineTo(2, 2)
+                    path.moveTo(4, 22)
+                    path.lineTo(4, 8)
+                    path.arcTo(4, 2, 8, 8, 180, -90)  # Rounded corner
+                    path.lineTo(22, 2)
                     painter.drawPath(path)
                     
-                    # Grass blade
-                    painter.drawLine(4, 2, 2, 4)
-                    painter.drawLine(2, 4, 4, 6)
+                    # Grass blades (2 blades = 4 strokes) - mirrored from top_right
+                    painter.drawLine(10, 2, 9, 6)
+                    painter.drawLine(9, 6, 11, 2)
+                    painter.drawLine(17, 2, 16, 6)
+                    painter.drawLine(16, 6, 18, 2)
                 
                 elif position_type == 'top_right':
-                    # Top-right corner: diagonal with rounded corner and grass
+                    painter.fillRect(1, 3, 20, 23, inner_color)
+                    # Top-right corner: diagonal with rounded corner and grass blades
                     pen = QtGui.QPen(outline_color)
                     pen.setWidth(2)
                     painter.setPen(pen)
@@ -194,25 +200,29 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                     path.lineTo(2, 2)
                     painter.drawPath(path)
                     
-                    # Grass blade
-                    painter.drawLine(4, 2, 2, 4)
-                    painter.drawLine(2, 4, 4, 6)
+                    # Grass blades (2 blades = 4 strokes)
+                    painter.drawLine(7, 2, 6, 6)
+                    painter.drawLine(6, 6, 8, 2)
+                    painter.drawLine(15, 2, 14, 6)
+                    painter.drawLine(14, 6, 16, 2)
                 
                 elif position_type == 'bottom_left':
-                    # Bottom-left corner: same as top_right but rotated 90 degrees clockwise
+                    painter.fillRect(4, 1, 23, 20, inner_color)
+                    # Bottom-left corner: diagonal with rounded corner (flipped from bottom_right)
                     pen = QtGui.QPen(outline_color)
                     pen.setWidth(2)
                     painter.setPen(pen)
                     
-                    # Draw diagonal with rounded corner (rotated 90 degrees from top_right)
+                    # Draw diagonal with rounded corner
                     path = QtGui.QPainterPath()
                     path.moveTo(4, 2)
                     path.lineTo(4, 16)
-                    path.arcTo(4, 14, 8, 8, 180, -90)  # Rounded corner
+                    path.arcTo(4, 14, 8, 8, 180, 90)  # Rounded corner
                     path.lineTo(22, 22)
                     painter.drawPath(path)
                 
                 elif position_type == 'bottom_right':
+                    painter.fillRect(1, 1, 20, 20, inner_color)
                     # Bottom-right corner: same as top_right but rotated 90 degrees counter-clockwise
                     pen = QtGui.QPen(outline_color)
                     pen.setWidth(2)
@@ -227,8 +237,42 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                     painter.drawPath(path)
                 
                 elif position_type in ['inner_top_left', 'inner_top_right', 'inner_bottom_left', 'inner_bottom_right']:
-                    # Inner tiles: solid fill
-                    painter.fillRect(4, 4, 16, 16, inner_color)
+                    # Inner tiles: solid fill with horizontal stroke indicator
+                    painter.fillRect(1, 1, 23, 23, inner_color)
+                    
+                    # Add horizontal stroke indicator at intersection (12px width = half tile)
+                    pen = QtGui.QPen(outline_color)
+                    pen.setWidth(2)
+                    painter.setPen(pen)
+                    
+                    if position_type == 'inner_top_left':
+                        # Horizontal line at center, right half
+                        painter.drawLine(12, 2, 22, 2)
+                        # Draw grass blades going downward (3 blades = 6 strokes)
+                        painter.drawLine(14, 2, 13, 6)
+                        painter.drawLine(13, 6, 15, 2)
+                        painter.drawLine(20, 2, 19, 6)
+                        painter.drawLine(19, 6, 21, 2)
+                    elif position_type == 'inner_top_right':
+                        # Horizontal line at center, left half
+                        painter.drawLine(2, 2, 12, 2)
+                        # Draw grass blades going downward (3 blades = 6 strokes)
+                        painter.drawLine(5, 2, 4, 6)
+                        painter.drawLine(4, 6, 6, 2)
+                        painter.drawLine(10, 2, 9, 6)
+                        painter.drawLine(9, 6, 11, 2)
+                    elif position_type == 'inner_bottom_left':
+                        # Horizontal line at center, right half
+                        pen = QtGui.QPen(outline_color)
+                        pen.setWidth(4)
+                        painter.setPen(pen)
+                        painter.drawLine(14, 22, 22, 22)
+                    elif position_type == 'inner_bottom_right':
+                        # Horizontal line at center, left half
+                        pen = QtGui.QPen(outline_color)
+                        pen.setWidth(4)
+                        painter.setPen(pen)
+                        painter.drawLine(4, 22, 12, 22)
                 
                 painter.end()
                 
@@ -691,3 +735,130 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                 tiles[pos] = tile_id
         
         return tiles
+    
+    def _add_ui_elements(self):
+        """Add status indicator circle and clear button to the view"""
+        # Only create clear button once
+        if not hasattr(self, 'clear_button'):
+            # Clear button (bottom right, hovering)
+            self.clear_button = QtWidgets.QPushButton("CLEAR")
+            self.clear_button.setStyleSheet("QPushButton { background-color: #555; color: white; border: 1px solid #888; padding: 2px; font-size: 9px; }")
+            self.clear_button.clicked.connect(self.clear_all_tiles)
+            self.clear_button.setParent(self)  # Set parent to this view
+        
+        # Position the button
+        self._position_clear_button()
+        self.clear_button.show()
+        
+        # Create status indicator as a custom widget overlay
+        if not hasattr(self, 'status_indicator'):
+            self.status_indicator = QtWidgets.QLabel()
+            self.status_indicator.setParent(self)
+            self.status_indicator.setFixedSize(16, 16)
+            self.status_indicator.setStyleSheet("border-radius: 8px; border: 1px solid gray;")
+        
+        # Position at top-left of the view (not scene)
+        self.status_indicator.move(5, 5)
+        self.status_indicator.show()
+        
+        # Update the status color
+        self.update_status_indicator()
+    
+    def _position_clear_button(self):
+        """Position the clear button at the bottom right of the view"""
+        # This will be repositioned when the view is resized
+        view_rect = self.viewport().rect()
+        button_width = 60
+        button_height = 20
+        x = view_rect.width() - button_width - 5
+        y = view_rect.height() - button_height - 5
+        self.clear_button.setGeometry(x, y, button_width, button_height)
+    
+    def resizeEvent(self, event):
+        """Handle view resize to reposition the clear button"""
+        super().resizeEvent(event)
+        if hasattr(self, 'clear_button'):
+            self._position_clear_button()
+    
+    def update_status_indicator(self):
+        """Update the status indicator circle based on assignment completion"""
+        if not self.brush or not hasattr(self, 'status_indicator'):
+            return
+        
+        # Check if all required tiles are assigned
+        required_positions = ['center', 'top', 'bottom', 'left', 'right', 'top_left', 'top_right', 'bottom_left', 'bottom_right', 'inner_top_left', 'inner_top_right', 'inner_bottom_left', 'inner_bottom_right']
+        all_assigned = all(pos in self.brush.terrain_assigned for pos in required_positions)
+        
+        # Set color: green if all assigned, red if not
+        color = "#00ff00" if all_assigned else "#ff0000"  # Green or Red
+        self.status_indicator.setStyleSheet(f"background-color: {color}; border-radius: 8px; border: 1px solid gray;")
+        
+        status_text = "✓ All assigned" if all_assigned else "⚠ Incomplete"
+        print(f"[QPT] Status: {status_text}")
+    
+    def clear_all_tiles(self):
+        """Clear all assigned tiles from the brush and canvas"""
+        if not self.brush:
+            return
+        
+        print("[QPT] Clearing all assigned tiles...")
+        
+        # Clear all terrain assignments
+        for pos in ['center', 'top', 'bottom', 'left', 'right', 'top_left', 'top_right', 'bottom_left', 'bottom_right', 'inner_top_left', 'inner_top_right', 'inner_bottom_left', 'inner_bottom_right']:
+            self.brush.terrain[pos] = 0
+        
+        # Clear the terrain_assigned set
+        self.brush.terrain_assigned.clear()
+        
+        # Redraw the canvas
+        self.draw_empty_grid()
+        self.update_status_indicator()
+        
+        print("[QPT] ✓ All tiles cleared")
+    
+    def mousePressEvent(self, event):
+        """
+        Handle mouse clicks on the tile picker canvas.
+        Clicking on a cell assigns the selected object to that position.
+        """
+        if not self.brush:
+            print("[QPT] No brush selected, cannot assign tiles")
+            return
+        
+        # Get the scene position from the view position
+        scene_pos = self.mapToScene(event.pos())
+        
+        # Calculate grid coordinates (each cell is 24x24)
+        grid_x = int(scene_pos.x() // 24)
+        grid_y = int(scene_pos.y() // 24)
+        
+        print(f"[QPT] Clicked on grid cell ({grid_x}, {grid_y})")
+        
+        # Check if the click is within the grid bounds
+        if grid_x < 0 or grid_x >= 6 or grid_y < 0 or grid_y >= 8:
+            print(f"[QPT] Click outside grid bounds")
+            return
+        
+        # Get the position type from the CAT1_LAYOUT
+        if grid_y >= len(self.CAT1_LAYOUT):
+            return
+        
+        row = self.CAT1_LAYOUT[grid_y]
+        if grid_x >= len(row):
+            return
+        
+        position_type, _ = row[grid_x]
+        
+        if position_type is None:
+            print(f"[QPT] No position type at ({grid_x}, {grid_y})")
+            return
+        
+        print(f"[QPT] Position type at ({grid_x}, {grid_y}): {position_type}")
+        
+        # Emit the signal to notify the parent widget
+        self.tile_selected.emit(grid_x * 24 + grid_y * 24, position_type)
+        
+        # Call the parent's handler if available
+        parent = self.parent()
+        if parent and hasattr(parent, 'on_tile_selected_from_canvas'):
+            parent.on_tile_selected_from_canvas(position_type)

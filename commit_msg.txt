@@ -1,0 +1,73 @@
+feat(qpt): Phase 6 - Tile Picker Outlines and UI Improvements
+
+Implement comprehensive tile picker enhancements with visual outlines, status indicators, and improved user interaction.
+
+## Phase 6 Tile Picker Refinements
+
+### Tile Picker Outlines & Visual Details
+- Replace empty grid with minimalistic tile outlines using QPaint
+- Add grass blade indicators with increased verticality on top edges
+- Implement rounded corners on all corner tiles using QPainterPath
+- Standardize corner tile designs using rotation-based templates
+- Add stroke indicators to inner tiles for visual clarity
+- Ensure outlines persist when tiles are assigned
+
+### Click-to-Assign Functionality
+- Implement mouse click handling on tile picker canvas
+- Map grid coordinates to position types using CAT1_LAYOUT
+- Remove position selector buttons (replaced by canvas clicks)
+- Assign selected objects directly by clicking grid cells
+- Provide visual feedback for tile assignments
+
+### Status Indicator & Clear Button
+- Add red/green status circle at top-left of canvas
+  - Red: Indicates incomplete assignments
+  - Green: Indicates all tiles assigned
+- Add "CLEAR" button at bottom-right of canvas
+- Clear button removes all assignments and resets canvas
+- Status indicator updates automatically on tile assignment
+
+### Tileset Slot Management
+- Connect tileset selector to tile picker updates
+- Automatically clear tile picker when switching tileset slots (Pa0-Pa3)
+- Maintain brush state across tileset changes
+- Prevent data inconsistency when changing tilesets
+
+### UI/UX Improvements
+- Status indicator positioned as widget overlay (not scene item)
+- Clear button positioned as hovering overlay at bottom-right
+- Proper repositioning on view resize
+- Status indicator persists across canvas redraws
+- Improved visual hierarchy and consistency
+
+## Technical Details
+
+### Files Modified
+- quickpaint/ui/tile_picker_canvas.py
+  - Added mousePressEvent() for click-to-assign
+  - Added _add_ui_elements() for status indicator and clear button
+  - Added update_status_indicator() for status tracking
+  - Added clear_all_tiles() for canvas clearing
+  - Enhanced _draw_tile_outlines() with grass and rounded corners
+  - Fixed grid size and outline persistence
+
+- quickpaint/ui/widget.py
+  - Removed position selector buttons
+  - Added on_tile_selected_from_canvas() handler
+  - Added on_tileset_slot_changed() for slot management
+  - Connected tileset selector signals
+  - Updated tile picker label to indicate click-to-assign
+
+### Key Improvements
+- Exact visual representation of legacy file picker
+- More intuitive and visual tile assignment
+- Better user feedback with status indicators
+- Cleaner UI without redundant position buttons
+- Proper state management across tileset changes
+
+## Testing
+- Verified click-to-assign functionality
+- Tested status indicator color changes
+- Confirmed clear button functionality
+- Validated tileset slot changes
+- Ensured outlines persist on tile assignment

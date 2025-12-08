@@ -105,46 +105,8 @@ class QuickPaintWidget(QtWidgets.QWidget):
         
         # ===== TILE PICKER =====
         print("[QPT] Creating tile picker section...")
-        picker_label = QtWidgets.QLabel("Tile Picker:")
+        picker_label = QtWidgets.QLabel("Tile Picker (click to assign):")
         layout.addWidget(picker_label)
-        
-        # Position selector buttons
-        print("[QPT] Creating position selector...")
-        position_label = QtWidgets.QLabel("Select Position Type:")
-        layout.addWidget(position_label)
-        
-        position_layout = QtWidgets.QGridLayout()
-        self.position_buttons: Dict[str, QtWidgets.QPushButton] = {}
-        
-        # Terrain positions with capitalized labels
-        terrain_positions = [
-            ('top', 'Top\n(Ground)'),
-            ('center', 'Center\n(Fill)'),
-            ('bottom', 'Bottom\n(Ceiling)'),
-            ('left', 'Left\n(L Wall)'),
-            ('right', 'Right\n(R Wall)'),
-            ('top_left', 'Top Left\n(L Edge)'),
-            ('top_right', 'Top Right\n(R Edge)'),
-            ('bottom_left', 'Bottom Left\n(L Ceiling Edge)'),
-            ('bottom_right', 'Bottom Right\n(R Ceiling Edge)'),
-            ('inner_top_left', 'Inner\nTop Left'),
-            ('inner_top_right', 'Inner\nTop Right'),
-            ('inner_bottom_left', 'Inner\nBottom Left'),
-            ('inner_bottom_right', 'Inner\nBottom Right'),
-        ]
-        
-        for i, (pos_key, pos_label) in enumerate(terrain_positions):
-            btn = QtWidgets.QPushButton(pos_label)
-            btn.setMaximumWidth(80)
-            btn.setMinimumHeight(32)
-            btn.setStyleSheet("font-size: 10px;")
-            btn.setCheckable(True)
-            btn.clicked.connect(lambda checked, p=pos_key: self.on_position_selected(p))
-            self.position_buttons[pos_key] = btn
-            position_layout.addWidget(btn, i // 7, i % 7)
-        
-        layout.addLayout(position_layout)
-        print("[QPT] ✓ Position selector created")
         
         # Canvas-based tile picker
         print("[QPT] Creating canvas tile picker...")
@@ -154,6 +116,11 @@ class QuickPaintWidget(QtWidgets.QWidget):
         print("[QPT] ✓ Canvas tile picker created")
         layout.addWidget(self.tile_picker_canvas)
         print("[QPT] ✓ Tile picker section created")
+        
+        # Connect tileset selector changes to tile picker updates
+        if self.tileset_selector:
+            self.tileset_selector.tileset_combo.currentIndexChanged.connect(self.on_tileset_slot_changed)
+            print("[QPT] ✓ Tileset selector connected")
         
         # ===== PAINTING MODE =====
         print("[QPT] Creating painting mode section...")
@@ -380,29 +347,71 @@ class QuickPaintWidget(QtWidgets.QWidget):
         
         print(f"[QPT] Position selected: {position_type}")
     
-    def on_tile_selected_from_canvas(self, obj_id: int, position_type: str):
+    def on_tile_selected_from_canvas(self, position_type: str):
         """
-        Handle object selection from the canvas picker.
+        Handle tile position selection from the canvas picker.
+        Assigns the currently selected object to the clicked position.
         
         Args:
-            obj_id: The selected object ID
             position_type: The position type to assign the object to
         """
         if not self.current_brush:
-            QtWidgets.QMessageBox.warning(self, "No Brush", "Please select an object first.")
+            QtWidgets.QMessageBox.warning(self, "No Brush", "Please select a brush first.")
+            return
+        
+        # Get the currently selected object from the tileset selector
+        selected_obj_id = self.tileset_selector.selected_object_id
+        if selected_obj_id is None:
+            QtWidgets.QMessageBox.warning(self, "No Object Selected", "Please select an object first.")
             return
         
         # Assign the object to the position
         if position_type in ['center', 'top', 'bottom', 'left', 'right', 'top_left', 'top_right', 'bottom_left', 'bottom_right', 'inner_top_left', 'inner_top_right', 'inner_bottom_left', 'inner_bottom_right']:
-            self.current_brush.set_terrain_tile(position_type, obj_id)
-            print(f"[QPT] Assigned object {obj_id} to terrain position {position_type}")
+            self.current_brush.set_terrain_tile(position_type, selected_obj_id)
+            print(f"[QPT] Assigned object {selected_obj_id} to terrain position {position_type}")
+            # Update the canvas display
+            self.tile_picker_canvas.update_canvas_display()
+            # Update status indicator
+            self.tile_picker_canvas.update_status_indicator()
         else:
             # It's a slope type
-            self.current_brush.set_slope_tile(position_type, obj_id)
-            print(f"[QPT] Assigned object {obj_id} to slope position {position_type}")
+            self.current_brush.set_slope_tile(position_type, selected_obj_id)
+            print(f"[QPT] Assigned object {selected_obj_id} to slope position {position_type}")
         
         # Update the canvas display to show the newly assigned object
         self.tile_picker_canvas.update_canvas_display()
+    
+    def on_tileset_slot_changed(self, tileset_idx: int):
+        """
+        Handle tileset slot changes (Pa0, Pa1, etc.).
+        Clear the tile picker when switching tileset slots.
+        
+        Args:
+            tileset_idx: The new tileset index (0-3 for Pa0-Pa3)
+        """
+        print(f"[QPT] Tileset slot changed to Pa{tileset_idx}")
+        
+        # Update the tile picker canvas tileset
+        self.tile_picker_canvas.tileset_idx = tileset_idx
+        
+        # Clear the tile picker (this clears the brush assignments)
+        if self.current_brush:
+            self.tile_picker_canvas.clear_all_tiles()
+        
+        print(f"[QPT] ✓ Tileset slot changed to Pa{tileset_idx} and tile picker cleared")
+    
+    def on_game_patch_changed(self):
+        """
+        Handle game patch or tileset changes.
+        Clear the tile picker and update the brush.
+        """
+        print("[QPT] Game patch or tileset changed")
+        
+        # Clear the tile picker
+        if self.current_brush:
+            self.tile_picker_canvas.clear_all_tiles()
+        
+        print("[QPT] ✓ Tile picker cleared due to patch/tileset change")
     
     def get_current_brush(self) -> Optional[SmartBrush]:
         """Get the currently selected brush"""
