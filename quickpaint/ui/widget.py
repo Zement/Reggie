@@ -141,7 +141,7 @@ class QuickPaintWidget(QtWidgets.QWidget):
             btn.setCheckable(True)
             btn.clicked.connect(lambda checked, p=pos_key: self.on_position_selected(p))
             self.position_buttons[pos_key] = btn
-            position_layout.addWidget(btn, i // 6, i % 6)
+            position_layout.addWidget(btn, i // 7, i % 7)
         
         layout.addLayout(position_layout)
         print("[QPT] ✓ Position selector created")

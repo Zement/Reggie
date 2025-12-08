@@ -81,25 +81,84 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         self.draw_empty_grid()
     
     def draw_empty_grid(self):
-        """Draw an empty 6x8 grid placeholder"""
+        """Draw an empty 6x8 grid with tile position outlines"""
         self.scene.clear()
         self.tile_map.clear()
         
-        # Draw grid lines to show the 6x8 structure
-        pen = QtGui.QPen(QtCore.Qt.GlobalColor.gray)
-        pen.setWidth(1)
+        # Draw tile position outlines for each cell in the CAT1 layout
+        self._draw_tile_outlines()
         
-        for x in range(7):  # 7 lines for 6 columns
-            self.scene.addLine(x * 24, 0, x * 24, 8 * 24, pen)
-        
-        for y in range(9):  # 9 lines for 8 rows
-            self.scene.addLine(0, y * 24, 6 * 24, y * 24, pen)
-        
-        # Set scene rect
+        # Set scene rect to match 6x8 grid at 24x24 cells
         self.scene.setSceneRect(0, 0, 6 * 24, 8 * 24)
         self.fitInView(self.scene.sceneRect(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
         
-        print("[QPT] Empty grid drawn")
+        print("[QPT] Empty grid with tile outlines drawn")
+    
+    def _draw_tile_outlines(self):
+        """Draw minimalistic tile position outlines using QPaint"""
+        # Colors: Color 2 (80% opaque gray) for outlines, Color 3 (50% opaque gray) for inner tiles
+        outline_color = QtGui.QColor(128, 128, 128, 204)  # 80% opaque gray
+        inner_color = QtGui.QColor(128, 128, 128, 127)    # 50% opaque gray
+        
+        # Iterate through CAT1_LAYOUT and draw outlines for each position
+        for row_idx, row in enumerate(self.CAT1_LAYOUT):
+            for col_idx, (position_type, _) in enumerate(row):
+                if position_type is None:
+                    continue
+                
+                x = col_idx * 24
+                y = row_idx * 24
+                
+                # Create a pixmap for this cell
+                pixmap = QtGui.QPixmap(24, 24)
+                pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+                
+                painter = QtGui.QPainter(pixmap)
+                painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+                
+                # Draw based on position type
+                if position_type == 'center':
+                    # Center: empty (transparent)
+                    pass
+                elif position_type in ['top', 'bottom', 'left', 'right']:
+                    # Edge tiles: horizontal or vertical line
+                    pen = QtGui.QPen(outline_color)
+                    pen.setWidth(2)
+                    painter.setPen(pen)
+                    
+                    if position_type in ['top', 'bottom']:
+                        # Horizontal line
+                        y_pos = 2 if position_type == 'top' else 22
+                        painter.drawLine(2, y_pos, 22, y_pos)
+                    else:
+                        # Vertical line
+                        x_pos = 2 if position_type == 'left' else 22
+                        painter.drawLine(x_pos, 2, x_pos, 22)
+                
+                elif position_type in ['top_left', 'top_right', 'bottom_left', 'bottom_right']:
+                    # Corner tiles: diagonal line
+                    pen = QtGui.QPen(outline_color)
+                    pen.setWidth(2)
+                    painter.setPen(pen)
+                    
+                    if position_type == 'top_left':
+                        painter.drawLine(2, 22, 22, 2)
+                    elif position_type == 'top_right':
+                        painter.drawLine(2, 2, 22, 22)
+                    elif position_type == 'bottom_left':
+                        painter.drawLine(2, 2, 22, 22)
+                    else:  # bottom_right
+                        painter.drawLine(2, 22, 22, 2)
+                
+                elif position_type in ['inner_top_left', 'inner_top_right', 'inner_bottom_left', 'inner_bottom_right']:
+                    # Inner tiles: solid fill
+                    painter.fillRect(4, 4, 16, 16, inner_color)
+                
+                painter.end()
+                
+                # Add pixmap to scene
+                item = self.scene.addPixmap(pixmap)
+                item.setPos(x, y)
     
     def draw_object_grid(self):
         """Draw the full CAT1 terrain object grid (6x8)"""
