@@ -122,34 +122,34 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                     # Center: empty (transparent)
                     pass
                 elif position_type == 'top':
-                    # Top edge: horizontal line with grass blades
+                    # Top edge: horizontal line with grass blades going downward
                     pen = QtGui.QPen(outline_color)
                     pen.setWidth(2)
                     painter.setPen(pen)
-                    painter.drawLine(2, 4, 22, 4)  # Main edge line
+                    painter.drawLine(2, 2, 22, 2)  # Main edge line at top
                     
-                    # Draw grass blades (3 blades = 6 strokes)
-                    painter.drawLine(6, 2, 8, 4)
-                    painter.drawLine(8, 4, 10, 2)
-                    painter.drawLine(12, 2, 14, 4)
-                    painter.drawLine(14, 4, 16, 2)
-                    painter.drawLine(18, 2, 20, 4)
-                    painter.drawLine(20, 4, 22, 2)
+                    # Draw grass blades going downward (3 blades = 6 strokes)
+                    painter.drawLine(6, 2, 5, 6)
+                    painter.drawLine(5, 6, 7, 2)
+                    painter.drawLine(12, 2, 11, 6)
+                    painter.drawLine(11, 6, 13, 2)
+                    painter.drawLine(18, 2, 17, 6)
+                    painter.drawLine(17, 6, 19, 2)
                 
                 elif position_type == 'bottom':
-                    # Bottom edge: horizontal line with grass blades
+                    # Bottom edge: horizontal line with increased zig-zag verticality
                     pen = QtGui.QPen(outline_color)
                     pen.setWidth(2)
                     painter.setPen(pen)
-                    painter.drawLine(2, 20, 22, 20)  # Main edge line
+                    painter.drawLine(2, 22, 22, 22)  # Main edge line at bottom
                     
-                    # Draw grass blades
-                    painter.drawLine(6, 22, 8, 20)
-                    painter.drawLine(8, 20, 10, 22)
-                    painter.drawLine(12, 22, 14, 20)
-                    painter.drawLine(14, 20, 16, 22)
-                    painter.drawLine(18, 22, 20, 20)
-                    painter.drawLine(20, 20, 22, 22)
+                    # Draw zig-zag with more verticality
+                    painter.drawLine(6, 22, 5, 18)
+                    painter.drawLine(5, 18, 7, 22)
+                    painter.drawLine(12, 22, 11, 18)
+                    painter.drawLine(11, 18, 13, 22)
+                    painter.drawLine(18, 22, 17, 18)
+                    painter.drawLine(17, 18, 19, 22)
                 
                 elif position_type in ['left', 'right']:
                     # Side edges: vertical line
@@ -163,22 +163,22 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                         painter.drawLine(20, 2, 20, 22)
                 
                 elif position_type == 'top_left':
-                    # Top-left corner: diagonal with rounded corner and grass
+                    # Top-left corner: same as top_right but rotated 180 degrees
                     pen = QtGui.QPen(outline_color)
                     pen.setWidth(2)
                     painter.setPen(pen)
                     
-                    # Draw diagonal with rounded corner
+                    # Draw diagonal with rounded corner (rotated 180 degrees from top_right)
                     path = QtGui.QPainterPath()
-                    path.moveTo(4, 22)
-                    path.lineTo(4, 8)
-                    path.arcTo(4, 2, 8, 8, 180, 90)  # Rounded corner
-                    path.lineTo(22, 2)
+                    path.moveTo(20, 22)
+                    path.lineTo(20, 8)
+                    path.arcTo(12, 2, 8, 8, 0, 90)  # Rounded corner
+                    path.lineTo(2, 2)
                     painter.drawPath(path)
                     
                     # Grass blade
-                    painter.drawLine(20, 2, 22, 4)
-                    painter.drawLine(22, 4, 20, 6)
+                    painter.drawLine(4, 2, 2, 4)
+                    painter.drawLine(2, 4, 4, 6)
                 
                 elif position_type == 'top_right':
                     # Top-right corner: diagonal with rounded corner and grass
@@ -199,40 +199,32 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                     painter.drawLine(2, 4, 4, 6)
                 
                 elif position_type == 'bottom_left':
-                    # Bottom-left corner: diagonal with rounded corner and grass
+                    # Bottom-left corner: same as top_right but rotated 90 degrees clockwise
                     pen = QtGui.QPen(outline_color)
                     pen.setWidth(2)
                     painter.setPen(pen)
                     
-                    # Draw diagonal with rounded corner
+                    # Draw diagonal with rounded corner (rotated 90 degrees from top_right)
                     path = QtGui.QPainterPath()
                     path.moveTo(4, 2)
                     path.lineTo(4, 16)
                     path.arcTo(4, 14, 8, 8, 180, -90)  # Rounded corner
                     path.lineTo(22, 22)
                     painter.drawPath(path)
-                    
-                    # Grass blade
-                    painter.drawLine(20, 22, 22, 20)
-                    painter.drawLine(22, 20, 20, 18)
                 
                 elif position_type == 'bottom_right':
-                    # Bottom-right corner: diagonal with rounded corner and grass
+                    # Bottom-right corner: same as top_right but rotated 90 degrees counter-clockwise
                     pen = QtGui.QPen(outline_color)
                     pen.setWidth(2)
                     painter.setPen(pen)
                     
-                    # Draw diagonal with rounded corner
+                    # Draw diagonal with rounded corner (rotated 90 degrees from top_right)
                     path = QtGui.QPainterPath()
                     path.moveTo(20, 2)
                     path.lineTo(20, 16)
                     path.arcTo(12, 14, 8, 8, 0, -90)  # Rounded corner
                     path.lineTo(2, 22)
                     painter.drawPath(path)
-                    
-                    # Grass blade
-                    painter.drawLine(4, 22, 2, 20)
-                    painter.drawLine(2, 20, 4, 18)
                 
                 elif position_type in ['inner_top_left', 'inner_top_right', 'inner_bottom_left', 'inner_bottom_right']:
                     # Inner tiles: solid fill
