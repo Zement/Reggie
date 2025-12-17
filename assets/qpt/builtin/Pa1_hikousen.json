@@ -1,0 +1,38 @@
+{
+  "name": "Pa1_hikousen",
+  "tileset_names": [
+    "Pa1_hikousen"
+  ],
+  "slot": "Pa1",
+  "painting_mode": "SmartPaint",
+  "priority": 4,
+  "terrain": {
+    "center": 75,
+    "top": 36,
+    "bottom": 71,
+    "left": 38,
+    "right": 38,
+    "top_left": 62,
+    "top_right": 37,
+    "bottom_left": 39,
+    "bottom_right": 63,
+    "inner_top_left": 66,
+    "inner_top_right": 63,
+    "inner_bottom_left": 62,
+    "inner_bottom_right": 37
+  },
+  "slopes": {
+    "slope_top_1x1_left": -1,
+    "slope_top_1x1_right": -1,
+    "slope_top_2x1_left": -1,
+    "slope_top_2x1_right": -1,
+    "slope_top_4x1_left": -1,
+    "slope_top_4x1_right": -1,
+    "slope_bottom_1x1_left": -1,
+    "slope_bottom_1x1_right": -1,
+    "slope_bottom_2x1_left": -1,
+    "slope_bottom_2x1_right": -1,
+    "slope_bottom_4x1_left": -1,
+    "slope_bottom_4x1_right": -1
+  }
+}

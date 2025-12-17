@@ -3581,6 +3581,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
             # Add the path to Recent Files
             self.RecentMenu.AddToList(self.fileSavePath)
 
+        # Reset Quick Paint Tool when level/area changes
+        if hasattr(self, 'qpt_palette') and self.qpt_palette is not None:
+            try:
+                self.qpt_palette.reset()
+            except Exception as e:
+                print(f"[QPT] Warning: Could not reset QPT: {e}")
+
         # If we got this far, everything worked! Return True.
         return True
 
@@ -3601,6 +3608,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.objAllTab.setTabEnabled(1, False)
         self.objAllTab.setTabEnabled(2, False)
         self.objAllTab.setTabEnabled(3, False)
+
+        # Reset Quick Paint Tool for new level
+        if hasattr(self, 'qpt_palette') and self.qpt_palette is not None:
+            try:
+                self.qpt_palette.reset()
+            except Exception as e:
+                print(f"[QPT] Warning: Could not reset QPT: {e}")
 
     def LoadLevel_NSMBW(self, levelData, areaNum):
         """
@@ -4399,6 +4413,22 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         Handles key press events for the main window if needed
         """
+        # QPT: Handle ESC and F1 keys for painting
+        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_F1):
+            print(f"[Reggie] Key {event.key()} pressed, forwarding to QPT")
+            try:
+                qpt_funcs = getattr(globals_, 'qpt_functions', None)
+                if qpt_funcs and qpt_funcs.get('key_press'):
+                    if qpt_funcs['key_press'](event.key()):
+                        print(f"[Reggie] Key {event.key()} handled by QPT")
+                        event.accept()
+                        return
+                    else:
+                        print(f"[Reggie] Key {event.key()} NOT handled by QPT")
+            except Exception as e:
+                print(f"[Reggie] Error forwarding key to QPT: {e}")
+                pass
+        
         if event.key() == Qt.Key.Key_Delete or event.key() == Qt.Key.Key_Backspace:
             sel = self.scene.selectedItems()
 
@@ -4483,6 +4513,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 obj.updateObjCache()
 
         self.scene.update()
+
+        # Reset Quick Paint Tool when area settings change (tilesets may have changed)
+        if hasattr(self, 'qpt_palette') and self.qpt_palette is not None:
+            try:
+                self.qpt_palette.reset()
+            except Exception as e:
+                print(f"[QPT] Warning: Could not reset QPT: {e}")
 
     def HandleZones(self):
         """
@@ -4780,25 +4817,34 @@ def main():
     print("[BOOT] ✓ All deferred imports completed")
     
     # Import QPT functions now that QApplication exists
-    global _qpt_functions
+    global _qpt_functions, QPT_AVAILABLE
     print("[BOOT] Importing QPT functions...")
     try:
         from quickpaint.reggie_hook import (
             initialize_qpt,
             handle_qpt_mouse_press,
             handle_qpt_mouse_move,
-            handle_qpt_mouse_release
+            handle_qpt_mouse_release,
+            handle_qpt_key_press,
+            update_qpt_outline
         )
+        from quickpaint.reggie_hook import _get_qpt_hook
         _qpt_functions = {
             'initialize': initialize_qpt,
             'press': handle_qpt_mouse_press,
             'move': handle_qpt_mouse_move,
             'release': handle_qpt_mouse_release,
+            'key_press': handle_qpt_key_press,
+            'get_hook': _get_qpt_hook,
+            'update_outline': update_qpt_outline,
         }
-        print("[BOOT] ✓ QPT functions imported")
+        # Store in globals_ so other modules can access it
+        globals_.qpt_functions = _qpt_functions
+        print(f"[BOOT] ✓ QPT functions imported and stored in globals_")
     except Exception as e:
         print(f"[BOOT] Warning: Could not import QPT functions: {e}")
-        global QPT_AVAILABLE
+        import traceback
+        traceback.print_exc()
         QPT_AVAILABLE = False
 
     # Go to the script path

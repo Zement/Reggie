@@ -1,14 +1,14 @@
 {
-  "name": "Pa1_sabaku",
+  "name": "Pa2_kori B",
   "tileset_names": [
-    "Pa1_sabaku"
+    "Pa2_kori"
   ],
-  "slot": "Pa1",
+  "slot": "Pa2",
   "painting_mode": "SmartPaint",
-  "priority": 5,
+  "priority": 3,
   "terrain": {
-    "top": 0,
     "center": 1,
+    "top": 0,
     "bottom": 2,
     "left": 3,
     "right": 4,
@@ -22,16 +22,16 @@
     "inner_bottom_right": 12
   },
   "slopes": {
-    "slope_top_1x1_left": 13,
-    "slope_top_1x1_right": 14,
-    "slope_top_2x1_left": 15,
-    "slope_top_2x1_right": 16,
-    "slope_top_4x1_left": 17,
-    "slope_top_4x1_right": 18,
-    "slope_bottom_1x1_left": -1,
-    "slope_bottom_1x1_right": -1,
-    "slope_bottom_2x1_left": -1,
-    "slope_bottom_2x1_right": -1,
+    "slope_top_1x1_left": 61,
+    "slope_top_1x1_right": 62,
+    "slope_top_2x1_left": 63,
+    "slope_top_2x1_right": 64,
+    "slope_top_4x1_left": -1,
+    "slope_top_4x1_right": -1,
+    "slope_bottom_1x1_left": 65,
+    "slope_bottom_1x1_right": 66,
+    "slope_bottom_2x1_left": 52,
+    "slope_bottom_2x1_right": 51,
     "slope_bottom_4x1_left": -1,
     "slope_bottom_4x1_right": -1
   }

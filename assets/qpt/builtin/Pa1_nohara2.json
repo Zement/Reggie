@@ -1,7 +1,7 @@
 {
-  "name": "Pa1_nohara",
+  "name": "Pa1_nohara2",
   "tileset_names": [
-    "Pa1_nohara.*"
+    "Pa1_nohara2"
   ],
   "slot": "Pa1",
   "painting_mode": "SmartPaint",

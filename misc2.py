@@ -150,12 +150,16 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
         """
         # Check if Quick Paint Tool should handle this event
         try:
-            import reggie
-            if reggie._qpt_functions and reggie._qpt_functions['press'](event):
-                event.accept()
-                return
-        except (ImportError, Exception, AttributeError):
-            pass
+            qpt_funcs = getattr(globals_, 'qpt_functions', None)
+            if qpt_funcs:
+                result = qpt_funcs['press'](event)
+                if result:
+                    event.accept()
+                    return
+        except Exception as e:
+            print(f"[misc2] QPT press error: {e}")
+            import traceback
+            traceback.print_exc()
 
         if event.button() == QtCore.Qt.MouseButton.BackButton:
             self.xButtonScrollTimer = QtCore.QTimer()
@@ -376,11 +380,11 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
         """
         # Check if Quick Paint Tool should handle this event
         try:
-            import reggie
-            if reggie._qpt_functions and reggie._qpt_functions['move'](event):
+            qpt_funcs = getattr(globals_, 'qpt_functions', None)
+            if qpt_funcs and qpt_funcs['move'](event):
                 event.accept()
                 return
-        except (ImportError, Exception, AttributeError):
+        except Exception as e:
             pass
 
         pos = self.mapToScene(event.pos())
@@ -417,11 +421,11 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
         """
         # Check if Quick Paint Tool should handle this event
         try:
-            import reggie
-            if reggie._qpt_functions and reggie._qpt_functions['release'](event):
+            qpt_funcs = getattr(globals_, 'qpt_functions', None)
+            if qpt_funcs and qpt_funcs['release'](event):
                 event.accept()
                 return
-        except (ImportError, Exception, AttributeError):
+        except Exception as e:
             pass
 
         if event.button() in (QtCore.Qt.MouseButton.BackButton, QtCore.Qt.MouseButton.ForwardButton):

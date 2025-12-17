@@ -1,0 +1,38 @@
+{
+  "name": "Pa1_nohara B",
+  "tileset_names": [
+    "Pa1_nohara.*"
+  ],
+  "slot": "Pa1",
+  "painting_mode": "SmartPaint",
+  "priority": 4,
+  "terrain": {
+    "top": 25,
+    "center": 26,
+    "bottom": 27,
+    "left": 28,
+    "right": 29,
+    "top_left": 30,
+    "top_right": 31,
+    "bottom_left": 32,
+    "bottom_right": 33,
+    "inner_top_left": 34,
+    "inner_top_right": 35,
+    "inner_bottom_left": 36,
+    "inner_bottom_right": 37
+  },
+  "slopes": {
+    "slope_top_1x1_left": -1,
+    "slope_top_1x1_right": -1,
+    "slope_top_2x1_left": -1,
+    "slope_top_2x1_right": -1,
+    "slope_top_4x1_left": -1,
+    "slope_top_4x1_right": -1,
+    "slope_bottom_1x1_left": -1,
+    "slope_bottom_1x1_right": -1,
+    "slope_bottom_2x1_left": -1,
+    "slope_bottom_2x1_right": -1,
+    "slope_bottom_4x1_left": -1,
+    "slope_bottom_4x1_right": -1
+  }
+}

@@ -19,64 +19,71 @@ class SmartBrush:
     
     Maps terrain positions and slope types to tile object IDs for a specific tileset.
     Supports regex-based tileset name matching for batch preset linking.
-    Supports three tileset categories based on slope availability.
     """
     
     def __init__(self, name: str, tileset_names: List[str], 
-                 category: TilesetCategory = TilesetCategory.CAT3):
+                 slot: str = "Pa0", painting_mode: str = "SmartPaint"):
         """
         Initialize a SmartBrush.
         
         Args:
             name: Brush name (e.g., "Pa1_nohara")
             tileset_names: List of tileset names or regex patterns this brush applies to
-            category: Tileset category (CAT1, CAT2, or CAT3)
+            slot: Tileset slot ("Pa0", "Pa1", "Pa2", "Pa3")
+            painting_mode: Painting mode ("SmartPaint", "SingleTile", "ShapeCreator")
         """
         self.name = name
         self.tileset_names = tileset_names
-        self.category = category
+        self.slot = slot
+        self.painting_mode = painting_mode
+        self.priority = 0  # Priority 0-9, higher = loaded first
         
         # Terrain positions: 13 total (center + 4 edges + 4 outer corners + 4 inner corners)
+        # None = unassigned, 0-255 = object ID
         self.terrain = {
-            'center': 0,
-            'top': 0,
-            'bottom': 0,
-            'left': 0,
-            'right': 0,
-            'top_left': 0,
-            'top_right': 0,
-            'bottom_left': 0,
-            'bottom_right': 0,
-            'inner_top_left': 0,
-            'inner_top_right': 0,
-            'inner_bottom_left': 0,
-            'inner_bottom_right': 0,
+            'center': None,
+            'top': None,
+            'bottom': None,
+            'left': None,
+            'right': None,
+            'top_left': None,
+            'top_right': None,
+            'bottom_left': None,
+            'bottom_right': None,
+            'inner_top_left': None,
+            'inner_top_right': None,
+            'inner_bottom_left': None,
+            'inner_bottom_right': None,
         }
         
         # Track which terrain positions have been explicitly assigned
-        # This allows us to distinguish between "unassigned (0)" and "assigned to object 0"
         self.terrain_assigned = set()
         
-        # Slope types: 12 total (4 directions × 3 sizes)
-        # CAT1: No slopes (all 0)
-        # CAT2: Only 4x1 slopes
-        # CAT3: All slopes (1x1, 2x1, 4x1)
+        # Slope types: 12 total (3 sizes, left and right, with top (ground) and bottom (ceiling) variants)
+        # None = unassigned, 0-255 = object ID
         self.slopes = {
-            'floor_up_1x1': 0,
-            'floor_up_2x1': 0,
-            'floor_up_4x1': 0,
-            'floor_down_1x1': 0,
-            'floor_down_2x1': 0,
-            'floor_down_4x1': 0,
-            'ceiling_up_1x1': 0,
-            'ceiling_up_2x1': 0,
-            'ceiling_up_4x1': 0,
-            'ceiling_down_1x1': 0,
-            'ceiling_down_2x1': 0,
-            'ceiling_down_4x1': 0,
+            'slope_top_1x1_left': None,
+            'slope_top_1x1_right': None,
+            'slope_top_2x1_left': None,
+            'slope_top_2x1_right': None,
+            'slope_top_4x1_left': None,
+            'slope_top_4x1_right': None,
+            'slope_bottom_1x1_left': None,
+            'slope_bottom_1x1_right': None,
+            'slope_bottom_2x1_left': None,
+            'slope_bottom_2x1_right': None,
+            'slope_bottom_4x1_left': None,
+            'slope_bottom_4x1_right': None,
         }
+        
+        # Track which slopes are enabled (on/off flags)
+        # All slopes enabled by default
+        self.enabled_slopes = set(self.slopes.keys())
+        
+        # Track which slopes have been explicitly assigned
+        self.slopes_assigned = set()
     
-    def get_terrain_tile(self, position: str) -> int:
+    def get_terrain_tile(self, position: str) -> Optional[int]:
         """
         Get tile object ID for a terrain position.
         
@@ -86,9 +93,28 @@ class SmartBrush:
                      'inner_top_left', 'inner_top_right', 'inner_bottom_left', 'inner_bottom_right'
         
         Returns:
-            Tile object ID (0-255)
+            Tile object ID (0-255), or None if unassigned
         """
-        return self.terrain.get(position, 0)
+        return self.terrain.get(position, None)
+    
+    def get_tile_type_by_id(self, tile_id: int) -> Optional[str]:
+        """
+        Reverse lookup: Get terrain type from tile object ID.
+        
+        Args:
+            tile_id: Tile object ID to look up
+        
+        Returns:
+            Terrain type string (e.g., 'top', 'left', 'top_left'), or None if not found
+        """
+        for position, obj_id in self.terrain.items():
+            if obj_id == tile_id:
+                return position
+        # Also check slopes
+        for slope_type, obj_id in self.slopes.items():
+            if obj_id == tile_id:
+                return slope_type
+        return None
     
     def set_terrain_tile(self, position: str, tile_id: int) -> None:
         """
@@ -102,20 +128,17 @@ class SmartBrush:
             self.terrain[position] = tile_id
             self.terrain_assigned.add(position)
     
-    def get_slope_tile(self, slope_type: str) -> int:
+    def get_slope_tile(self, slope_type: str) -> Optional[int]:
         """
         Get tile object ID for a slope type.
         
         Args:
-            slope_type: One of 'floor_up_1x1', 'floor_up_2x1', 'floor_up_4x1',
-                       'floor_down_1x1', 'floor_down_2x1', 'floor_down_4x1',
-                       'ceiling_up_1x1', 'ceiling_up_2x1', 'ceiling_up_4x1',
-                       'ceiling_down_1x1', 'ceiling_down_2x1', 'ceiling_down_4x1'
+            slope_type: One of 'slope_top_1x1_left', 'slope_top_1x1_right', etc.
         
         Returns:
-            Tile object ID (0-255)
+            Tile object ID (0-255), or None if unassigned
         """
-        return self.slopes.get(slope_type, 0)
+        return self.slopes.get(slope_type, None)
     
     def set_slope_tile(self, slope_type: str, tile_id: int) -> None:
         """
@@ -127,6 +150,23 @@ class SmartBrush:
         """
         if slope_type in self.slopes:
             self.slopes[slope_type] = tile_id
+            self.slopes_assigned.add(slope_type)
+    
+    def copy(self) -> 'SmartBrush':
+        """
+        Create a deep copy of this brush.
+        
+        Returns:
+            New SmartBrush instance with copied data
+        """
+        new_brush = SmartBrush(self.name, self.tileset_names[:], self.slot, self.painting_mode)
+        new_brush.priority = self.priority
+        new_brush.terrain = self.terrain.copy()
+        new_brush.terrain_assigned = self.terrain_assigned.copy()
+        new_brush.slopes = self.slopes.copy()
+        new_brush.slopes_assigned = self.slopes_assigned.copy()
+        new_brush.enabled_slopes = self.enabled_slopes.copy()
+        return new_brush
     
     def matches_tileset(self, tileset_name: str) -> bool:
         """
@@ -160,15 +200,30 @@ class SmartBrush:
         """
         Serialize to JSON-compatible dictionary.
         
+        Slope values: -1 = disabled (flag OFF), null = empty/unassigned, 0-255 = object ID
+        Terrain values: null = empty/unassigned, 0-255 = object ID
+        
         Returns:
-            Dictionary with name, tileset_names, category, terrain, and slopes
+            Dictionary with name, tileset_names, slot, painting_mode, terrain, and slopes
         """
+        # Convert slopes: disabled slopes get -1, enabled but empty get null, assigned get their ID
+        slopes_json = {}
+        for slope_name, obj_id in self.slopes.items():
+            if slope_name not in self.enabled_slopes:
+                slopes_json[slope_name] = -1  # Disabled (flag OFF)
+            elif obj_id is None:
+                slopes_json[slope_name] = None  # Enabled but empty
+            else:
+                slopes_json[slope_name] = obj_id  # Assigned object ID (0-255)
+        
         return {
             'name': self.name,
             'tileset_names': self.tileset_names,
-            'category': self.category.value,
+            'slot': self.slot,
+            'painting_mode': self.painting_mode,
+            'priority': self.priority,
             'terrain': self.terrain.copy(),
-            'slopes': self.slopes.copy(),
+            'slopes': slopes_json,
         }
     
     def to_json_string(self) -> str:
@@ -185,22 +240,55 @@ class SmartBrush:
         """
         Deserialize from JSON dictionary.
         
+        Slope values: -1 = disabled, 0 = empty/unassigned, 1-255 = object ID
+        
         Args:
-            data: Dictionary with 'name', 'tileset_names', 'category', 'terrain', 'slopes'
+            data: Dictionary with 'name', 'tileset_names', 'slot', 'painting_mode', 'terrain', 'slopes'
         
         Returns:
             SmartBrush instance
         """
-        # Parse category from string
-        category_str = data.get('category', 'cat3')
-        try:
-            category = TilesetCategory(category_str)
-        except ValueError:
-            category = TilesetCategory.CAT3
+        slot = data.get('slot', 'Pa0')
+        painting_mode = data.get('painting_mode', 'SmartPaint')
+        priority = data.get('priority', 0)
         
-        brush = cls(data['name'], data.get('tileset_names', []), category)
-        brush.terrain = data.get('terrain', brush.terrain)
-        brush.slopes = data.get('slopes', brush.slopes)
+        brush = cls(data['name'], data.get('tileset_names', []), slot, painting_mode)
+        brush.priority = max(0, min(9, priority))  # Clamp to 0-9
+        # Note: Don't directly assign terrain here - let the loop below handle it
+        # brush.terrain = data.get('terrain', brush.terrain)  # BUG: This skips terrain_assigned
+        
+        # Parse slopes: -1 means disabled, null/None means empty, 0-255 are object IDs
+        slopes_data = data.get('slopes', {})
+        enabled_slopes = set()
+        
+        for slope_name, value in slopes_data.items():
+            if slope_name in brush.slopes:
+                if value == -1:
+                    # Slope is disabled (flag OFF)
+                    brush.slopes[slope_name] = None
+                elif value is None:
+                    # Slope is enabled but empty/unassigned
+                    brush.slopes[slope_name] = None
+                    enabled_slopes.add(slope_name)
+                else:
+                    # Slope is enabled and assigned (0-255 are valid object IDs)
+                    brush.slopes[slope_name] = value
+                    enabled_slopes.add(slope_name)
+                    brush.slopes_assigned.add(slope_name)
+        
+        brush.enabled_slopes = enabled_slopes
+        
+        # Parse terrain: null/None means empty, 0-255 are object IDs
+        terrain_data = data.get('terrain', {})
+        for pos, obj_id in terrain_data.items():
+            if pos in brush.terrain:
+                if obj_id is not None:
+                    brush.terrain[pos] = obj_id
+                    brush.terrain_assigned.add(pos)
+                else:
+                    brush.terrain[pos] = None
+        
+        print(f"[SmartBrush] from_json: loaded terrain={brush.terrain}, assigned={brush.terrain_assigned}")
         return brush
     
     @classmethod

@@ -30,16 +30,20 @@ class QuickPaintTab(QtWidgets.QWidget):
         """
         print("[QPT] QuickPaintTab.__init__ starting...")
         super().__init__(parent)
-        print("[QPT] ✓ QWidget parent initialized")
+        print("[QPT] OK: QWidget parent initialized")
+        
+        # Initialize file logging
+        from quickpaint.core.logging import init_logging
+        init_logging()
         
         # Import here to avoid QWidget creation before QApplication is ready
         print("[QPT] Importing PresetManager...")
         from quickpaint.core.presets import PresetManager
-        print("[QPT] ✓ PresetManager imported")
+        print("[QPT] OK: PresetManager imported")
         
         print("[QPT] Importing MouseEventHandler...")
         from quickpaint.ui.events import MouseEventHandler
-        print("[QPT] ✓ MouseEventHandler imported")
+        print("[QPT] OK: MouseEventHandler imported")
         
         print("[QPT] Creating preset manager...")
         # PresetManager requires builtin and user directories
@@ -47,15 +51,15 @@ class QuickPaintTab(QtWidgets.QWidget):
         builtin_dir = os.path.join('assets', 'qpt', 'builtin')
         user_dir = os.path.join('assets', 'qpt', 'presets')
         self.preset_manager = PresetManager(builtin_dir, user_dir)
-        print("[QPT] ✓ Preset manager created")
+        print("[QPT] OK: Preset manager created")
         
         print("[QPT] Creating mouse handler...")
         self.mouse_handler = MouseEventHandler()
-        print("[QPT] ✓ Mouse handler created")
+        print("[QPT] OK: Mouse handler created")
         
         print("[QPT] Initializing UI...")
         self.init_ui()
-        print("[QPT] ✓ QuickPaintTab initialized")
+        print("[QPT] OK: QuickPaintTab initialized")
     
     def init_ui(self):
         """Initialize the UI"""
@@ -64,11 +68,11 @@ class QuickPaintTab(QtWidgets.QWidget):
         # Import here to avoid QWidget creation before QApplication is ready
         print("[QPT] Importing TilesetSelector...")
         from quickpaint.ui.tileset_selector import TilesetSelector
-        print("[QPT] ✓ TilesetSelector imported")
+        print("[QPT] OK: TilesetSelector imported")
         
         print("[QPT] Importing QuickPaintWidget...")
         from quickpaint.ui.widget import QuickPaintWidget
-        print("[QPT] ✓ QuickPaintWidget imported")
+        print("[QPT] OK: QuickPaintWidget imported")
         
         print("[QPT] Creating layout...")
         layout = QtWidgets.QVBoxLayout(self)
@@ -118,18 +122,28 @@ class QuickPaintTab(QtWidgets.QWidget):
         self.qpt_widget.painting_stopped.connect(self.on_painting_stopped)
         self.tileset_selector.object_selected.connect(self.on_object_selected)
         self.mouse_handler.painting_ended.connect(self.on_painting_ended)
+        self.mouse_handler.object_placed.connect(self.on_object_placed)
+        self.mouse_handler.outline_updated.connect(self.on_outline_updated)
         
         # Initialize tileset objects after a short delay to ensure Reggie is fully loaded
         QtCore.QTimer.singleShot(100, self.tileset_selector.initialize_objects)
+        
+        # Try to auto-load a preset for the current tileset after initialization
+        QtCore.QTimer.singleShot(200, self.qpt_widget.initialize_with_current_tileset)
     
     def on_painting_started(self):
         """Handle painting start"""
         brush = self.qpt_widget.get_current_brush()
         mode = self.qpt_widget.get_current_mode()
         
+        print(f"[QPT] on_painting_started: brush={brush is not None}, mode={mode}")
+        
         if brush:
             self.mouse_handler.set_brush(brush)
             self.mouse_handler.set_mode(mode)
+            print(f"[QPT] OK: Brush and mode set for painting")
+        else:
+            print("[QPT] WARNING: No brush available for painting!")
     
     def on_painting_stopped(self):
         """Handle painting stop"""
@@ -148,12 +162,13 @@ class QuickPaintTab(QtWidgets.QWidget):
         
         # Create or update a brush for this object if not already created
         if not self.qpt_widget.current_brush:
-            from quickpaint.core.brush import SmartBrush, TilesetCategory
+            from quickpaint.core.brush import SmartBrush
             tileset_name = self.tileset_selector.get_current_tileset_name()
+            slot = f"Pa{tileset}"
             self.qpt_widget.current_brush = SmartBrush(
                 f"Object_{tileset}",
                 [tileset_name],
-                TilesetCategory.CAT1
+                slot
             )
             print(f"[QPT] Created new brush for tileset {tileset}")
             
@@ -165,18 +180,182 @@ class QuickPaintTab(QtWidgets.QWidget):
         else:
             print(f"[QPT] Brush already exists, not reinitializing canvas")
     
-    def on_painting_ended(self, operations: List):
+    def on_painting_ended(self, placements: List):
         """
-        Handle painting end.
+        Handle painting end - place objects in the level.
         
         Args:
-            operations: List of PaintOperation objects
+            placements: List of ObjectPlacement objects
         """
-        # Apply operations to the level
-        # This would integrate with Reggie's level editing
-        pass
+        print(f"[QPT] on_painting_ended: {len(placements)} placements")
+        
+        # Get reference to Reggie's main window
+        try:
+            import globals_
+            main_window = globals_.mainWindow
+            
+            if main_window and placements:
+                for placement in placements:
+                    # For terrain-aware replacements, delete existing tile first
+                    # This handles the case where we're replacing a border with center
+                    self._delete_tile_at(placement.x, placement.y, placement.layer)
+                    
+                    # Create the object in the level
+                    main_window.CreateObject(
+                        tileset=placement.tileset,
+                        object_num=placement.object_id,
+                        layer=placement.layer,
+                        x=placement.x,
+                        y=placement.y,
+                        width=placement.width,
+                        height=placement.height
+                    )
+                print(f"[QPT] OK: Created {len(placements)} objects in level")
+                
+                # Schedule terrain-aware deletions after 100ms delay
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(100, self._apply_terrain_aware_deletes)
+        except Exception as e:
+            print(f"[QPT] Error placing objects: {e}")
     
-    def handle_mouse_event(self, event_type: str, pos: tuple, button: int = 1) -> bool:
+    def on_object_placed(self, placement):
+        """
+        Handle single object placement (immediate mode).
+        
+        Args:
+            placement: ObjectPlacement object
+        """
+        try:
+            import globals_
+            main_window = globals_.mainWindow
+            
+            if main_window and placement:
+                main_window.CreateObject(
+                    tileset=placement.tileset,
+                    object_num=placement.object_id,
+                    layer=placement.layer,
+                    x=placement.x,
+                    y=placement.y,
+                    width=placement.width,
+                    height=placement.height
+                )
+                print(f"[QPT] OK: Placed object at ({placement.x}, {placement.y})")
+        except Exception as e:
+            print(f"[QPT] Error placing object: {e}")
+    
+    def _apply_terrain_aware_deletes(self):
+        """
+        Apply pending terrain-aware deletions.
+        Called after a 100ms delay for visual distinction.
+        """
+        try:
+            import globals_
+            from quickpaint.reggie_hook import apply_terrain_aware_deletes
+            apply_terrain_aware_deletes()
+        except Exception as e:
+            print(f"[QPT] Error applying terrain-aware deletes: {e}")
+    
+    def _delete_tile_at(self, x: int, y: int, layer: int):
+        """
+        Delete any existing tile at the specified position.
+        Handles large objects by splitting them.
+        
+        Args:
+            x, y: Tile coordinates
+            layer: Layer to delete from
+        """
+        try:
+            import globals_
+            if not globals_.Area:
+                return
+            
+            layer_obj = globals_.Area.layers[layer]
+            
+            # Find objects that cover this position
+            to_process = []
+            for obj in layer_obj:
+                if (obj.objx <= x < obj.objx + obj.width and
+                    obj.objy <= y < obj.objy + obj.height):
+                    to_process.append(obj)
+            
+            # Process each object
+            for obj in to_process:
+                obj_x, obj_y = obj.objx, obj.objy
+                obj_w, obj_h = obj.width, obj.height
+                obj_type = obj.type
+                obj_tileset = obj.tileset
+                
+                # Remove the original object
+                layer_obj.remove(obj)
+                globals_.mainWindow.scene.removeItem(obj)
+                
+                # If 1x1, we're done
+                if obj_w == 1 and obj_h == 1:
+                    continue
+                
+                # Recreate parts that should remain (all except target position)
+                for dy in range(obj_h):
+                    for dx in range(obj_w):
+                        tile_x = obj_x + dx
+                        tile_y = obj_y + dy
+                        
+                        if tile_x == x and tile_y == y:
+                            continue
+                        
+                        globals_.mainWindow.CreateObject(
+                            tileset=obj_tileset,
+                            object_num=obj_type,
+                            layer=layer,
+                            x=tile_x,
+                            y=tile_y,
+                            width=1,
+                            height=1
+                        )
+        except Exception as e:
+            print(f"[QPT] Error deleting tile at ({x}, {y}): {e}")
+    
+    def _refresh_object_database(self):
+        """
+        Refresh the object database from the current level.
+        This allows terrain-aware checks to see existing tiles.
+        """
+        try:
+            import globals_
+            if not globals_.Area:
+                return
+            
+            database = {}
+            
+            # Scan all layers for existing objects
+            for layer_idx, layer in enumerate(globals_.Area.layers):
+                for obj in layer:
+                    # Add all tiles covered by this object
+                    for dy in range(obj.height):
+                        for dx in range(obj.width):
+                            x = obj.objx + dx
+                            y = obj.objy + dy
+                            database[(x, y, layer_idx)] = obj.type
+            
+            # Update the engine's object database
+            self.mouse_handler.update_object_database(database)
+            print(f"[QPT] Refreshed object database: {len(database)} tiles")
+        except Exception as e:
+            print(f"[QPT] Error refreshing object database: {e}")
+    
+    def on_outline_updated(self, positions: List = None):
+        """
+        Handle outline update - show preview of where tiles will be placed.
+        
+        Args:
+            positions: List of (x, y) positions (optional, can be None)
+        """
+        # Call the reggie_hook to update the visual outline
+        import globals_
+        qpt_funcs = getattr(globals_, 'qpt_functions', None)
+        if qpt_funcs and qpt_funcs.get('update_outline'):
+            qpt_funcs['update_outline']()
+    
+    def handle_mouse_event(self, event_type: str, pos: tuple, button: int = 2) -> bool:
         """
         Handle mouse event from Reggie.
         
@@ -188,10 +367,17 @@ class QuickPaintTab(QtWidgets.QWidget):
         Returns:
             True if event was handled, False otherwise
         """
-        if not self.qpt_widget.is_painting():
+        is_painting = self.qpt_widget.is_painting()
+        # Reduce log spam for move events
+        if event_type != "move":
+            print(f"[QPT] handle_mouse_event: type={event_type}, pos={pos}, button={button}, is_painting={is_painting}")
+        
+        if not is_painting:
             return False
         
         if event_type == "press":
+            # Refresh object database before starting to paint
+            self._refresh_object_database()
             return self.mouse_handler.on_mouse_press(pos, button)
         elif event_type == "move":
             return self.mouse_handler.on_mouse_move(pos)
@@ -204,9 +390,22 @@ class QuickPaintTab(QtWidgets.QWidget):
         """Get the current painting outline"""
         return self.mouse_handler.get_outline()
     
+    def get_outline_with_types(self) -> List[tuple]:
+        """Get the current painting outline with tile types"""
+        return self.mouse_handler.get_outline_with_types()
+    
     def is_painting(self) -> bool:
         """Check if currently painting"""
-        return self.mouse_handler.is_painting()
+        # Check the widget's painting_active flag, not the mouse handler
+        return self.qpt_widget.is_painting()
+    
+    def reset(self):
+        """
+        Reset QPT to default state.
+        Call this when level changes, area changes, or area settings are modified.
+        """
+        print("[QPT] QuickPaintTab.reset() called")
+        self.qpt_widget.reset_to_default()
 
 
 class FillPaintTab(QtWidgets.QWidget):
@@ -287,9 +486,9 @@ class QuickPaintPalette(QtWidgets.QWidget):
         """
         print("[QPT] QuickPaintPalette.__init__ starting...")
         super().__init__(parent)
-        print("[QPT] ✓ QWidget parent initialized")
+        print("[QPT] OK: QWidget parent initialized")
         self.init_ui()
-        print("[QPT] ✓ QuickPaintPalette initialized")
+        print("[QPT] OK: QuickPaintPalette initialized")
     
     def init_ui(self):
         """Initialize the UI"""
@@ -299,34 +498,34 @@ class QuickPaintPalette(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        print("[QPT] ✓ Layout created")
+        print("[QPT] OK: Layout created")
         
         # ===== TAB WIDGET =====
         print("[QPT] Creating QTabWidget...")
         self.tabs = QtWidgets.QTabWidget()
-        print("[QPT] ✓ QTabWidget created")
+        print("[QPT] OK: QTabWidget created")
         
         # Quick Paint tab (main)
         print("[QPT] Creating QuickPaintTab...")
         self.quick_paint_tab = QuickPaintTab()
-        print("[QPT] ✓ QuickPaintTab created")
+        print("[QPT] OK: QuickPaintTab created")
         self.tabs.addTab(self.quick_paint_tab, "Quick Paint")
         
         # Fill Paint tab (stub)
         print("[QPT] Creating FillPaintTab...")
         self.fill_paint_tab = FillPaintTab()
-        print("[QPT] ✓ FillPaintTab created")
+        print("[QPT] OK: FillPaintTab created")
         self.tabs.addTab(self.fill_paint_tab, "Fill Paint")
         
         # Outline Overlay tab (stub)
         print("[QPT] Creating OutlineOverlayTab...")
         self.outline_overlay_tab = OutlineOverlayTab()
-        print("[QPT] ✓ OutlineOverlayTab created")
+        print("[QPT] OK: OutlineOverlayTab created")
         self.tabs.addTab(self.outline_overlay_tab, "Outline Overlay")
         
         print("[QPT] Adding tabs to layout...")
         layout.addWidget(self.tabs)
-        print("[QPT] ✓ QuickPaintPalette.init_ui completed")
+        print("[QPT] OK: QuickPaintPalette.init_ui completed")
     
     def get_quick_paint_tab(self):
         """Get the Quick Paint tab"""
@@ -350,6 +549,17 @@ class QuickPaintPalette(QtWidgets.QWidget):
         """Get the current painting outline"""
         return self.quick_paint_tab.get_outline()
     
+    def get_outline_with_types(self) -> List[tuple]:
+        """Get the current painting outline with tile types"""
+        return self.quick_paint_tab.get_outline_with_types()
+    
     def is_painting(self) -> bool:
         """Check if currently painting"""
         return self.quick_paint_tab.is_painting()
+    
+    def reset(self):
+        """
+        Reset QPT to default state.
+        Call this when level changes, area changes, or area settings are modified.
+        """
+        self.quick_paint_tab.reset()

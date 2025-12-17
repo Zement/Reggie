@@ -7,6 +7,91 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 from quickpaint.core.brush import SmartBrush
 
 
+class FlowLayout(QtWidgets.QLayout):
+    """
+    A flow layout that arranges widgets in a horizontal flow, wrapping to the next line
+    when there's not enough horizontal space. Similar to CSS flexbox with wrap.
+    """
+    
+    def __init__(self, parent=None, margin=0, spacing=-1):
+        super().__init__(parent)
+        self.setContentsMargins(margin, margin, margin, margin)
+        self._spacing = spacing
+        self._items = []
+    
+    def addItem(self, item):
+        self._items.append(item)
+    
+    def count(self):
+        return len(self._items)
+    
+    def itemAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+    
+    def takeAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+    
+    def expandingDirections(self):
+        return QtCore.Qt.Orientation(0)
+    
+    def hasHeightForWidth(self):
+        return True
+    
+    def heightForWidth(self, width):
+        return self._do_layout(QtCore.QRect(0, 0, width, 0), test_only=True)
+    
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+    
+    def sizeHint(self):
+        return self.minimumSize()
+    
+    def minimumSize(self):
+        size = QtCore.QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        size += QtCore.QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+        return size
+    
+    def _do_layout(self, rect, test_only):
+        """Perform the layout, optionally just calculating height"""
+        margins = self.contentsMargins()
+        effective_rect = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom())
+        x = effective_rect.x()
+        y = effective_rect.y()
+        line_height = 0
+        spacing = self._spacing if self._spacing >= 0 else self.spacing()
+        
+        for item in self._items:
+            widget = item.widget()
+            if widget is None:
+                continue
+                
+            item_size = item.sizeHint()
+            next_x = x + item_size.width() + spacing
+            
+            # Wrap to next line if needed
+            if next_x - spacing > effective_rect.right() and line_height > 0:
+                x = effective_rect.x()
+                y = y + line_height + spacing
+                next_x = x + item_size.width() + spacing
+                line_height = 0
+            
+            if not test_only:
+                item.setGeometry(QtCore.QRect(QtCore.QPoint(x, y), item_size))
+            
+            x = next_x
+            line_height = max(line_height, item_size.height())
+        
+        return y + line_height - rect.y() + margins.bottom()
+
+
 class TilesetSelector(QtWidgets.QWidget):
     """
     Tileset selector with object list.
@@ -57,18 +142,18 @@ class TilesetSelector(QtWidgets.QWidget):
         layout.addWidget(objects_label)
         
         # Create a scroll area for the object list
-        scroll_area = QtWidgets.QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setMinimumHeight(200)
+        self.object_scroll_area = QtWidgets.QScrollArea()
+        self.object_scroll_area.setWidgetResizable(True)  # Allow content to resize with scroll area width
+        self.object_scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)  # No horizontal scroll
+        self.object_scroll_area.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.object_scroll_area.setMinimumHeight(200)
         
-        # Object list widget
+        # Object list widget with flow layout - wraps items based on available width
         self.object_list_widget = QtWidgets.QWidget()
-        self.object_list_layout = QtWidgets.QGridLayout(self.object_list_widget)
-        self.object_list_layout.setSpacing(2)
-        self.object_list_layout.setContentsMargins(2, 2, 2, 2)
+        self.object_list_layout = FlowLayout(self.object_list_widget, margin=2, spacing=2)
         
-        scroll_area.setWidget(self.object_list_widget)
-        layout.addWidget(scroll_area)
+        self.object_scroll_area.setWidget(self.object_list_widget)
+        layout.addWidget(self.object_scroll_area)
         
         # Store buttons for easy access
         self.object_buttons: Dict[int, QtWidgets.QPushButton] = {}
@@ -89,11 +174,11 @@ class TilesetSelector(QtWidgets.QWidget):
             print("[QPT] Loading objects from Reggie...")
             self.load_objects_from_reggie()
             self.objects_loaded = True
-            print("[QPT] ✓ Objects loaded")
+            print("[QPT] OK: Objects loaded")
         
         print(f"[QPT] Updating object list for tileset {index}")
         self.update_object_list()
-        print(f"[QPT] ✓ Object list updated")
+        print(f"[QPT] OK: Object list updated")
     
     def update_object_list(self):
         """Update the object list display for current tileset"""
@@ -111,8 +196,6 @@ class TilesetSelector(QtWidgets.QWidget):
         # Get objects for current tileset
         if self.current_tileset in self.tileset_objects:
             objects = self.tileset_objects[self.current_tileset]
-            row = 0
-            col = 0
             
             for obj_data in objects:
                 obj_id = obj_data.get('id', 0)
@@ -126,8 +209,7 @@ class TilesetSelector(QtWidgets.QWidget):
                 
                 if pixmap:
                     # Set button size based on object dimensions
-                    button.setMinimumSize(pixmap.width() + 4, pixmap.height() + 4)
-                    button.setMaximumSize(pixmap.width() + 4, pixmap.height() + 4)
+                    button.setFixedSize(pixmap.width() + 4, pixmap.height() + 4)
                     button.setIcon(QtGui.QIcon(pixmap))
                     button.setIconSize(pixmap.size())
                     button.setToolTip(f"Object {obj_id}")
@@ -150,8 +232,7 @@ class TilesetSelector(QtWidgets.QWidget):
                     )
                 else:
                     # Fallback if preview fails
-                    button.setMinimumSize(40, 40)
-                    button.setMaximumSize(40, 40)
+                    button.setFixedSize(40, 40)
                     button.setText(f"Obj {obj_id}")
                 
                 # Create a proper closure to avoid lambda issues
@@ -165,12 +246,7 @@ class TilesetSelector(QtWidgets.QWidget):
                 button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)  # Prevent focus-triggered clicks
                 
                 self.object_buttons[obj_id] = button
-                self.object_list_layout.addWidget(button, row, col)
-                
-                col += 1
-                if col >= 8:  # 8 columns per row
-                    col = 0
-                    row += 1
+                self.object_list_layout.addWidget(button)  # FlowLayout handles positioning
     
     def on_object_selected(self, tileset: int, obj_type: int, obj_id: int):
         """

@@ -6,7 +6,7 @@ import random
 from typing import Dict, Optional, Tuple, List
 from PyQt6 import QtWidgets, QtCore, QtGui
 
-from quickpaint.core.brush import SmartBrush, TilesetCategory
+from quickpaint.core.brush import SmartBrush
 from tiles import RenderObject
 import globals_
 
@@ -21,25 +21,34 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
     # Signal emitted when a tile is selected: (tile_id, position_type)
     tile_selected = QtCore.pyqtSignal(int, str)
     
-    # CAT1 terrain object layout - 6x8 grid with hardcoded positions
+    # Unified terrain object layout - 6x8 grid + slope objects on the right
+    # Slopes are placed at their full size with origin at top-left
     # Each cell contains (object_id, position_type)
-    CAT1_LAYOUT = [
-        # Row 1: Top Left, Top, Top, Top, Top, Top Right
-        [('top_left', 'top_left'), ('top', 'top'), ('top', 'top'), ('top', 'top'), ('top', 'top'), ('top_right', 'top_right')],
-        # Row 2: Left, Center, Center, Center, Center, Right
-        [('left', 'left'), ('center', 'center'), ('center', 'center'), ('center', 'center'), ('center', 'center'), ('right', 'right')],
-        # Row 3: Left, Ceiling Left Inner, Ceiling, Ceiling, Ceiling Right Inner, Right
-        [('left', 'left'), ('inner_bottom_left', 'inner_bottom_left'), ('bottom', 'bottom'), ('bottom', 'bottom'), ('inner_bottom_right', 'inner_bottom_right'), ('right', 'right')],
-        # Row 4: Left, Right, Nothing, Nothing, Left, Right
-        [('left', 'left'), ('right', 'right'), (None, None), (None, None), ('left', 'left'), ('right', 'right')],
-        # Row 5: Left, Right, Nothing, Nothing, Left, Right
-        [('left', 'left'), ('right', 'right'), (None, None), (None, None), ('left', 'left'), ('right', 'right')],
-        # Row 6: Left, Top Left Inner, Top, Top, Top Right Inner, Right
-        [('left', 'left'), ('inner_top_left', 'inner_top_left'), ('top', 'top'), ('top', 'top'), ('inner_top_right', 'inner_top_right'), ('right', 'right')],
-        # Row 7: Left, Center, Center, Center, Center, Right
-        [('left', 'left'), ('center', 'center'), ('center', 'center'), ('center', 'center'), ('center', 'center'), ('right', 'right')],
-        # Row 8: Bottom Left, Bottom, Bottom, Bottom, Bottom, Bottom Right
-        [('bottom_left', 'bottom_left'), ('bottom', 'bottom'), ('bottom', 'bottom'), ('bottom', 'bottom'), ('bottom', 'bottom'), ('bottom_right', 'bottom_right')],
+    TERRAIN_LAYOUT = [
+        # Row 1: Top Left, Top, Top, Top, Top, Top Right | 1x1 slopes (2 tall) | 2x1 slopes (2 tall) | 4x1 slopes (2 tall)
+        [('top_left', 'top_left'), ('top', 'top'), ('top', 'top'), ('top', 'top'), ('top', 'top'), ('top_right', 'top_right'), 
+        ('slope_top_1x1_left', 'slope_top_1x1_left'), ('slope_top_1x1_right', 'slope_top_1x1_right'), ('slope_top_4x1_left', 'slope_top_4x1_left'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('slope_top_4x1_right', 'slope_top_4x1_right'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered')],
+        # Row 2: Left, Center, Center, Center, Center, Right | 1x1 base | 2x1 base | 4x1 base
+        [('left', 'left'), ('center', 'center'), ('center', 'center'), ('center', 'center'), ('center', 'center'), ('right', 'right'),
+        ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered')],
+        # Row 3: Left, Inner Bottom Left, Bottom, Bottom, Inner Bottom Right, Right | 1x1 top | 2x1 top | 4x1 top
+        [('left', 'left'), ('inner_bottom_left', 'inner_bottom_left'), ('bottom', 'bottom'), ('bottom', 'bottom'), ('inner_bottom_right', 'inner_bottom_right'), ('right', 'right'),
+        (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None)],
+        # Row 4: Left, Right, Nothing, Nothing, Left, Right | 1x1 base | 2x1 base | 4x1 base
+        [('left', 'left'), ('right', 'right'), (None, None), (None, None), ('left', 'left'), ('right', 'right'),
+        ('slope_bottom_1x1_left', 'slope_bottom_1x1_left'), ('slope_bottom_1x1_right', 'slope_bottom_1x1_right'), ('slope_bottom_4x1_left', 'slope_bottom_4x1_left'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('slope_bottom_4x1_right', 'slope_bottom_4x1_right'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered')],
+        # Row 5: Left, Right, Nothing, Nothing, Left, Right | 1x1 top right | 2x1 top right | 4x1 top right
+        [('left', 'left'), ('right', 'right'), (None, None), (None, None), ('left', 'left'), ('right', 'right'),
+        ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered')],
+        # Row 6: Left, Inner Top Left, Top, Top, Inner Top Right, Right | 1x1 bottom left | 2x1 bottom left | 4x1 bottom left
+        [('left', 'left'), ('inner_top_left', 'inner_top_left'), ('top', 'top'), ('top', 'top'), ('inner_top_right', 'inner_top_right'), ('right', 'right'),
+        (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None), (None, None)],
+        # Row 7: Left, Center, Center, Center, Center, Right | 1x1 bottom base | 2x1 bottom base | 4x1 bottom base
+        [('left', 'left'), ('center', 'center'), ('center', 'center'), ('center', 'center'), ('center', 'center'), ('right', 'right'),
+        ('slope_top_2x1_left', 'slope_top_2x1_left'), ('floor_covered', 'floor_covered'), ('slope_top_2x1_right', 'slope_top_2x1_right'), ('floor_covered', 'floor_covered'), ('slope_bottom_2x1_left', 'slope_bottom_2x1_left'), ('floor_covered', 'floor_covered'), ('slope_bottom_2x1_right', 'slope_bottom_2x1_right'), ('floor_covered', 'floor_covered'), (None, None), (None, None)],
+        # Row 8: Bottom Left, Bottom, Bottom, Bottom, Bottom, Bottom Right | 1x1 bottom right | 2x1 bottom right | 4x1 bottom right
+        [('bottom_left', 'bottom_left'), ('bottom', 'bottom'), ('bottom', 'bottom'), ('bottom', 'bottom'), ('bottom', 'bottom'), ('bottom_right', 'bottom_right'),
+        ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), ('floor_covered', 'floor_covered'), (None, None), (None, None)]
     ]
     
     def __init__(self, brush: SmartBrush = None, parent=None):
@@ -52,7 +61,6 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         """
         super().__init__(parent)
         self.brush = brush
-        self.category = TilesetCategory.CAT1 if brush else TilesetCategory.CAT1
         self.tileset_idx = 0  # Default to Pa0
         self.scene = QtWidgets.QGraphicsScene()
         self.setScene(self.scene)
@@ -72,6 +80,17 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         
         self.init_ui()
     
+    def get_current_layout(self):
+        """Get the unified terrain layout with slopes"""
+        return self.TERRAIN_LAYOUT
+    
+    def get_grid_dimensions(self):
+        """Get the grid dimensions for the current category"""
+        layout = self.get_current_layout()
+        height = len(layout)
+        width = len(layout[0]) if layout else 0
+        return width, height
+    
     def init_ui(self):
         """Initialize the UI"""
         self.setMinimumHeight(200)
@@ -85,39 +104,68 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         self._add_ui_elements()
     
     def draw_empty_grid(self):
-        """Draw an empty 6x8 grid with tile position outlines"""
+        """Draw an empty grid with tile position outlines based on current category"""
         self.scene.clear()
         self.tile_map.clear()
         
-        # Draw tile position outlines for each cell in the CAT1 layout
+        # Draw tile position outlines for each cell in the current layout
         self._draw_tile_outlines()
         
         # Redraw status indicator after clearing
         self._add_ui_elements()
         
-        # Set scene rect to match 6x8 grid at 24x24 cells
-        self.scene.setSceneRect(0, 0, 6 * 24, 8 * 24)
-        self.fitInView(self.scene.sceneRect(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+        # Get grid dimensions for current category
+        width, height = self.get_grid_dimensions()
         
-        print("[QPT] Empty grid with tile outlines drawn")
+        # Set scene rect to match grid dimensions at 24x24 cells
+        self.scene.setSceneRect(0, 0, width * 24, height * 24)
+        # Reset transform to prevent scaling - display at 1:1 pixel ratio
+        self.resetTransform()
+        
+        print(f"[QPT] Empty grid ({width}x{height}) with tile outlines drawn")
     
     def _draw_tile_outlines(self):
         """Draw minimalistic tile position outlines using QPaint with grass details"""
         # Colors: Color 2 (80% opaque gray) for outlines, Color 3 (50% opaque gray) for inner tiles
         outline_color = QtGui.QColor(128, 128, 128, 204)  # 80% opaque gray
         inner_color = QtGui.QColor(128, 128, 128, 127)    # 50% opaque gray
+        faint_color = QtGui.QColor(128, 128, 128, 16)     # Very faint gray for disabled slopes
         
-        # Iterate through CAT1_LAYOUT and draw outlines for each position
-        for row_idx, row in enumerate(self.CAT1_LAYOUT):
+        # Get the current layout
+        current_layout = self.get_current_layout()
+        
+        # Get enabled slopes from brush (if available)
+        enabled_slopes = getattr(self.brush, 'enabled_slopes', None) if self.brush else None
+        if enabled_slopes is None:
+            enabled_slopes = set()  # All slopes enabled by default
+        
+        # Helper function to get pixmap size for a position type
+        def get_pixmap_size(pos_type):
+            """Return (width, height) for pixmap based on position type"""
+            if pos_type and 'slope' in pos_type:
+                if '1x1' in pos_type:
+                    return (24, 48)  # 1x1 slope + base
+                elif '2x1' in pos_type:
+                    return (48, 48)  # 2x1 slope + base
+                elif '4x1' in pos_type:
+                    return (96, 48)  # 4x1 slope + base
+            return (24, 24)  # Regular terrain tile
+        
+        # Iterate through current layout and draw outlines for each position
+        for row_idx, row in enumerate(current_layout):
             for col_idx, (position_type, _) in enumerate(row):
                 if position_type is None:
                     continue
                 
+                # Determine pixmap size based on position type
+                pixmap_width, pixmap_height = get_pixmap_size(position_type)
+                
+                # Calculate position (slopes may span multiple grid cells)
                 x = col_idx * 24
                 y = row_idx * 24
                 
                 # Create a pixmap for this cell
-                pixmap = QtGui.QPixmap(24, 24)
+                pixmap = QtGui.QPixmap(pixmap_width, pixmap_height)
                 pixmap.fill(QtCore.Qt.GlobalColor.transparent)
                 
                 painter = QtGui.QPainter(pixmap)
@@ -274,6 +322,285 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                         painter.setPen(pen)
                         painter.drawLine(4, 22, 12, 22)
                 
+                # Slope tiles - origin tiles (top-left of slope object)
+                elif position_type in ['slope_top_1x1_left', 'slope_top_1x1_right',
+                                       'slope_top_2x1_left', 'slope_top_2x1_right',
+                                       'slope_top_4x1_left', 'slope_top_4x1_right',
+                                       'slope_bottom_1x1_left', 'slope_bottom_1x1_right',
+                                       'slope_bottom_2x1_left', 'slope_bottom_2x1_right',
+                                       'slope_bottom_4x1_left', 'slope_bottom_4x1_right']:
+                    # Check if this slope is enabled
+                    is_enabled = position_type in enabled_slopes
+                    
+                    # Use appropriate color based on enabled state
+                    tile_color = inner_color if is_enabled else faint_color 
+                    
+                    # Draw slope based on type
+                    if position_type == 'slope_top_1x1_left':
+                        painter.fillRect(0, 0, pixmap_width, pixmap_height, tile_color)
+                        # Draw filled triangle for slope
+                        triangle = QtGui.QPolygonF([
+                            QtCore.QPointF(0, 24),    # bottom-left
+                            QtCore.QPointF(24, 0),   # top-right
+                            QtCore.QPointF(24, 24)   # bottom-right
+                        ])
+                        path = QtGui.QPainterPath()
+                        path.addPolygon(triangle)
+                        painter.fillPath(path, tile_color)
+                        painter.fillRect(0, 24, 24, 28, (inner_color if is_enabled else faint_color))
+                        pen = QtGui.QPen(outline_color if is_enabled else faint_color)
+                        pen.setWidth(2)
+                        painter.setPen(pen)
+                        painter.drawLine(0, 24, 24, 0)  # Diagonal from bottom-left to top-right
+                        painter.drawLine(0, 24, 0, 48)
+                        painter.drawLine(0, 48, 24, 48)
+                        painter.drawLine(24, 0, 24, 48)
+                        
+                    elif position_type == 'slope_top_1x1_right':
+                        painter.fillRect(0, 0, pixmap_width, pixmap_height, tile_color)
+                        # Draw filled triangle for slope
+                        triangle = QtGui.QPolygonF([
+                            QtCore.QPointF(0, 0),     # top-left
+                            QtCore.QPointF(24, 24),   # bottom-right
+                            QtCore.QPointF(0, 24)    # bottom-left
+                        ])
+                        path = QtGui.QPainterPath()
+                        path.addPolygon(triangle)
+                        painter.fillPath(path, tile_color)
+                        painter.fillRect(0, 24, 24, 28, (inner_color if is_enabled else faint_color))
+                        pen = QtGui.QPen(outline_color if is_enabled else faint_color)
+                        pen.setWidth(2)
+                        painter.setPen(pen)
+                        painter.drawLine(0, 0, 24, 24)  # Diagonal from top-left to bottom-right
+                        painter.drawLine(0, 0, 0, 48)
+                        painter.drawLine(0, 48, 24, 48)
+                        painter.drawLine(24, 24, 24, 48)
+                        
+                    elif position_type == 'slope_top_2x1_left':
+                        painter.fillRect(0, 0, pixmap_width, pixmap_height, tile_color)
+                        # Draw filled triangle for slope
+                        triangle = QtGui.QPolygonF([
+                            QtCore.QPointF(0, 24),    # bottom-left
+                            QtCore.QPointF(48, 0),   # top-right
+                            QtCore.QPointF(48, 24)   # bottom-right
+                        ])
+                        path = QtGui.QPainterPath()
+                        path.addPolygon(triangle)
+                        painter.fillPath(path, tile_color)
+                        # Draw base block
+                        painter.fillRect(0, 24, 48, 24, (inner_color if is_enabled else faint_color))
+                        # Draw border lines for base block
+                        pen = QtGui.QPen(outline_color if is_enabled else faint_color)
+                        pen.setWidth(2)
+                        painter.setPen(pen)
+                        painter.drawLine(0, 24, 48, 0)  # Diagonal from bottom-left to top-right
+                        painter.drawLine(0, 24, 0, 48)  # Left edge
+                        painter.drawLine(0, 48, 48, 48)  # Bottom edge
+                        painter.drawLine(48, 0, 48, 48)  # Right edge
+                        
+                    elif position_type == 'slope_top_2x1_right':
+                        painter.fillRect(0, 0, pixmap_width, pixmap_height, tile_color)
+                        # Draw filled triangle for slope
+                        triangle = QtGui.QPolygonF([
+                            QtCore.QPointF(0, 0),     # top-left
+                            QtCore.QPointF(48, 24),   # bottom-right
+                            QtCore.QPointF(0, 24)    # bottom-left
+                        ])
+                        path = QtGui.QPainterPath()
+                        path.addPolygon(triangle)
+                        painter.fillPath(path, tile_color)
+                        # Draw base block
+                        painter.fillRect(0, 24, 48, 24, (inner_color if is_enabled else faint_color))
+                        # Draw border lines for base block
+                        pen = QtGui.QPen(outline_color if is_enabled else faint_color)
+                        pen.setWidth(2)
+                        painter.setPen(pen)
+                        painter.drawLine(0, 0, 48, 24)  # Diagonal from top-left to bottom-right
+                        painter.drawLine(0, 0, 0, 48)  # Left edge
+                        painter.drawLine(0, 48, 48, 48)  # Bottom edge
+                        painter.drawLine(48, 24, 48, 48)  # Right edge
+                        
+                    elif position_type == 'slope_top_4x1_left':
+                        painter.fillRect(0, 0, pixmap_width, pixmap_height, tile_color)
+                        # Draw filled triangle for slope
+                        triangle = QtGui.QPolygonF([
+                            QtCore.QPointF(0, 24),    # bottom-left
+                            QtCore.QPointF(96, 0),   # top-right
+                            QtCore.QPointF(96, 24)   # bottom-right
+                        ])
+                        path = QtGui.QPainterPath()
+                        path.addPolygon(triangle)
+                        painter.fillPath(path, tile_color)
+                        # Draw base block
+                        painter.fillRect(0, 24, 96, 24, (inner_color if is_enabled else faint_color))
+                        # Draw border lines for base block
+                        pen = QtGui.QPen(outline_color if is_enabled else faint_color)
+                        pen.setWidth(2)
+                        painter.setPen(pen)
+                        painter.drawLine(0, 24, 96, 0)  # Diagonal from bottom-left to top-right
+                        painter.drawLine(0, 24, 0, 48)  # Left edge
+                        painter.drawLine(0, 48, 96, 48)  # Bottom edge
+                        painter.drawLine(96, 0, 96, 48)  # Right edge
+                        
+                    elif position_type == 'slope_top_4x1_right':
+                        painter.fillRect(0, 0, pixmap_width, pixmap_height, tile_color)
+                        # Draw filled triangle for slope
+                        triangle = QtGui.QPolygonF([
+                            QtCore.QPointF(0, 0),     # top-left
+                            QtCore.QPointF(96, 24),   # bottom-right
+                            QtCore.QPointF(0, 24)    # bottom-left
+                        ])
+                        path = QtGui.QPainterPath()
+                        path.addPolygon(triangle)
+                        painter.fillPath(path, tile_color)
+                        # Draw base block
+                        painter.fillRect(0, 24, 96, 24, (inner_color if is_enabled else faint_color))
+                        # Draw border lines for base block
+                        pen = QtGui.QPen(outline_color if is_enabled else faint_color)
+                        pen.setWidth(2)
+                        painter.setPen(pen)
+                        painter.drawLine(0, 0, 96, 24)  # Diagonal from top-left to bottom-right
+                        painter.drawLine(0, 0, 0, 48)  # Left edge
+                        painter.drawLine(0, 48, 96, 48)  # Bottom edge
+                        painter.drawLine(96, 24, 96, 48)  # Right edge
+                        
+                    elif position_type == 'slope_bottom_1x1_left':
+                        painter.fillRect(0, 0, pixmap_width, pixmap_height, tile_color)
+                        # Draw base block (top part for bottom slopes)
+                        painter.fillRect(0, 0, 24, 24, (inner_color if is_enabled else faint_color))
+                        # Draw filled triangle for slope (bottom part)
+                        triangle = QtGui.QPolygonF([
+                            QtCore.QPointF(0, 24),    # top-left
+                            QtCore.QPointF(24, 24),   # bottom-right
+                            QtCore.QPointF(24, 48)    # bottom-left
+                        ])
+                        path = QtGui.QPainterPath()
+                        path.addPolygon(triangle)
+                        painter.fillPath(path, tile_color)
+                        # Draw border lines
+                        pen = QtGui.QPen(outline_color if is_enabled else faint_color)
+                        pen.setWidth(2)
+                        painter.setPen(pen)
+                        painter.drawLine(0, 24, 24, 48)  # Diagonal from top-left to bottom-right
+                        painter.drawLine(0, 0, 0, 24)  # Left edge
+                        painter.drawLine(0, 0, 24, 0)  # Top edge
+                        painter.drawLine(24, 0, 24, 48)  # Right edge
+                        
+                    elif position_type == 'slope_bottom_1x1_right':
+                        painter.fillRect(0, 0, pixmap_width, pixmap_height, tile_color)
+                        # Draw base block (top part for bottom slopes)
+                        painter.fillRect(0, 0, 24, 24, (inner_color if is_enabled else faint_color))
+                        # Draw filled triangle for slope (bottom part)
+                        triangle = QtGui.QPolygonF([
+                            QtCore.QPointF(0, 24),    # bottom-left
+                            QtCore.QPointF(0, 48),   # top-right
+                            QtCore.QPointF(24, 24)   # bottom-right
+                        ])
+                        path = QtGui.QPainterPath()
+                        path.addPolygon(triangle)
+                        painter.fillPath(path, tile_color)
+                        # Draw border lines
+                        pen = QtGui.QPen(outline_color if is_enabled else faint_color)
+                        pen.setWidth(2)
+                        painter.setPen(pen)
+                        painter.drawLine(0, 48, 24, 24)  # Diagonal from bottom-left to top-right
+                        painter.drawLine(0, 0, 0, 48)  # Left edge
+                        painter.drawLine(0, 0, 24, 0)  # Top edge
+                        painter.drawLine(24, 0, 24, 24)  # Right edge
+                        
+                    elif position_type == 'slope_bottom_2x1_left':
+                        painter.fillRect(0, 0, pixmap_width, pixmap_height, tile_color)
+                        # Draw base block (top part for bottom slopes)
+                        painter.fillRect(0, 0, 48, 24, (inner_color if is_enabled else faint_color))
+                        # Draw filled triangle for slope (bottom part)
+                        triangle = QtGui.QPolygonF([
+                            QtCore.QPointF(0, 24),    # top-left
+                            QtCore.QPointF(48, 24),   # bottom-right
+                            QtCore.QPointF(48, 48)    # bottom-left
+                        ])
+                        path = QtGui.QPainterPath()
+                        path.addPolygon(triangle)
+                        painter.fillPath(path, tile_color)
+                        # Draw border lines
+                        pen = QtGui.QPen(outline_color if is_enabled else faint_color)
+                        pen.setWidth(2)
+                        painter.setPen(pen)
+                        painter.drawLine(0, 24, 48, 48)  # Diagonal from top-left to bottom-right
+                        painter.drawLine(0, 0, 0, 24)  # Left edge
+                        painter.drawLine(0, 0, 48, 0)  # Top edge
+                        painter.drawLine(48, 0, 48, 48)  # Right edge
+                        
+                    elif position_type == 'slope_bottom_2x1_right':
+                        painter.fillRect(0, 0, pixmap_width, pixmap_height, tile_color)
+                        # Draw base block (top part for bottom slopes)
+                        painter.fillRect(0, 0, 48, 24, (inner_color if is_enabled else faint_color))
+                        # Draw filled triangle for slope (bottom part)
+                        triangle = QtGui.QPolygonF([
+                            QtCore.QPointF(0, 48),    # bottom-left
+                            QtCore.QPointF(48, 24),   # top-right
+                            QtCore.QPointF(0, 24)   # bottom-right
+                        ])
+                        path = QtGui.QPainterPath()
+                        path.addPolygon(triangle)
+                        painter.fillPath(path, tile_color)
+                        # Draw border lines
+                        pen = QtGui.QPen(outline_color if is_enabled else faint_color)
+                        pen.setWidth(2)
+                        painter.setPen(pen)
+                        painter.drawLine(0, 48, 48, 24)  # Diagonal from bottom-left to top-right
+                        painter.drawLine(0, 0, 0, 48)  # Left edge
+                        painter.drawLine(0, 0, 48, 0)  # Top edge
+                        painter.drawLine(48, 0, 48, 24)  # Right edge
+                        
+                    elif position_type == 'slope_bottom_4x1_left':
+                        painter.fillRect(0, 0, pixmap_width, pixmap_height, tile_color)
+                        # Draw base block (top part for bottom slopes)
+                        painter.fillRect(0, 0, 96, 24, (inner_color if is_enabled else faint_color))
+                        # Draw filled triangle for slope (bottom part)
+                        triangle = QtGui.QPolygonF([
+                            QtCore.QPointF(0, 24),    # top-left
+                            QtCore.QPointF(96, 48),   # bottom-right
+                            QtCore.QPointF(96, 24)    # bottom-left
+                        ])
+                        path = QtGui.QPainterPath()
+                        path.addPolygon(triangle)
+                        painter.fillPath(path, tile_color)
+                        # Draw border lines
+                        pen = QtGui.QPen(outline_color if is_enabled else faint_color)
+                        pen.setWidth(2)
+                        painter.setPen(pen)
+                        painter.drawLine(0, 24, 96, 48)  # Diagonal from top-left to bottom-right
+                        painter.drawLine(0, 0, 0, 24)  # Left edge
+                        painter.drawLine(0, 0, 96, 0)  # Top edge
+                        painter.drawLine(96, 0, 96, 48)  # Right edge
+                        
+                    elif position_type == 'slope_bottom_4x1_right':
+                        painter.fillRect(0, 0, pixmap_width, pixmap_height, tile_color)
+                        # Draw base block (top part for bottom slopes)
+                        painter.fillRect(0, 0, 96, 24, (inner_color if is_enabled else faint_color))
+                        # Draw filled triangle for slope (bottom part)
+                        triangle = QtGui.QPolygonF([
+                            QtCore.QPointF(0, 48),    # bottom-left
+                            QtCore.QPointF(96, 24),   # top-right
+                            QtCore.QPointF(0, 24)   # bottom-right
+                        ])
+                        path = QtGui.QPainterPath()
+                        path.addPolygon(triangle)
+                        painter.fillPath(path, tile_color)
+                        # Draw border lines
+                        pen = QtGui.QPen(outline_color if is_enabled else faint_color)
+                        pen.setWidth(2)
+                        painter.setPen(pen)
+                        painter.drawLine(0, 48, 96, 24)  # Diagonal from bottom-left to top-right
+                        painter.drawLine(0, 0, 0, 48)  # Left edge
+                        painter.drawLine(0, 0, 96, 0)  # Top edge
+                        painter.drawLine(96, 0, 96, 24)  # Right edge
+                
+                # Covered tiles (part of slope objects)
+                elif position_type == 'floor_covered':
+                    # Draw covered tile with faint color (no additional fill needed)
+                    pass
+                    
                 painter.end()
                 
                 # Add pixmap to scene
@@ -281,7 +608,7 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                 item.setPos(x, y)
     
     def draw_object_grid(self):
-        """Draw the full CAT1 terrain object grid (6x8)"""
+        """Draw the full terrain object grid with current layout"""
         if not globals_.ObjectDefinitions or not globals_.Tiles:
             return
         
@@ -290,7 +617,7 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
             return
         
         self.is_drawing = True
-        print(f"[QPT] Drawing full CAT1 grid for tileset {self.tileset_idx}")
+        print(f"[QPT] Drawing full terrain grid for tileset {self.tileset_idx}")
         
         self.scene.clear()
         self.tile_map.clear()
@@ -316,8 +643,9 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
             'bottom_right': 13,
         }
         
-        # Draw the full 6x8 grid
-        for row_idx, row in enumerate(self.CAT1_LAYOUT):
+        # Draw the grid using current layout
+        current_layout = self.get_current_layout()
+        for row_idx, row in enumerate(current_layout):
             x = 0
             for col_idx, (position_type, position_label) in enumerate(row):
                 if position_type is None:
@@ -345,10 +673,11 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         
         # Set scene rect to fit the grid
         self.scene.setSceneRect(0, 0, 6 * 24, 8 * 24)
-        self.fitInView(self.scene.sceneRect(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+        # Reset transform to prevent scaling - display at 1:1 pixel ratio
+        self.resetTransform()
         
         self.is_drawing = False
-        print(f"[QPT] ✓ Full CAT1 grid drawn for tileset {self.tileset_idx}")
+        print(f"[QPT] OK: Full CAT1 grid drawn for tileset {self.tileset_idx}")
     
     def find_object_for_position(self, position_type: str) -> Optional[int]:
         """
@@ -381,14 +710,15 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         
         return position_to_obj.get(position_type)
     
-    def render_object(self, tileset_idx: int, obj_id: int) -> Optional[QtGui.QPixmap]:
+    def render_object(self, tileset_idx: int, obj_id: int, cap_size: bool = True) -> Optional[QtGui.QPixmap]:
         """
         Render an object preview pixmap.
-        For the tile picker, we cap the size to 1x1 to fit in the grid.
+        For the tile picker, we cap the size to 1x1 to fit in the grid, except for slopes which render at full size.
         
         Args:
             tileset_idx: Tileset index (0-3)
             obj_id: Object ID
+            cap_size: If True, cap non-slope objects to 1x1 (24x24 px) for the tile picker grid
         
         Returns:
             QPixmap with the rendered object, or None if rendering fails
@@ -401,8 +731,13 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
             obj_def = obj_defs[obj_id]
             
             # For tile picker display, cap size to 1x1 to fit in grid
-            display_width = min(obj_def.width, 1)
-            display_height = min(obj_def.height, 1)
+            # Slopes render at full size (handled separately)
+            if cap_size:
+                display_width = 1
+                display_height = 1
+            else:
+                display_width = obj_def.width
+                display_height = obj_def.height
             
             # Render the object using Reggie's RenderObject function
             obj_render = RenderObject(tileset_idx, obj_id, obj_def.width, obj_def.height, True)
@@ -549,7 +884,6 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
             brush: SmartBrush instance
         """
         self.brush = brush
-        self.category = brush.category
     
     def set_tileset(self, tileset_idx: int):
         """
@@ -595,9 +929,10 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         if not obj_defs:
             return
         
-        # Build position_grid_map from CAT1_LAYOUT to ensure all positions are correctly mapped
+        # Build position_grid_map from current layout to ensure all positions are correctly mapped
         position_grid_map = {}
-        for row_idx, row in enumerate(self.CAT1_LAYOUT):
+        current_layout = self.get_current_layout()
+        for row_idx, row in enumerate(current_layout):
             col_idx = 0
             for position_type, position_label in row:
                 if position_type is not None:
@@ -613,11 +948,11 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         
         print(f"[QPT] Position grid map: {position_grid_map}")
         
-        # Draw assigned objects (only draw positions that have been explicitly assigned)
+        # Draw assigned terrain objects
         for position_type in self.brush.terrain_assigned:
             obj_id = self.brush.terrain[position_type]
             
-            if obj_id >= 0 and obj_id < len(obj_defs) and obj_defs[obj_id] is not None:
+            if obj_id is not None and obj_id >= 0 and obj_id < len(obj_defs) and obj_defs[obj_id] is not None:
                 # Get grid positions for this position type
                 grid_positions = position_grid_map.get(position_type, [])
                 if not isinstance(grid_positions, list):
@@ -630,19 +965,63 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                     pixmap = self.render_object(self.tileset_idx, obj_id)
                     
                     if pixmap and not pixmap.isNull():
-                        print(f"[QPT]   ✓ Drew object {obj_id} at grid ({grid_x}, {grid_y})")
+                        print(f"[QPT]   OK: Drew object {obj_id} at grid ({grid_x}, {grid_y})")
                         item = self.scene.addPixmap(pixmap)
                         item.setPos(grid_x * 24, grid_y * 24)
                         self.tile_map[(grid_x, grid_y)] = (obj_id, position_type)
                     else:
                         print(f"[QPT]   ✗ Failed to render object {obj_id} at grid ({grid_x}, {grid_y})")
         
-        # Set scene rect to fit the grid
-        self.scene.setSceneRect(0, 0, 6 * 24, 8 * 24)
-        self.fitInView(self.scene.sceneRect(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+        # Helper function to get slope dimensions
+        def get_slope_dimensions(slope_type):
+            """Return (width, height) for slope type"""
+            if '1x1' in slope_type:
+                return (1, 2)  # 1 wide, 2 tall (slope + base)
+            elif '2x1' in slope_type:
+                return (2, 2)  # 2 wide, 2 tall (slope + base)
+            elif '4x1' in slope_type:
+                return (4, 2)  # 4 wide, 2 tall (slope + base)
+            return (1, 2)
+        
+        # Draw assigned slope objects
+        for slope_type in self.brush.slopes_assigned:
+            obj_id = self.brush.slopes[slope_type]
+            
+            if obj_id is not None and obj_id >= 0 and obj_id < len(obj_defs) and obj_defs[obj_id] is not None:
+                # Get grid position for this slope type
+                grid_position = position_grid_map.get(slope_type)
+                if grid_position:
+                    if not isinstance(grid_position, list):
+                        grid_position = [grid_position]
+                    
+                    print(f"[QPT] Drawing slope_type={slope_type}, obj_id={obj_id}, grid_positions={grid_position}")
+                    
+                    # Draw slope object at grid position (slopes render at full size)
+                    for grid_x, grid_y in grid_position:
+                        pixmap = self.render_object(self.tileset_idx, obj_id, cap_size=False)
+                        
+                        if pixmap and not pixmap.isNull():
+                            print(f"[QPT]   OK: Drew slope {obj_id} at grid ({grid_x}, {grid_y})")
+                            item = self.scene.addPixmap(pixmap)
+                            item.setPos(grid_x * 24, grid_y * 24)
+                            self.tile_map[(grid_x, grid_y)] = (obj_id, slope_type)
+                            
+                            # Mark all tiles that this slope spans as occupied
+                            slope_width, slope_height = get_slope_dimensions(slope_type)
+                            for dy in range(slope_height):
+                                for dx in range(slope_width):
+                                    self.tile_map[(grid_x + dx, grid_y + dy)] = (obj_id, slope_type)
+                        else:
+                            print(f"[QPT]   ✗ Failed to render slope {obj_id} at grid ({grid_x}, {grid_y})")
+        
+        # Set scene rect to fit the full grid (16x8)
+        width, height = self.get_grid_dimensions()
+        self.scene.setSceneRect(0, 0, width * 24, height * 24)
+        # Reset transform to prevent scaling - display at 1:1 pixel ratio
+        self.resetTransform()
         
         self.is_drawing = False
-        print(f"[QPT] ✓ Canvas display updated")
+        print(f"[QPT] OK: Canvas display updated")
     
     def draw_position_objects(self, position_type: str):
         """
@@ -709,12 +1088,13 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                         x = 0
                         y += obj_def.height + 1
         
-        # Set scene rect
-        self.scene.setSceneRect(0, 0, 500, 300)
-        self.fitInView(self.scene.sceneRect(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+        # Set scene rect to fit content without scaling
+        self.scene.setSceneRect(self.scene.itemsBoundingRect())
+        # Reset transform to prevent scaling - objects should display at 1:1 pixel ratio
+        self.resetTransform()
         
         self.is_drawing = False
-        print(f"[QPT] ✓ Objects drawn for position: {position_type}")
+        print(f"[QPT] OK: Objects drawn for position: {position_type}")
     
     def get_selected_tiles(self) -> Dict[str, int]:
         """
@@ -731,7 +1111,7 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         # Get terrain tiles
         for pos in ['center', 'top', 'bottom', 'left', 'right', 'top_left', 'top_right', 'bottom_left', 'bottom_right', 'inner_top_left', 'inner_top_right', 'inner_bottom_left', 'inner_bottom_right']:
             tile_id = self.brush.get_terrain_tile(pos)
-            if tile_id > 0:
+            if tile_id is not None:
                 tiles[pos] = tile_id
         
         return tiles
@@ -785,19 +1165,26 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         if not self.brush or not hasattr(self, 'status_indicator'):
             return
         
-        # Check if all required tiles are assigned
+        # Check if all required terrain tiles are assigned
         required_positions = ['center', 'top', 'bottom', 'left', 'right', 'top_left', 'top_right', 'bottom_left', 'bottom_right', 'inner_top_left', 'inner_top_right', 'inner_bottom_left', 'inner_bottom_right']
-        all_assigned = all(pos in self.brush.terrain_assigned for pos in required_positions)
+        terrain_assigned = all(pos in self.brush.terrain_assigned for pos in required_positions)
+        
+        # Check if all enabled slopes are assigned
+        enabled_slopes = self.brush.enabled_slopes
+        slopes_assigned = all(slope in self.brush.slopes_assigned for slope in enabled_slopes) if enabled_slopes else True
+        
+        # All assigned only if both terrain and slopes are assigned
+        all_assigned = terrain_assigned and slopes_assigned
         
         # Set color: green if all assigned, red if not
         color = "#00ff00" if all_assigned else "#ff0000"  # Green or Red
         self.status_indicator.setStyleSheet(f"background-color: {color}; border-radius: 8px; border: 1px solid gray;")
         
-        status_text = "✓ All assigned" if all_assigned else "⚠ Incomplete"
-        print(f"[QPT] Status: {status_text}")
+        status_text = "OK: All assigned" if all_assigned else "⚠ Incomplete"
+        print(f"[QPT] Status: {status_text} (terrain={terrain_assigned}, slopes={slopes_assigned})")
     
     def clear_all_tiles(self):
-        """Clear all assigned tiles from the brush and canvas"""
+        """Clear all assigned tiles (terrain and slopes) from the brush and canvas"""
         if not self.brush:
             return
         
@@ -805,16 +1192,23 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         
         # Clear all terrain assignments
         for pos in ['center', 'top', 'bottom', 'left', 'right', 'top_left', 'top_right', 'bottom_left', 'bottom_right', 'inner_top_left', 'inner_top_right', 'inner_bottom_left', 'inner_bottom_right']:
-            self.brush.terrain[pos] = 0
+            self.brush.terrain[pos] = None
         
         # Clear the terrain_assigned set
         self.brush.terrain_assigned.clear()
+        
+        # Clear all slope assignments
+        for slope_name in self.brush.slopes:
+            self.brush.slopes[slope_name] = None
+        
+        # Clear the slopes_assigned set
+        self.brush.slopes_assigned.clear()
         
         # Redraw the canvas
         self.draw_empty_grid()
         self.update_status_indicator()
         
-        print("[QPT] ✓ All tiles cleared")
+        print("[QPT] OK: All tiles and slopes cleared")
     
     def mousePressEvent(self, event):
         """
@@ -834,16 +1228,20 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         
         print(f"[QPT] Clicked on grid cell ({grid_x}, {grid_y})")
         
+        # Get grid dimensions for current category
+        width, height = self.get_grid_dimensions()
+        
         # Check if the click is within the grid bounds
-        if grid_x < 0 or grid_x >= 6 or grid_y < 0 or grid_y >= 8:
-            print(f"[QPT] Click outside grid bounds")
+        if grid_x < 0 or grid_x >= width or grid_y < 0 or grid_y >= height:
+            print(f"[QPT] Click outside grid bounds ({width}x{height})")
             return
         
-        # Get the position type from the CAT1_LAYOUT
-        if grid_y >= len(self.CAT1_LAYOUT):
+        # Get the position type from the current layout
+        current_layout = self.get_current_layout()
+        if grid_y >= len(current_layout):
             return
         
-        row = self.CAT1_LAYOUT[grid_y]
+        row = current_layout[grid_y]
         if grid_x >= len(row):
             return
         

@@ -1,0 +1,38 @@
+{
+  "name": "Pa1_obake",
+  "tileset_names": [
+    "Pa1_obake"
+  ],
+  "slot": "Pa1",
+  "painting_mode": "SmartPaint",
+  "priority": 0,
+  "terrain": {
+    "center": 18,
+    "top": 0,
+    "bottom": 17,
+    "left": 3,
+    "right": 3,
+    "top_left": 32,
+    "top_right": 31,
+    "bottom_left": 37,
+    "bottom_right": 38,
+    "inner_top_left": 42,
+    "inner_top_right": 42,
+    "inner_bottom_left": 42,
+    "inner_bottom_right": 42
+  },
+  "slopes": {
+    "slope_top_1x1_left": -1,
+    "slope_top_1x1_right": -1,
+    "slope_top_2x1_left": -1,
+    "slope_top_2x1_right": -1,
+    "slope_top_4x1_left": -1,
+    "slope_top_4x1_right": -1,
+    "slope_bottom_1x1_left": -1,
+    "slope_bottom_1x1_right": -1,
+    "slope_bottom_2x1_left": -1,
+    "slope_bottom_2x1_right": -1,
+    "slope_bottom_4x1_left": -1,
+    "slope_bottom_4x1_right": -1
+  }
+}

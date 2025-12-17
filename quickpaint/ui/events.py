@@ -1,17 +1,20 @@
 """
 Mouse Event Handler - Handles mouse events for painting operations
+
+This module provides the bridge between Qt mouse events and the painting engine.
+Supports both immediate and deferred painting modes.
 """
 from typing import Optional, Tuple, List
 from enum import Enum
-from PyQt5 import QtCore, QtGui
+from PyQt6 import QtCore, QtGui
 
 from quickpaint.core.painter import PaintOperation
-from quickpaint.core.modes import SmartPaintMode, SingleTileMode, ShapeCreator, EraserBrush, PaintingDirection
+from quickpaint.core.engine import PaintingEngine, ObjectPlacement, PaintingMode, PaintingState as EngineState
 from quickpaint.core.brush import SmartBrush
 
 
 class PaintingState(Enum):
-    """Painting state enumeration"""
+    """Painting state enumeration (legacy compatibility)"""
     IDLE = "idle"
     PAINTING = "painting"
     DEFERRED = "deferred"
@@ -21,17 +24,21 @@ class MouseEventHandler(QtCore.QObject):
     """
     Handles mouse events for painting operations.
     
-    Supports:
-    - Immediate painting (paint as mouse moves)
-    - Deferred painting (show outline, paint on release)
-    - Multiple painting modes (SmartPaint, SingleTile, ShapeCreator)
-    - Eraser brush
+    Supports two painting modes:
+    1. Immediate Mode: Hold paint key while drawing - tiles are placed immediately
+    2. Deferred Mode: Draw path, then click to finalize - shows outline preview
+    
+    Features:
+    - Bresenham interpolation for smooth strokes
+    - 8-neighbor auto-tiling
+    - Start object selection for deferred mode
     """
     
     # Signals
     painting_started = QtCore.pyqtSignal()
-    painting_ended = QtCore.pyqtSignal(list)  # List of PaintOperation
+    painting_ended = QtCore.pyqtSignal(list)  # List of ObjectPlacement
     outline_updated = QtCore.pyqtSignal(list)  # List of outline positions
+    object_placed = QtCore.pyqtSignal(object)  # Single ObjectPlacement
     
     def __init__(self, parent=None):
         """
@@ -41,10 +48,19 @@ class MouseEventHandler(QtCore.QObject):
             parent: Parent object
         """
         super().__init__(parent)
+        
+        # Create painting engine
+        self.engine = PaintingEngine()
+        
+        # Connect engine callbacks
+        self.engine.on_outline_updated = self._on_outline_updated
+        self.engine.on_place_object = self._on_place_object
+        self.engine.on_painting_finished = self._on_painting_finished
+        
+        # Legacy compatibility
         self.state = PaintingState.IDLE
         self.brush: Optional[SmartBrush] = None
         self.mode = "SmartPaint"
-        self.painting_direction = PaintingDirection.AUTO
         
         # Painting state
         self.start_pos: Optional[Tuple[int, int]] = None
@@ -53,11 +69,9 @@ class MouseEventHandler(QtCore.QObject):
         self.operations: List[PaintOperation] = []
         self.outline: List[Tuple[int, int]] = []
         
-        # Mode instances
-        self.smart_paint = SmartPaintMode()
-        self.single_tile = SingleTileMode()
-        self.shape_creator = ShapeCreator()
-        self.eraser = EraserBrush()
+        # Deferred mode state
+        self.start_object: Optional[Tuple[int, int]] = None  # Position of start object
+        self.is_immediate_mode: bool = False  # True when paint key is held
     
     def set_brush(self, brush: SmartBrush):
         """
@@ -67,53 +81,168 @@ class MouseEventHandler(QtCore.QObject):
             brush: SmartBrush instance
         """
         self.brush = brush
+        self.engine.set_brush(brush)
+        # Reset deferred mode state when brush is set (new painting session)
+        self.start_object = None
+        self.state = PaintingState.IDLE
     
     def set_mode(self, mode: str):
         """
         Set the painting mode.
         
         Args:
-            mode: Mode name ("SmartPaint", "SingleTile", "ShapeCreator", "Eraser")
+            mode: Mode name ("SmartPaint", "SingleTile", "ShapeCreator")
         """
         self.mode = mode
     
-    def set_painting_direction(self, direction: PaintingDirection):
+    def set_layer(self, layer: int):
         """
-        Set the painting direction for SmartPaint mode.
+        Set the layer for painting.
         
         Args:
-            direction: PaintingDirection enum value
+            layer: Layer index (0, 1, or 2)
         """
-        self.painting_direction = direction
+        self.engine.set_layer(layer)
     
-    def on_mouse_press(self, pos: Tuple[int, int], button: int) -> bool:
+    def set_immediate_mode(self, immediate: bool):
+        """
+        Set whether to use immediate painting mode.
+        
+        Args:
+            immediate: True for immediate mode (paint while holding key),
+                      False for deferred mode (outline preview)
+        """
+        self.is_immediate_mode = immediate
+        self.engine.set_immediate_mode(immediate)
+    
+    def update_object_database(self, database):
+        """
+        Update the object database for auto-tiling context.
+        
+        Args:
+            database: Dict mapping (x, y, layer) -> object_id
+        """
+        self.engine.update_object_database(database)
+    
+    # =========================================================================
+    # ENGINE CALLBACKS
+    # =========================================================================
+    
+    def _on_outline_updated(self, positions: List[Tuple[int, int]]):
+        """Callback when outline is updated"""
+        self.outline = positions
+        self.outline_updated.emit(positions)
+    
+    def _on_place_object(self, placement: ObjectPlacement):
+        """Callback when an object is placed"""
+        self.object_placed.emit(placement)
+    
+    def _on_painting_finished(self, placements: List[ObjectPlacement]):
+        """Callback when painting is finished"""
+        self.painting_ended.emit(placements)
+    
+    # =========================================================================
+    # MOUSE EVENT HANDLERS
+    # =========================================================================
+    
+    def on_mouse_press(self, pos: Tuple[int, int], button: int, draw_button: int = 2) -> bool:
         """
         Handle mouse press event.
         
+        In immediate mode: Start painting immediately
+        In deferred mode: 
+            - Right click (draw_button=2): Set start object or finalize if already have start
+            - Other button: Cancel current path and clear start object
+        
         Args:
             pos: Mouse position (x, y) in tile coordinates
-            button: Mouse button (1=left, 2=right, 3=middle)
+            button: Mouse button that was pressed (1=left, 2=right, 3=middle)
+            draw_button: The button assigned for drawing (default: 2=right)
         
         Returns:
             True if event was handled, False otherwise
         """
+        print(f"[MouseEventHandler] on_mouse_press: pos={pos}, button={button}, draw_button={draw_button}")
+        print(f"[MouseEventHandler] brush={self.brush is not None}, state={self.state}, is_immediate={self.is_immediate_mode}")
+        
         if not self.brush:
+            print("[MouseEventHandler] No brush set, ignoring press")
             return False
         
-        # Only handle left mouse button
-        if button != 1:
+        # In slope mode, mouse press is handled differently (commit happens on release)
+        if self.engine.session.slope_mode:
+            # Don't start new painting in slope mode - just return
+            return True
+        
+        # In deferred mode, non-draw button cancels the path
+        if not self.is_immediate_mode and button != draw_button:
+            if self.state == PaintingState.DEFERRED or self.start_object is not None:
+                print("[MouseEventHandler] Non-draw button pressed, cancelling deferred path")
+                self.cancel_painting()
+                return True
             return False
         
+        # Only handle draw button for painting
+        if button != draw_button:
+            print(f"[MouseEventHandler] Button {button} != draw_button {draw_button}, ignoring")
+            return False
+        
+        print(f"[MouseEventHandler] Starting painting at {pos}")
         self.start_pos = pos
         self.current_pos = pos
         self.stroke_path = [pos]
-        self.operations = []
-        self.outline = []
         
-        self.state = PaintingState.DEFERRED
+        if self.is_immediate_mode:
+            # Immediate mode: start painting right away
+            self.state = PaintingState.PAINTING
+            self.engine.start_painting(pos)
+        else:
+            # Deferred mode
+            if self.start_object is None:
+                # First click: set start object
+                self.start_object = pos
+                self.state = PaintingState.DEFERRED
+                self.engine.start_painting(pos)
+            else:
+                # Second click: finalize the path from start to here
+                self.engine.finish_painting(pos)
+                # The clicked position becomes the new start object
+                self.start_object = pos
+                self.engine.start_painting(pos)
+        
         self.painting_started.emit()
-        
         return True
+    
+    def on_key_press(self, key: int) -> bool:
+        """
+        Handle key press event.
+        
+        ESC key cancels the current deferred painting path.
+        Shift key toggles slope mode.
+        
+        Args:
+            key: Qt key code
+        
+        Returns:
+            True if event was handled, False otherwise
+        """
+        from PyQt6.QtCore import Qt
+        
+        if key == Qt.Key.Key_Escape:
+            if self.state == PaintingState.DEFERRED or self.start_object is not None:
+                print("[MouseEventHandler] ESC pressed, cancelling deferred path")
+                self.cancel_painting()
+                return True
+        
+        if key == Qt.Key.Key_F1:
+            if self.state == PaintingState.DEFERRED:
+                # Toggle slope mode
+                in_slope_mode = self.engine.toggle_slope_mode()
+                print(f"[MouseEventHandler] F1 pressed, slope_mode={in_slope_mode}")
+                self.outline_updated.emit()
+                return True
+        
+        return False
     
     def on_mouse_move(self, pos: Tuple[int, int]) -> bool:
         """
@@ -125,133 +254,77 @@ class MouseEventHandler(QtCore.QObject):
         Returns:
             True if event was handled, False otherwise
         """
-        if self.state == PaintingState.IDLE or not self.brush:
+        if self.state == PaintingState.IDLE:
+            # Don't log this - it's expected before first click
             return False
         
+        if not self.brush:
+            print(f"[MouseEventHandler] on_mouse_move: no brush set")
+            return False
+        
+        # Reduced logging - only log occasionally to avoid spam
+        # if pos != self.current_pos:
+        #     print(f"[MouseEventHandler] on_mouse_move: pos={pos}, state={self.state}")
+        
         self.current_pos = pos
+        
+        # Check if in slope mode - update slope preview instead of path
+        if self.engine.session.slope_mode:
+            self.engine.update_slope_preview(pos)
+            self.outline_updated.emit()
+            return True
         
         # Add to stroke path if position changed
         if pos not in self.stroke_path:
             self.stroke_path.append(pos)
         
-        # Update painting based on mode
-        if self.state == PaintingState.PAINTING:
-            # Immediate painting mode
-            self.update_immediate_painting()
-        elif self.state == PaintingState.DEFERRED:
-            # Deferred painting mode - show outline
-            self.update_deferred_outline()
+        # Update the engine
+        self.engine.update_painting(pos)
         
         return True
     
-    def on_mouse_release(self, pos: Tuple[int, int], button: int) -> bool:
+    def on_mouse_release(self, pos: Tuple[int, int], button: int, draw_button: int = 2) -> bool:
         """
         Handle mouse release event.
+        
+        In immediate mode: Finish painting
+        In deferred mode: Does nothing (painting continues until next click)
         
         Args:
             pos: Mouse position (x, y) in tile coordinates
             button: Mouse button
+            draw_button: The button assigned for drawing (default: 2=right)
         
         Returns:
             True if event was handled, False otherwise
         """
+        print(f"[MouseEventHandler] on_mouse_release: pos={pos}, button={button}, draw_button={draw_button}")
+        
         if self.state == PaintingState.IDLE or not self.brush:
             return False
         
-        if button != 1:
+        if button != draw_button:
             return False
         
-        # Finalize painting
-        self.finalize_painting()
+        # Check if in slope mode - right-click commits the slope
+        if self.engine.session.slope_mode:
+            if self.engine.commit_slope():
+                print(f"[MouseEventHandler] Slope committed, updating outline")
+                self.outline_updated.emit()
+            return True
         
-        self.state = PaintingState.IDLE
-        self.painting_ended.emit(self.operations)
+        if self.is_immediate_mode:
+            # Immediate mode: finish painting on release
+            print(f"[MouseEventHandler] Finishing immediate painting at {pos}")
+            placements = self.engine.finish_painting(pos)
+            self.state = PaintingState.IDLE
+        # Deferred mode: don't finish on release, wait for next click
         
         return True
     
-    def update_immediate_painting(self):
-        """Update painting for immediate mode (paint as mouse moves)"""
-        if not self.brush or not self.start_pos or not self.current_pos:
-            return
-        
-        # Get operations based on mode
-        if self.mode == "SmartPaint":
-            ops = self.smart_paint.paint_smart_path(
-                self.start_pos,
-                self.current_pos,
-                self.brush,
-                self.painting_direction,
-                existing_tiles={}
-            )
-            self.operations.extend(ops)
-        elif self.mode == "SingleTile":
-            ops = self.single_tile.paint_path(
-                self.stroke_path,
-                self.brush
-            )
-            self.operations.extend(ops)
-        elif self.mode == "ShapeCreator":
-            # Shape creator uses deferred mode
-            pass
-    
-    def update_deferred_outline(self):
-        """Update outline for deferred mode"""
-        if not self.brush or not self.start_pos or not self.current_pos:
-            return
-        
-        # Calculate outline based on mode
-        if self.mode == "SmartPaint":
-            ops = self.smart_paint.paint_smart_path(
-                self.start_pos,
-                self.current_pos,
-                self.brush,
-                self.painting_direction,
-                existing_tiles={}
-            )
-            self.outline = [(op.x, op.y) for op in ops]
-        elif self.mode == "SingleTile":
-            ops = self.single_tile.paint_path(
-                self.stroke_path,
-                self.brush
-            )
-            self.outline = [(op.x, op.y) for op in ops]
-        elif self.mode == "ShapeCreator":
-            # Shape creator outline
-            if self.start_pos and self.current_pos:
-                # Simple rectangle outline
-                x1, y1 = self.start_pos
-                x2, y2 = self.current_pos
-                self.outline = self.get_rectangle_outline(x1, y1, x2, y2)
-        
-        self.outline_updated.emit(self.outline)
-    
-    def finalize_painting(self):
-        """Finalize the painting operation"""
-        if not self.brush or not self.start_pos or not self.current_pos:
-            return
-        
-        # Get final operations based on mode
-        if self.mode == "SmartPaint":
-            self.operations = self.smart_paint.paint_smart_path(
-                self.start_pos,
-                self.current_pos,
-                self.brush,
-                self.painting_direction,
-                existing_tiles={}
-            )
-        elif self.mode == "SingleTile":
-            self.operations = self.single_tile.paint_path(
-                self.stroke_path,
-                self.brush
-            )
-        elif self.mode == "ShapeCreator":
-            if self.start_pos and self.current_pos:
-                x1, y1 = self.start_pos
-                x2, y2 = self.current_pos
-                self.operations = self.shape_creator.create_rectangle(
-                    x1, y1, x2, y2,
-                    self.brush
-                )
+    # =========================================================================
+    # UTILITY METHODS
+    # =========================================================================
     
     @staticmethod
     def get_rectangle_outline(x1: int, y1: int, x2: int, y2: int) -> List[Tuple[int, int]]:
@@ -283,7 +356,7 @@ class MouseEventHandler(QtCore.QObject):
     
     def is_painting(self) -> bool:
         """Check if currently painting"""
-        return self.state != PaintingState.IDLE
+        return self.state != PaintingState.IDLE or self.engine.is_painting()
     
     def cancel_painting(self):
         """Cancel current painting operation"""
@@ -291,11 +364,26 @@ class MouseEventHandler(QtCore.QObject):
         self.stroke_path = []
         self.operations = []
         self.outline = []
+        self.start_object = None
+        self.engine.cancel_painting()
+    
+    def reset_start_object(self):
+        """Reset the start object for deferred mode"""
+        self.start_object = None
+        self.engine.cancel_painting()
     
     def get_operations(self) -> List[PaintOperation]:
-        """Get the list of painting operations"""
+        """Get the list of painting operations (legacy)"""
         return self.operations
     
     def get_outline(self) -> List[Tuple[int, int]]:
         """Get the current outline"""
-        return self.outline
+        return self.engine.get_outline()
+    
+    def get_outline_with_types(self) -> List[Tuple[int, int, str]]:
+        """Get the current outline with tile types"""
+        return self.engine.get_outline_with_types()
+    
+    def get_pending_placements(self) -> List[ObjectPlacement]:
+        """Get the list of pending object placements"""
+        return self.engine.get_pending_placements()

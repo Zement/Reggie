@@ -1,0 +1,38 @@
+{
+  "name": "Pa1_korichika B",
+  "tileset_names": [
+    "Pa1_korichika"
+  ],
+  "slot": "Pa1",
+  "painting_mode": "SmartPaint",
+  "priority": 4,
+  "terrain": {
+    "center": 34,
+    "top": 33,
+    "bottom": 35,
+    "left": 36,
+    "right": 37,
+    "top_left": 38,
+    "top_right": 39,
+    "bottom_left": 40,
+    "bottom_right": 41,
+    "inner_top_left": 63,
+    "inner_top_right": 64,
+    "inner_bottom_left": 65,
+    "inner_bottom_right": 66
+  },
+  "slopes": {
+    "slope_top_1x1_left": 51,
+    "slope_top_1x1_right": 52,
+    "slope_top_2x1_left": 53,
+    "slope_top_2x1_right": 54,
+    "slope_top_4x1_left": -1,
+    "slope_top_4x1_right": -1,
+    "slope_bottom_1x1_left": 55,
+    "slope_bottom_1x1_right": 56,
+    "slope_bottom_2x1_left": 57,
+    "slope_bottom_2x1_right": 58,
+    "slope_bottom_4x1_left": -1,
+    "slope_bottom_4x1_right": -1
+  }
+}

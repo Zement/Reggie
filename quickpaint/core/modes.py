@@ -81,7 +81,7 @@ class SmartPaintMode:
         Determine if a terrain position should be painted based on direction and context.
         
         Args:
-            terrain_position: Terrain position ('top', 'bottom', 'left', 'right', etc.)
+            terrain_position: Terrain position ('top', 'bottom', 'left', 'right', 'center', etc.)
             painting_direction: Current painting direction
             has_neighbor_above: Whether there's terrain above the current position
             has_neighbor_below: Whether there's terrain below the current position
@@ -89,6 +89,10 @@ class SmartPaintMode:
         Returns:
             True if this terrain position should be painted
         """
+        # Note: For SmartPaint border painting, we use direction-based tile selection
+        # in _update_outline, not this function. This function is kept for compatibility
+        # with other painting modes that may use auto-tile-type calculation.
+        
         if painting_direction == PaintingDirection.AUTO:
             # Auto mode: paint all terrain
             return True
@@ -156,7 +160,7 @@ class SmartPaintMode:
             # Get tile ID from brush
             tile_id = brush.get_terrain_tile(tile_type)
             
-            if tile_id is not None and tile_id > 0:
+            if tile_id is not None:
                 op = PaintOperation(x, y, tile_id, layer)
                 operations.append(op)
                 existing_tiles[(x, y, layer)] = tile_id
@@ -206,7 +210,7 @@ class SmartPaintMode:
                 # Get slope tile ID from brush
                 slope_tile_id = brush.get_slope_tile(slope_type)
                 
-                if slope_tile_id is not None and slope_tile_id > 0:
+                if slope_tile_id is not None:
                     op = PaintOperation(curr_pos[0], curr_pos[1], slope_tile_id, layer)
                     operations.append(op)
                     existing_tiles[(curr_pos[0], curr_pos[1], layer)] = slope_tile_id

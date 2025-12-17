@@ -51,18 +51,24 @@ class QuickPainter:
     """
     
     @staticmethod
-    def bresenham_line(x0: int, y0: int, x1: int, y1: int) -> List[Tuple[int, int]]:
+    def bresenham_line(x0: int, y0: int, x1: int, y1: int, terraced: bool = True) -> List[Tuple[int, int]]:
         """
         Bresenham's line algorithm for coordinate interpolation.
         
         Generates all tile coordinates along a line from (x0, y0) to (x1, y1).
         This ensures smooth, continuous strokes without gaps.
         
+        When terraced=True (default), ensures no diagonal jumps occur.
+        For example, instead of (13,21) -> (14,22), it produces:
+        (13,21) -> (13,22) -> (14,22) OR (13,21) -> (14,21) -> (14,22)
+        This guarantees all tiles are 4-connected (share an edge, not just a corner).
+        
         Args:
             x0: Starting X coordinate
             y0: Starting Y coordinate
             x1: Ending X coordinate
             y1: Ending Y coordinate
+            terraced: If True, add intermediate tiles to prevent diagonal jumps
         
         Returns:
             List of (x, y) tuples representing all tiles along the line
@@ -74,26 +80,48 @@ class QuickPainter:
         sx = 1 if x0 < x1 else -1
         sy = 1 if y0 < y1 else -1
         
-        if dx > dy:
-            # More horizontal than vertical
-            err = dx / 2.0
-            y = y0
-            for x in range(x0, x1 + sx, sx):
-                points.append((x, y))
-                err -= dy
-                if err < 0:
-                    y += sy
-                    err += dx
-        else:
-            # More vertical than horizontal
-            err = dy / 2.0
-            x = x0
-            for y in range(y0, y1 + sy, sy):
-                points.append((x, y))
-                err -= dx
-                if err < 0:
+        x, y = x0, y0
+        
+        # Standard Bresenham with terracing support
+        err = dx - dy
+        
+        while True:
+            points.append((x, y))
+            
+            # Check if we've reached the end
+            if x == x1 and y == y1:
+                break
+            
+            e2 = 2 * err
+            
+            # For terraced paths, we move one axis at a time
+            if terraced:
+                if e2 > -dy and x != x1:
+                    err -= dy
                     x += sx
-                    err += dy
+                    points.append((x, y))
+                if e2 < dx and y != y1:
+                    err += dx
+                    y += sy
+                    # Don't add duplicate if we already added the point
+                    if points[-1] != (x, y):
+                        points.append((x, y))
+            else:
+                # Standard diagonal movement
+                if e2 > -dy:
+                    err -= dy
+                    x += sx
+                if e2 < dx:
+                    err += dx
+                    y += sy
+        
+        # Remove consecutive duplicates
+        if len(points) > 1:
+            unique_points = [points[0]]
+            for p in points[1:]:
+                if p != unique_points[-1]:
+                    unique_points.append(p)
+            return unique_points
         
         return points
     
@@ -222,25 +250,38 @@ class QuickPainter:
         # Get the tile ID from the brush
         tile_id = brush.get_terrain_tile(tile_type)
         
-        return tile_id if tile_id > 0 else None
+        return tile_id if tile_id is not None else None
     
     @staticmethod
     def detect_slope_type(prev_pos: Tuple[int, int], curr_pos: Tuple[int, int],
-                         distance: int) -> Optional[str]:
+                         distance: int = 0) -> Optional[str]:
         """
-        Detect slope type based on mouse movement vector and distance.
+        Detect slope type based on mouse movement vector.
         
-        Analyzes the angle and distance of mouse movement to determine:
-        - Slope orientation (floor/ceiling, up/down)
-        - Slope size (1x1, 2x1, 4x1)
+        Analyzes the angle of mouse movement to determine:
+        - Slope orientation (top/bottom - ground vs ceiling)
+        - Slope direction (left/right - which way it faces)
+        - Slope size (1x1, 2x1, 4x1) based on angle steepness
+        
+        Slope naming convention (matches SmartBrush):
+        - slope_top_*: Ground-level slopes (player above, fill below)
+        - slope_bottom_*: Ceiling-level slopes (player below, fill above)
+        - *_left: Slope rises to the LEFT (faces left)
+        - *_right: Slope rises to the RIGHT (faces right)
+        
+        Angle ranges for slope sizes:
+        - 4x1 slope: ~14° (very gentle, 4 tiles wide for 1 tile height)
+        - 2x1 slope: ~27° (moderate, 2 tiles wide for 1 tile height)
+        - 1x1 slope: ~45° (steep, 1 tile wide for 1 tile height)
+        - >~60°: Use staircase instead of slope
         
         Args:
-            prev_pos: Previous mouse position (x, y)
-            curr_pos: Current mouse position (x, y)
-            distance: Distance traveled in pixels
+            prev_pos: Previous mouse position (x, y) in tiles
+            curr_pos: Current mouse position (x, y) in tiles
+            distance: Not used (kept for compatibility)
         
         Returns:
-            Slope type string or None if not a slope movement
+            Slope type string matching SmartBrush naming, or None if not a slope
         """
         dx = curr_pos[0] - prev_pos[0]
         dy = curr_pos[1] - prev_pos[1]
@@ -248,44 +289,105 @@ class QuickPainter:
         if dx == 0 and dy == 0:
             return None
         
-        # Calculate angle in degrees (0-360)
+        # Calculate angle in degrees (0 = right, 90 = down, 180 = left, 270 = up)
         angle = math.degrees(math.atan2(dy, dx))
         if angle < 0:
             angle += 360
         
-        # Normalize angle to 0-90 range for easier comparison
-        normalized_angle = angle % 90
-        
-        # Determine slope size based on distance
-        if distance < 20:
-            size = '1x1'
-        elif distance < 40:
-            size = '2x1'
+        # Get absolute angle from horizontal (0-90 range)
+        # This tells us how steep the slope is
+        if angle <= 90:
+            abs_angle = angle
+        elif angle <= 180:
+            abs_angle = 180 - angle
+        elif angle <= 270:
+            abs_angle = angle - 180
         else:
+            abs_angle = 360 - angle
+        
+        # Determine slope size based on steepness
+        # Steeper angles = smaller slopes, gentler angles = larger slopes
+        if abs_angle > 60:
+            # Too steep for slopes - use staircase
+            return None
+        elif abs_angle >= 35:
+            # Steep: 1x1 slope (35-60°)
+            size = '1x1'
+        elif abs_angle >= 20:
+            # Moderate: 2x1 slope (20-35°)
+            size = '2x1'
+        elif abs_angle >= 5:
+            # Gentle: 4x1 slope (5-20°)
             size = '4x1'
+        else:
+            # Nearly horizontal - no slope needed
+            return None
         
-        # Determine slope orientation based on angle
-        # 0-45°: Right/floor up
-        # 45-90°: Down/floor down
-        # 90-135°: Left/ceiling down
-        # 135-180°: Up/ceiling up
-        # 180-225°: Left/ceiling down
-        # 225-270°: Up/ceiling up
-        # 270-315°: Right/floor up
-        # 315-360°: Down/floor down
+        # Determine slope type based on movement direction
+        # Quadrant 1 (0-90°): Moving right and down
+        # Quadrant 2 (90-180°): Moving left and down
+        # Quadrant 3 (180-270°): Moving left and up
+        # Quadrant 4 (270-360°): Moving right and up
         
-        if 315 <= angle or angle < 45:
-            # Moving right - floor up
-            return f'floor_up_{size}'
-        elif 45 <= angle < 135:
-            # Moving down - floor down
-            return f'floor_down_{size}'
-        elif 135 <= angle < 225:
-            # Moving left - ceiling down
-            return f'ceiling_down_{size}'
-        else:  # 225 <= angle < 315
-            # Moving up - ceiling up
-            return f'ceiling_up_{size}'
+        if 0 <= angle < 90:
+            # Moving right-down: ground slope facing right (rises to left)
+            return f'slope_top_{size}_right'
+        elif 90 <= angle < 180:
+            # Moving left-down: ground slope facing left (rises to right)
+            return f'slope_top_{size}_left'
+        elif 180 <= angle < 270:
+            # Moving left-up: ceiling slope facing left
+            return f'slope_bottom_{size}_left'
+        else:  # 270 <= angle < 360
+            # Moving right-up: ceiling slope facing right
+            return f'slope_bottom_{size}_right'
+    
+    @staticmethod
+    def get_slope_dimensions(slope_type: str) -> Tuple[int, int]:
+        """
+        Get the dimensions (width, height) of a slope object in tiles.
+        
+        All slopes are 2 tiles tall (1 slope row + 1 base row).
+        Width varies: 1x1=1, 2x1=2, 4x1=4
+        
+        Args:
+            slope_type: Slope type string (e.g., 'slope_top_2x1_left')
+        
+        Returns:
+            (width, height) in tiles
+        """
+        if '1x1' in slope_type:
+            return (1, 2)
+        elif '2x1' in slope_type:
+            return (2, 2)
+        elif '4x1' in slope_type:
+            return (4, 2)
+        return (1, 1)  # Fallback
+    
+    @staticmethod
+    def get_slope_covered_positions(slope_type: str, origin_x: int, origin_y: int) -> List[Tuple[int, int]]:
+        """
+        Get all tile positions covered by a slope object.
+        
+        Slope objects cover multiple tiles:
+        - 1x1: 1 wide x 2 tall = 2 tiles
+        - 2x1: 2 wide x 2 tall = 4 tiles
+        - 4x1: 4 wide x 2 tall = 8 tiles
+        
+        Args:
+            slope_type: Slope type string
+            origin_x: X position of slope origin (top-left)
+            origin_y: Y position of slope origin (top-left)
+        
+        Returns:
+            List of (x, y) positions covered by the slope
+        """
+        width, height = QuickPainter.get_slope_dimensions(slope_type)
+        positions = []
+        for dy in range(height):
+            for dx in range(width):
+                positions.append((origin_x + dx, origin_y + dy))
+        return positions
     
     @staticmethod
     def paint_path(path: List[Tuple[int, int]], layer: int, brush: SmartBrush,
