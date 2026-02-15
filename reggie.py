@@ -213,11 +213,9 @@ class ReggieWindow(QtWidgets.QMainWindow):
         QtWidgets.QMainWindow.__init__(self, None)
         # Don't include version here - Qt automatically appends application display name
         self.setWindowTitle('Reggie! Next Level Editor')
-        # Use native .icns on macOS for proper dock icon appearance
-        if sys.platform == 'darwin':
-            self.setWindowIcon(QtGui.QIcon('reggiedata/reggie.icns'))
-        else:
-            self.setWindowIcon(QtGui.QIcon('reggiedata/icon.png'))
+        # Use PNG for QIcon on all platforms - .icns files cause crashes in PyQt6 on macOS ARM64
+        # The native dock icon is handled by the .icns in the app bundle
+        self.setWindowIcon(QtGui.QIcon('reggiedata/icon.png'))
         self.setIconSize(QtCore.QSize(16, 16))
         self.setUnifiedTitleAndToolBarOnMac(True)
 
@@ -2458,29 +2456,30 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
             # Add the ids for the idtype count
             decoder = SpriteEditorWidget.PropertyDecoder()
-            sdef = globals_.Sprites[id_]
+            sdef = globals_.Sprites[id_] if 0 <= id_ < globals_.NumSprites else None
 
             # Find what values are used by this sprite
-            for field in sdef.fields:
-                if field[0] not in (1, 2):
-                    # Only values and lists can be idtypes
-                    continue
+            if sdef is not None:
+                for field in sdef.fields:
+                    if field[0] not in (1, 2):
+                        # Only values and lists can be idtypes
+                        continue
 
-                idtype = field[-2]
-                if idtype is None:
-                    # Only look at settings with idtypes
-                    continue
+                    idtype = field[-2]
+                    if idtype is None:
+                        # Only look at settings with idtypes
+                        continue
 
-                value = decoder.retrieve(data, field[2])
+                    value = decoder.retrieve(data, field[2])
 
-                # 3. Add the value to self.sprite_idtypes
-                try:
-                    counter = globals_.Area.sprite_idtypes[idtype]
-                except KeyError:
-                    globals_.Area.sprite_idtypes[idtype] = {value: 1}
-                    continue
+                    # 3. Add the value to self.sprite_idtypes
+                    try:
+                        counter = globals_.Area.sprite_idtypes[idtype]
+                    except KeyError:
+                        globals_.Area.sprite_idtypes[idtype] = {value: 1}
+                        continue
 
-                counter[value] = counter.get(value, 0) + 1
+                    counter[value] = counter.get(value, 0) + 1
 
             self.scene.addItem(spr)
             spr.UpdateListItem()
@@ -3976,6 +3975,45 @@ class ReggieWindow(QtWidgets.QMainWindow):
             CPT = 9  # comment
 
         globals_.CurrentPaintType = CPT
+        
+        # Deactivate QPT tools when switching away from Quick Paint palette tab
+        if hasattr(self, 'qpt_palette') and self.qpt_palette:
+            # Find the Quick Paint tab index
+            qpt_tab_index = -1
+            for i in range(self.creationTabs.count()):
+                if self.creationTabs.widget(i) == self.qpt_palette:
+                    qpt_tab_index = i
+                    break
+            
+            if qpt_tab_index != -1:
+                if nt != qpt_tab_index:
+                    # Switching away from Quick Paint tab - deactivate all tools
+                    quick_paint_tab = self.qpt_palette.get_quick_paint_tab()
+                    if quick_paint_tab and quick_paint_tab.is_painting():
+                        quick_paint_tab.qpt_widget.on_stop_painting()
+                        print("[Reggie] Stopped QPT painting - switched to different palette tab")
+                    
+                    from quickpaint.core.tool_manager import get_tool_manager
+                    tool_manager = get_tool_manager()
+                    tool_manager.deactivate_all()
+                    # Reset cursor
+                    if self.view:
+                        self.view.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+                    print("[Reggie] Deactivated QPT tools - switched to different palette tab")
+                    # Hide hotkey overlay when switching away
+                    qpt_funcs = getattr(globals_, 'qpt_functions', None)
+                    if qpt_funcs and qpt_funcs.get('hide_overlay'):
+                        qpt_funcs['hide_overlay']()
+                else:
+                    # Switching TO Quick Paint tab - activate QPT as default tool
+                    from quickpaint.core.tool_manager import get_tool_manager, ToolType
+                    tool_manager = get_tool_manager()
+                    tool_manager.activate_tool(ToolType.QPT_SMART_PAINT)
+                    print("[Reggie] Activated QPT tool - switched to Quick Paint palette tab")
+                    # Show hotkey overlay when switching to QPT tab
+                    qpt_funcs = getattr(globals_, 'qpt_functions', None)
+                    if qpt_funcs and qpt_funcs.get('show_overlay'):
+                        qpt_funcs['show_overlay']()
 
     def ObjTabChanged(self, nt):
         """
@@ -4011,6 +4049,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
         Handles the selected layer changing
         """
         globals_.CurrentLayer = nl
+
+        # Sync QPT layer radio buttons
+        if hasattr(self, 'qpt_palette') and self.qpt_palette:
+            qpt_tab = self.qpt_palette.get_quick_paint_tab()
+            if qpt_tab and hasattr(qpt_tab, 'qpt_widget'):
+                qpt_tab.qpt_widget.set_layer_silent(nl)
+            fill_tab = self.qpt_palette.get_fill_paint_tab()
+            if fill_tab:
+                fill_tab.set_layer_silent(nl)
 
         # should we replace?
         if QtWidgets.QApplication.keyboardModifiers() == Qt.KeyboardModifier.AltModifier:
@@ -4413,21 +4460,41 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         Handles key press events for the main window if needed
         """
-        # QPT: Handle ESC and F1 keys for painting
-        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_F1):
-            print(f"[Reggie] Key {event.key()} pressed, forwarding to QPT")
-            try:
-                qpt_funcs = getattr(globals_, 'qpt_functions', None)
-                if qpt_funcs and qpt_funcs.get('key_press'):
-                    if qpt_funcs['key_press'](event.key()):
-                        print(f"[Reggie] Key {event.key()} handled by QPT")
+        # QPT: Global P hotkey to switch to Quick Paint tab from any palette tab
+        if event.key() == Qt.Key.Key_P.value:
+            if hasattr(self, 'qpt_palette') and self.qpt_palette and hasattr(self, 'creationTabs'):
+                # Find the Quick Paint tab index and switch to it
+                for i in range(self.creationTabs.count()):
+                    if self.creationTabs.widget(i) == self.qpt_palette:
+                        if self.creationTabs.currentIndex() != i:
+                            self.creationTabs.setCurrentIndex(i)
+                            print("[Reggie] P hotkey: Switched to Quick Paint tab")
                         event.accept()
                         return
-                    else:
-                        print(f"[Reggie] Key {event.key()} NOT handled by QPT")
-            except Exception as e:
-                print(f"[Reggie] Error forwarding key to QPT: {e}")
-                pass
+        
+        # QPT: Handle ESC, Q, F, D, F1, F2 keys for painting tools
+        # Only forward hotkeys when the Quick Paint palette tab is active
+        # Use .value for comparison since event.key() returns int in PyQt6
+        qpt_keys = (Qt.Key.Key_Escape.value, Qt.Key.Key_Q.value, Qt.Key.Key_S.value, Qt.Key.Key_C.value, Qt.Key.Key_E.value, Qt.Key.Key_F.value, Qt.Key.Key_D.value, Qt.Key.Key_F1.value, Qt.Key.Key_F2.value, Qt.Key.Key_F3.value)
+        if event.key() in qpt_keys:
+            # Check if Quick Paint palette is the active tab
+            qpt_tab_active = False
+            if hasattr(self, 'qpt_palette') and self.qpt_palette and hasattr(self, 'creationTabs'):
+                for i in range(self.creationTabs.count()):
+                    if self.creationTabs.widget(i) == self.qpt_palette:
+                        qpt_tab_active = (self.creationTabs.currentIndex() == i)
+                        break
+            
+            if qpt_tab_active:
+                try:
+                    qpt_funcs = getattr(globals_, 'qpt_functions', None)
+                    if qpt_funcs and qpt_funcs.get('key_press'):
+                        if qpt_funcs['key_press'](event.key()):
+                            event.accept()
+                            return
+                except Exception as e:
+                    print(f"[Reggie] Error forwarding key to QPT: {e}")
+                    pass
         
         if event.key() == Qt.Key.Key_Delete or event.key() == Qt.Key.Key_Backspace:
             sel = self.scene.selectedItems()
@@ -4826,7 +4893,10 @@ def main():
             handle_qpt_mouse_move,
             handle_qpt_mouse_release,
             handle_qpt_key_press,
-            update_qpt_outline
+            update_qpt_outline,
+            get_tile_type,
+            show_hotkey_overlay,
+            hide_hotkey_overlay
         )
         from quickpaint.reggie_hook import _get_qpt_hook
         _qpt_functions = {
@@ -4837,6 +4907,9 @@ def main():
             'key_press': handle_qpt_key_press,
             'get_hook': _get_qpt_hook,
             'update_outline': update_qpt_outline,
+            'get_tile_type': get_tile_type,
+            'show_overlay': show_hotkey_overlay,
+            'hide_overlay': hide_hotkey_overlay,
         }
         # Store in globals_ so other modules can access it
         globals_.qpt_functions = _qpt_functions

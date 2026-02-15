@@ -22,6 +22,10 @@ class LevelScene(QtWidgets.QGraphicsScene):
         QtWidgets.QGraphicsScene.drawBackground(self, painter, rect)
         if not hasattr(globals_.Area, 'layers'): return
 
+        # PyQt6 fix: Disable smooth transform to prevent sub-pixel gaps between tiles
+        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform, False)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, False)
+
         drawrect = QtCore.QRectF(rect.x() / 24, rect.y() / 24, rect.width() / 24 + 1, rect.height() / 24 + 1)
         isect = drawrect.intersects
 
@@ -166,14 +170,14 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
             self.xButtonScrollTimer.timeout.connect(
                 lambda: self.XScrollBar.setValue(self.XScrollBar.value() - self.XScrollBar.singleStep())
             )
-            self.xButtonScrollTimer.start(100)
+            self.xButtonScrollTimer.start(30)
 
         elif event.button() == QtCore.Qt.MouseButton.ForwardButton:
             self.xButtonScrollTimer = QtCore.QTimer()
             self.xButtonScrollTimer.timeout.connect(
                 lambda: self.XScrollBar.setValue(self.XScrollBar.value() + self.XScrollBar.singleStep())
             )
-            self.xButtonScrollTimer.start(100)
+            self.xButtonScrollTimer.start(30)
 
         elif event.button() == QtCore.Qt.MouseButton.RightButton:
             clicked = globals_.mainWindow.view.mapToScene(event.pos().x(), event.pos().y())

@@ -288,7 +288,6 @@ class SmartBrush:
                 else:
                     brush.terrain[pos] = None
         
-        print(f"[SmartBrush] from_json: loaded terrain={brush.terrain}, assigned={brush.terrain_assigned}")
         return brush
     
     @classmethod

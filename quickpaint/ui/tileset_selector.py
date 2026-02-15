@@ -182,8 +182,9 @@ class TilesetSelector(QtWidgets.QWidget):
     
     def update_object_list(self):
         """Update the object list display for current tileset"""
-        # Clear existing buttons
+        # Clear existing buttons - hide first, then schedule deletion
         for button in self.object_buttons.values():
+            button.hide()
             button.deleteLater()
         self.object_buttons.clear()
         
@@ -191,6 +192,7 @@ class TilesetSelector(QtWidgets.QWidget):
         while self.object_list_layout.count():
             item = self.object_list_layout.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
         
         # Get objects for current tileset

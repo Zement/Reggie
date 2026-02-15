@@ -17,6 +17,7 @@ class ReggieQuickPaintHook:
     - Outline rendering
     - Operation execution
     - Level integration
+    - Hotkey overlay display
     """
     
     def __init__(self):
@@ -24,6 +25,8 @@ class ReggieQuickPaintHook:
         self.palette: Optional[QtWidgets.QWidget] = None  # Will be QuickPaintPalette after initialization
         self.outline_items: List = []
         self.is_active = False
+        self.hotkey_overlay = None
+        self._main_window = None
     
     def initialize(self, main_window):
         """
@@ -38,9 +41,281 @@ class ReggieQuickPaintHook:
         # Import here to avoid QWidget creation before QApplication is ready
         from quickpaint.ui.reggie_integration import QuickPaintPalette
         
+        self._main_window = main_window
         self.palette = QuickPaintPalette()
         self.is_active = True
+        self.fill_preview_items = []
+        
+        # Set up fill engine callbacks
+        self._setup_fill_engine()
+        
+        # Connect fill signals to visualization and placement
+        fill_tab = self.palette.get_fill_paint_tab()
+        fill_tab.fill_confirmed.connect(self.apply_fill)
+        
+        # Connect fill engine signals for preview visualization
+        from quickpaint.core.fill_engine import get_fill_engine
+        fill_engine = get_fill_engine()
+        fill_engine.fill_preview_updated.connect(self._on_fill_preview_updated)
+        fill_engine.fill_cancelled.connect(self.clear_fill_preview)
+        
+        # Create hotkey overlay (defer to after window is fully initialized)
+        QtCore.QTimer.singleShot(500, self._create_hotkey_overlay)
+        
+        # Connect tool changes to update overlay
+        from quickpaint.core.tool_manager import get_tool_manager
+        tool_manager = get_tool_manager()
+        tool_manager.tool_changed.connect(self._on_tool_changed_for_overlay)
+        
         return self.palette
+    
+    def _create_hotkey_overlay(self):
+        """Create and position the hotkey overlay"""
+        try:
+            from quickpaint.ui.hotkey_overlay import create_hotkey_overlay
+            import globals_
+            
+            if globals_.mainWindow:
+                self.hotkey_overlay = create_hotkey_overlay(globals_.mainWindow)
+                if self.hotkey_overlay:
+                    self._update_overlay_position()
+                    print("[QPT] Hotkey overlay created")
+                    
+                    # Check if QPT tab is currently active and show overlay
+                    if (hasattr(globals_.mainWindow, 'qpt_palette') and 
+                        globals_.mainWindow.qpt_palette and 
+                        hasattr(globals_.mainWindow, 'creationTabs')):
+                        for i in range(globals_.mainWindow.creationTabs.count()):
+                            if globals_.mainWindow.creationTabs.widget(i) == globals_.mainWindow.qpt_palette:
+                                if globals_.mainWindow.creationTabs.currentIndex() == i:
+                                    self.show_hotkey_overlay()
+                                    print("[QPT] Hotkey overlay shown (QPT tab active)")
+                                break
+        except Exception as e:
+            print(f"[QPT] Error creating hotkey overlay: {e}")
+    
+    def _update_overlay_position(self):
+        """Update overlay position based on view geometry"""
+        if not self.hotkey_overlay:
+            return
+        
+        import globals_
+        if globals_.mainWindow and hasattr(globals_.mainWindow, 'view') and globals_.mainWindow.view:
+            view_geo = globals_.mainWindow.view.geometry()
+            self.hotkey_overlay.position_overlay(view_geo)
+    
+    def _on_tool_changed_for_overlay(self, new_tool, old_tool):
+        """Update overlay when tool changes"""
+        if not self.hotkey_overlay:
+            return
+        
+        from quickpaint.core.tool_manager import ToolType
+        
+        if new_tool == ToolType.QPT_SMART_PAINT:
+            self.hotkey_overlay.set_active_tool("qpt")
+        elif new_tool == ToolType.QPT_SINGLE_TILE:
+            self.hotkey_overlay.set_active_tool("single_tile")
+        elif new_tool == ToolType.QPT_ERASER:
+            self.hotkey_overlay.set_active_tool("eraser")
+        elif new_tool == ToolType.QPT_SHAPE_CREATOR:
+            self.hotkey_overlay.set_active_tool("shape_creator")
+        elif new_tool == ToolType.FILL_PAINT:
+            self.hotkey_overlay.set_active_tool("fill")
+        elif new_tool == ToolType.DECO_FILL:
+            self.hotkey_overlay.set_active_tool("deco")
+        else:
+            self.hotkey_overlay.set_active_tool(None)
+    
+    def show_hotkey_overlay(self):
+        """Show the hotkey overlay"""
+        if self.hotkey_overlay:
+            self._update_overlay_position()
+            self.hotkey_overlay.show_overlay()
+    
+    def hide_hotkey_overlay(self):
+        """Hide the hotkey overlay"""
+        if self.hotkey_overlay:
+            self.hotkey_overlay.hide_overlay()
+    
+    def _on_fill_preview_updated(self, positions: list):
+        """Handle fill preview update from engine"""
+        self.clear_fill_preview()
+        
+        if not positions:
+            return
+        
+        import globals_
+        
+        # Blue color for fill preview
+        pen = QtGui.QPen(QtGui.QColor(60, 100, 200))  # Blue
+        pen.setWidth(2)
+        brush = QtGui.QBrush(QtGui.QColor(60, 100, 200, 80))  # Semi-transparent blue
+        
+        # Create visual fill preview items
+        for x, y in positions:
+            rect = QtCore.QRectF(x * 24, y * 24, 24, 24)
+            rect_item = QtWidgets.QGraphicsRectItem(rect)
+            rect_item.setPen(pen)
+            rect_item.setBrush(brush)
+            globals_.mainWindow.scene.addItem(rect_item)
+            self.fill_preview_items.append(rect_item)
+        
+        print(f"[QPT Hook] Fill preview: {len(positions)} tiles")
+    
+    def _setup_fill_engine(self):
+        """Set up callbacks for the fill engine"""
+        from quickpaint.core.fill_engine import get_fill_engine
+        
+        fill_engine = get_fill_engine()
+        fill_engine.set_zone_bounds_callback(self._get_zone_bounds)
+        fill_engine.set_tile_occupied_callback(self._is_tile_occupied)
+    
+    def _get_zone_bounds(self, tile_x: int, tile_y: int):
+        """
+        Get zone bounds for a tile position.
+        
+        Args:
+            tile_x, tile_y: Tile coordinates
+            
+        Returns:
+            (zone_x, zone_y, zone_width, zone_height) in tiles, or None if outside zones
+        """
+        import globals_
+        
+        if not hasattr(globals_, 'Area') or globals_.Area is None:
+            print(f"[Fill] No Area available")
+            return None
+        
+        # Zone coordinates are in Reggie internal units (1 block = 16 pixels)
+        # Tiles are 24 pixels = 16 internal units * 1.5 display scale
+        # So: tile * 24 / 1.5 = tile * 16 internal units
+        internal_x = tile_x * 16
+        internal_y = tile_y * 16
+        
+        print(f"[Fill] Checking zones for tile ({tile_x}, {tile_y}) = internal ({internal_x}, {internal_y})")
+        print(f"[Fill] Area has {len(globals_.Area.zones)} zones")
+        
+        # Check each zone in the current area
+        for i, zone in enumerate(globals_.Area.zones):
+            # Zone objx/objy/width/height are in internal units
+            zx = zone.objx
+            zy = zone.objy
+            zw = zone.width
+            zh = zone.height
+            
+            print(f"[Fill] Zone {i}: pos=({zx}, {zy}), size=({zw}, {zh}), bounds=({zx}-{zx+zw}, {zy}-{zy+zh})")
+            
+            # Check if point is inside zone (using internal units)
+            if zx <= internal_x < zx + zw and zy <= internal_y < zy + zh:
+                # Convert zone bounds to tile coordinates
+                # tile = internal_unit / 16
+                zone_tx = zx // 16
+                zone_ty = zy // 16
+                zone_tw = zw // 16
+                zone_th = zh // 16
+                print(f"[Fill] Found matching zone {i}: tiles ({zone_tx}, {zone_ty}, {zone_tw}, {zone_th})")
+                return (zone_tx, zone_ty, zone_tw, zone_th)
+        
+        print(f"[Fill] Point internal ({internal_x}, {internal_y}) is outside all zones")
+        return None  # Outside all zones
+    
+    def _is_tile_occupied(self, tile_x: int, tile_y: int, layer: int) -> bool:
+        """
+        Check if a tile position is occupied by a FOREIGN object.
+        
+        For Fill Tool: empty, fill tiles, and deco tiles are NOT considered occupied.
+        For Deco Tool: same logic applies.
+        Foreign objects (different tileset/type) ARE considered occupied.
+        
+        Args:
+            tile_x, tile_y: Tile coordinates
+            layer: Layer number
+            
+        Returns:
+            True if occupied by a foreign object
+        """
+        tile_type = self._get_tile_type(tile_x, tile_y, layer)
+        # Only foreign objects block the fill area
+        return tile_type == 'foreign'
+    
+    def _get_tile_type(self, tile_x: int, tile_y: int, layer: int) -> str:
+        """
+        Get the type of tile at a position.
+        
+        Uses RenderObject to detect empty tiles within slope objects.
+        Positions with tile value -1 are empty even if inside object bounds.
+        
+        Returns:
+            'empty' - no object at this position (or empty tile in slope)
+            'fill' - the assigned fill tile is at this position
+            'deco' - a deco object (from any deco container) is at this position
+            'foreign' - some other object is at this position
+        """
+        import globals_
+        from tiles import RenderObject
+        
+        if not hasattr(globals_, 'Area') or globals_.Area is None:
+            return 'empty'
+        
+        if not hasattr(globals_.Area, 'layers') or globals_.Area.layers is None:
+            return 'empty'
+        
+        # Get fill object info
+        fill_tab = self.palette.get_fill_paint_tab() if self.palette else None
+        fill_tileset = fill_tab._tileset_idx if fill_tab else None
+        fill_object_id = fill_tab._fill_object_id if fill_tab else None
+        
+        # Get deco object info (all containers)
+        deco_objects = set()  # Set of (tileset, object_id) tuples
+        if fill_tab:
+            for container in fill_tab._deco_containers:
+                tileset, obj_id, _, _ = container.get_object_info()
+                if obj_id is not None:
+                    deco_objects.add((tileset, obj_id))
+        
+        # Check objects in the specified layer
+        try:
+            layer_objs = globals_.Area.layers[layer]
+            for obj in layer_objs:
+                obj_x = obj.objx
+                obj_y = obj.objy
+                obj_w = obj.width
+                obj_h = obj.height
+                
+                if obj_x <= tile_x < obj_x + obj_w and obj_y <= tile_y < obj_y + obj_h:
+                    # Position is within object bounds - check if actually filled
+                    # Use RenderObject to detect empty tiles in slope objects
+                    tile_array = RenderObject(obj.tileset, obj.type, obj_w, obj_h)
+                    
+                    # Get the tile value at this position within the object
+                    dx = tile_x - obj_x
+                    dy = tile_y - obj_y
+                    tile_value = tile_array[dy][dx] if dy < len(tile_array) and dx < len(tile_array[dy]) else -1
+                    
+                    if tile_value == -1:
+                        # This is an empty tile within the object (e.g., slope triangle)
+                        # Continue checking other objects at this position
+                        continue
+                    
+                    # Object covers this tile - determine type
+                    obj_tileset = obj.tileset
+                    obj_type = obj.type
+                    
+                    # Check if it's the fill tile
+                    if fill_tileset is not None and fill_object_id is not None:
+                        if obj_tileset == fill_tileset and obj_type == fill_object_id:
+                            return 'fill'
+                    
+                    # Check if it's a deco tile
+                    if (obj_tileset, obj_type) in deco_objects:
+                        return 'deco'
+                    
+                    # It's a foreign object
+                    return 'foreign'
+        except (IndexError, AttributeError):
+            pass
+        
+        return 'empty'
     
     def handle_mouse_press(self, event) -> bool:
         """
@@ -54,14 +329,18 @@ class ReggieQuickPaintHook:
         Returns:
             True if event was handled by QPT
         """
-        print(f"[QPT Hook] handle_mouse_press called, palette={self.palette is not None}")
-        
         if not self.palette:
-            print("[QPT Hook] No palette, returning False")
             return False
         
         is_painting = self.palette.is_painting()
-        print(f"[QPT Hook] is_painting={is_painting}")
+        is_fill_active = self.palette.is_fill_active()
+        
+        # Check if Single Tile or Eraser mode is active (these don't require Start/Stop)
+        is_simple_brush_active = False
+        from quickpaint.core.tool_manager import get_tool_manager, ToolType
+        tool_manager = get_tool_manager()
+        if tool_manager.active_tool in (ToolType.QPT_SINGLE_TILE, ToolType.QPT_ERASER):
+            is_simple_brush_active = True
         
         # Map Qt button to our button codes (1=left, 2=right, 3=middle)
         button_map = {
@@ -70,15 +349,9 @@ class ReggieQuickPaintHook:
             QtCore.Qt.MouseButton.MiddleButton: 3,
         }
         button = button_map.get(event.button(), 0)
-        print(f"[QPT Hook] button={button}")
         
         # Only handle right mouse button for painting
         if button != 2:
-            print(f"[QPT Hook] Not right button, returning False")
-            return False
-        
-        if not is_painting:
-            print(f"[QPT Hook] Right-click ignored - painting not active")
             return False
         
         # Convert screen coordinates to tile coordinates
@@ -87,7 +360,22 @@ class ReggieQuickPaintHook:
         tile_x = int(pos.x() / 24)
         tile_y = int(pos.y() / 24)
         
-        print(f"[QPT Hook] Mouse press at tile ({tile_x}, {tile_y}), button={button}")
+        # Check for Fill Tool first
+        if is_fill_active:
+            if self.palette.handle_mouse_event("press", (tile_x, tile_y), button):
+                self.update_fill_preview()
+                return True
+            return False
+        
+        # Single Tile and Eraser modes are always active when their tool is selected
+        if is_simple_brush_active:
+            if self.palette.handle_mouse_event("press", (tile_x, tile_y), button):
+                return True
+            return False
+        
+        # Then check for SmartPaint painting (requires Start/Stop)
+        if not is_painting:
+            return False
         
         # Use button 2 (right) as the draw button
         if self.palette.handle_mouse_event("press", (tile_x, tile_y), button):
@@ -106,7 +394,19 @@ class ReggieQuickPaintHook:
         Returns:
             True if event was handled by QPT
         """
-        if not self.palette or not self.palette.is_painting():
+        if not self.palette:
+            return False
+        
+        # Check if Single Tile or Eraser mode is active
+        from quickpaint.core.tool_manager import get_tool_manager, ToolType
+        tool_manager = get_tool_manager()
+        is_simple_brush_active = tool_manager.active_tool in (ToolType.QPT_SINGLE_TILE, ToolType.QPT_ERASER)
+        
+        # For simple brushes, check if a stroke is in progress
+        quick_paint_tab = self.palette.get_quick_paint_tab()
+        simple_brush_in_progress = is_simple_brush_active and getattr(quick_paint_tab, '_simple_brush_active', False)
+        
+        if not self.palette.is_painting() and not simple_brush_in_progress:
             return False
         
         # Convert screen coordinates to tile coordinates
@@ -117,7 +417,8 @@ class ReggieQuickPaintHook:
         
         result = self.palette.handle_mouse_event("move", (tile_x, tile_y))
         if result:
-            self.update_outline()
+            if not is_simple_brush_active:
+                self.update_outline()
             return True
         
         # Still return True to consume the event when painting is active
@@ -149,7 +450,16 @@ class ReggieQuickPaintHook:
         if button != 2:
             return False
         
-        if not self.palette.is_painting():
+        # Check if Single Tile or Eraser mode is active
+        from quickpaint.core.tool_manager import get_tool_manager, ToolType
+        tool_manager = get_tool_manager()
+        is_simple_brush_active = tool_manager.active_tool in (ToolType.QPT_SINGLE_TILE, ToolType.QPT_ERASER)
+        
+        # For simple brushes, check if a stroke is in progress
+        quick_paint_tab = self.palette.get_quick_paint_tab()
+        simple_brush_in_progress = is_simple_brush_active and getattr(quick_paint_tab, '_simple_brush_active', False)
+        
+        if not self.palette.is_painting() and not simple_brush_in_progress:
             return False
         
         # Convert screen coordinates to tile coordinates
@@ -158,10 +468,17 @@ class ReggieQuickPaintHook:
         tile_x = int(pos.x() / 24)
         tile_y = int(pos.y() / 24)
         
-        print(f"[QPT Hook] Mouse release at tile ({tile_x}, {tile_y}), button={button}")
-        
         if self.palette.handle_mouse_event("release", (tile_x, tile_y), button):
-            self.clear_outline()
+            if not is_simple_brush_active:
+                # In deferred mode, don't clear the outline on release - it should persist
+                # Only clear in immediate mode (where painting finishes on release)
+                from quickpaint.ui.events import PaintingState
+                tab = self.palette.get_quick_paint_tab()
+                if tab and tab.mouse_handler and tab.mouse_handler.state == PaintingState.IDLE:
+                    self.clear_outline()
+                else:
+                    # Deferred mode: update outline to keep it visible
+                    self.update_outline()
             # NOTE: apply_operations() removed - placements are now handled via
             # the on_painting_ended signal in reggie_integration.py to avoid
             # double placement
@@ -182,6 +499,52 @@ class ReggieQuickPaintHook:
         if not self.palette:
             return False
         
+        from PyQt6.QtCore import Qt
+        
+        # Check for hotkeys (Q, S, C, E, F, D) - these work even when not painting
+        # Convert enum to int for comparison since event.key() returns int
+        hotkeys = [Qt.Key.Key_Q.value, Qt.Key.Key_S.value, Qt.Key.Key_C.value, 
+                   Qt.Key.Key_E.value, Qt.Key.Key_F.value, Qt.Key.Key_D.value]
+        if key in hotkeys:
+            if self.palette.handle_hotkey(key):
+                return True
+        
+        # Check for F1 (slope mode toggle) - forward to mouse handler
+        if key == Qt.Key.Key_F1.value:
+            tab = self.palette.get_quick_paint_tab()
+            if tab and hasattr(tab, 'mouse_handler'):
+                # Convert back to Qt.Key enum for the handler
+                if tab.mouse_handler.on_key_press(Qt.Key.Key_F1):
+                    return True
+        
+        # Check for ESC in Fill Tool
+        if key == Qt.Key.Key_Escape.value:
+            fill_tab = self.palette.get_fill_paint_tab()
+            if fill_tab and fill_tab.handle_key_event(key):
+                print(f"[QPT Hook] ESC handled by Fill Tool, clearing fill preview")
+                self.clear_fill_preview()
+                return True
+        
+        # Check for F2 in Fill Tool (clear fill area)
+        if key == Qt.Key.Key_F2.value:
+            fill_tab = self.palette.get_fill_paint_tab()
+            if fill_tab and fill_tab.handle_key_event(key):
+                print(f"[QPT Hook] F2 handled by Fill Tool, clearing fill area")
+                self.clear_fill_preview()
+                return True
+        
+        # Check for F3 (toggle hotkey overlay)
+        if key == Qt.Key.Key_F3.value:
+            if self.hotkey_overlay:
+                if self.hotkey_overlay.isVisible():
+                    self.hotkey_overlay.hide_overlay()
+                    print("[QPT Hook] Hotkey overlay hidden (F3)")
+                else:
+                    self.hotkey_overlay.show_overlay()
+                    print("[QPT Hook] Hotkey overlay shown (F3)")
+                return True
+        
+        # Forward to QPT if painting
         if not self.palette.is_painting():
             return False
         
@@ -189,8 +552,7 @@ class ReggieQuickPaintHook:
         tab = self.palette.get_quick_paint_tab()
         if tab and tab.mouse_handler:
             if tab.mouse_handler.on_key_press(key):
-                from PyQt6.QtCore import Qt
-                if key == Qt.Key.Key_Escape:
+                if key == Qt.Key.Key_Escape.value:
                     print(f"[QPT Hook] ESC key handled, clearing outline")
                     self.clear_outline()
                 else:
@@ -233,27 +595,179 @@ class ReggieQuickPaintHook:
                 # Draw detailed slope outline with triangle and base
                 self._draw_slope_outline(x, y, tile_type, width_tiles)
                 continue
-            else:
-                # Regular terrain tile - 1x1
-                width_px = 24
-                height_px = 24
-                pen_color = QtCore.Qt.GlobalColor.green
             
-            # Create a rectangle item
-            rect_item = QtWidgets.QGraphicsRectItem(
-                x * 24, y * 24, width_px, height_px
-            )
-            
-            # Style the outline (PyQt6 enums)
-            pen = QtGui.QPen(pen_color)
-            pen.setWidth(2)
-            pen.setStyle(QtCore.Qt.PenStyle.DashLine)
-            rect_item.setPen(pen)
-            rect_item.setBrush(QtGui.QBrush(QtCore.Qt.GlobalColor.transparent))
+            # Regular terrain tile - render tile-type-specific pixmap
+            pixmap = self._render_tile_type_pixmap(tile_type)
+            pixmap_item = QtWidgets.QGraphicsPixmapItem(pixmap)
+            pixmap_item.setPos(x * 24, y * 24)
+            pixmap_item.setZValue(50000)  # Above most items
             
             # Add to scene and track
-            globals_.mainWindow.scene.addItem(rect_item)
-            self.outline_items.append(rect_item)
+            globals_.mainWindow.scene.addItem(pixmap_item)
+            self.outline_items.append(pixmap_item)
+    
+    def _render_tile_type_pixmap(self, tile_type: str) -> QtGui.QPixmap:
+        """
+        Render a 24x24 pixmap for a terrain tile type, matching the tile picker's
+        visual style (grass blades, corners, edges, inner corners).
+        
+        Args:
+            tile_type: Terrain position type (e.g. 'top', 'bottom_left', 'inner_top_right')
+        
+        Returns:
+            24x24 QPixmap with the tile-type-specific outline
+        """
+        outline_color = QtGui.QColor(0, 255, 0, 255)   # Green
+        inner_color = QtGui.QColor(0, 200, 0, 120)       # Faint green fill
+        
+        pixmap = QtGui.QPixmap(24, 24)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+        
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        
+        if tile_type == 'top':
+            painter.fillRect(1, 1, 23, 23, inner_color)
+            pen = QtGui.QPen(outline_color)
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.drawLine(2, 2, 22, 2)
+            # Grass blades
+            painter.drawLine(6, 2, 5, 6)
+            painter.drawLine(5, 6, 7, 2)
+            painter.drawLine(12, 2, 11, 6)
+            painter.drawLine(11, 6, 13, 2)
+            painter.drawLine(18, 2, 17, 6)
+            painter.drawLine(17, 6, 19, 2)
+        
+        elif tile_type == 'bottom':
+            painter.fillRect(1, 1, 23, 23, inner_color)
+            pen = QtGui.QPen(outline_color)
+            pen.setWidth(4)
+            painter.setPen(pen)
+            painter.drawLine(4, 22, 22, 22)
+        
+        elif tile_type == 'left':
+            painter.fillRect(4, 1, 23, 23, inner_color)
+            pen = QtGui.QPen(outline_color)
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.drawLine(4, 2, 4, 22)
+        
+        elif tile_type == 'right':
+            painter.fillRect(1, 1, 20, 23, inner_color)
+            pen = QtGui.QPen(outline_color)
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.drawLine(20, 2, 20, 22)
+        
+        elif tile_type == 'center':
+            painter.fillRect(1, 1, 23, 23, inner_color)
+        
+        elif tile_type == 'top_left':
+            painter.fillRect(4, 3, 23, 23, inner_color)
+            pen = QtGui.QPen(outline_color)
+            pen.setWidth(2)
+            painter.setPen(pen)
+            path = QtGui.QPainterPath()
+            path.moveTo(4, 22)
+            path.lineTo(4, 8)
+            path.arcTo(4, 2, 8, 8, 180, -90)
+            path.lineTo(22, 2)
+            painter.drawPath(path)
+            # Grass blades
+            painter.drawLine(10, 2, 9, 6)
+            painter.drawLine(9, 6, 11, 2)
+            painter.drawLine(17, 2, 16, 6)
+            painter.drawLine(16, 6, 18, 2)
+        
+        elif tile_type == 'top_right':
+            painter.fillRect(1, 3, 20, 23, inner_color)
+            pen = QtGui.QPen(outline_color)
+            pen.setWidth(2)
+            painter.setPen(pen)
+            path = QtGui.QPainterPath()
+            path.moveTo(20, 22)
+            path.lineTo(20, 8)
+            path.arcTo(12, 2, 8, 8, 0, 90)
+            path.lineTo(2, 2)
+            painter.drawPath(path)
+            # Grass blades
+            painter.drawLine(7, 2, 6, 6)
+            painter.drawLine(6, 6, 8, 2)
+            painter.drawLine(15, 2, 14, 6)
+            painter.drawLine(14, 6, 16, 2)
+        
+        elif tile_type == 'bottom_left':
+            painter.fillRect(4, 1, 23, 20, inner_color)
+            pen = QtGui.QPen(outline_color)
+            pen.setWidth(2)
+            painter.setPen(pen)
+            path = QtGui.QPainterPath()
+            path.moveTo(4, 2)
+            path.lineTo(4, 16)
+            path.arcTo(4, 14, 8, 8, 180, 90)
+            path.lineTo(22, 22)
+            painter.drawPath(path)
+        
+        elif tile_type == 'bottom_right':
+            painter.fillRect(1, 1, 20, 20, inner_color)
+            pen = QtGui.QPen(outline_color)
+            pen.setWidth(2)
+            painter.setPen(pen)
+            path = QtGui.QPainterPath()
+            path.moveTo(20, 2)
+            path.lineTo(20, 16)
+            path.arcTo(12, 14, 8, 8, 0, -90)
+            path.lineTo(2, 22)
+            painter.drawPath(path)
+        
+        elif tile_type == 'inner_top_left':
+            painter.fillRect(1, 1, 23, 23, inner_color)
+            pen = QtGui.QPen(outline_color)
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.drawLine(12, 2, 22, 2)
+            painter.drawLine(14, 2, 13, 6)
+            painter.drawLine(13, 6, 15, 2)
+            painter.drawLine(20, 2, 19, 6)
+            painter.drawLine(19, 6, 21, 2)
+        
+        elif tile_type == 'inner_top_right':
+            painter.fillRect(1, 1, 23, 23, inner_color)
+            pen = QtGui.QPen(outline_color)
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.drawLine(2, 2, 12, 2)
+            painter.drawLine(5, 2, 4, 6)
+            painter.drawLine(4, 6, 6, 2)
+            painter.drawLine(10, 2, 9, 6)
+            painter.drawLine(9, 6, 11, 2)
+        
+        elif tile_type == 'inner_bottom_left':
+            painter.fillRect(1, 1, 23, 23, inner_color)
+            pen = QtGui.QPen(outline_color)
+            pen.setWidth(4)
+            painter.setPen(pen)
+            painter.drawLine(14, 22, 22, 22)
+        
+        elif tile_type == 'inner_bottom_right':
+            painter.fillRect(1, 1, 23, 23, inner_color)
+            pen = QtGui.QPen(outline_color)
+            pen.setWidth(4)
+            painter.setPen(pen)
+            painter.drawLine(4, 22, 12, 22)
+        
+        else:
+            # Unknown type - fallback to simple dashed green rectangle
+            pen = QtGui.QPen(outline_color)
+            pen.setWidth(2)
+            pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawRect(1, 1, 22, 22)
+        
+        painter.end()
+        return pixmap
     
     def _get_slope_dimensions(self, slope_type: str) -> tuple:
         """Get slope dimensions (width, height) in tiles"""
@@ -357,6 +871,225 @@ class ReggieQuickPaintHook:
             globals_.mainWindow.scene.removeItem(item)
         self.outline_items.clear()
     
+    # =========================================================================
+    # FILL PREVIEW VISUALIZATION
+    # =========================================================================
+    
+    def update_fill_preview(self):
+        """Update the fill preview visualization"""
+        self.clear_fill_preview()
+        
+        if not self.palette:
+            return
+        
+        fill_positions = self.palette.get_fill_preview()
+        if not fill_positions:
+            return
+        
+        import globals_
+        
+        # Blue color for fill preview
+        pen = QtGui.QPen(QtGui.QColor(60, 100, 200))  # Blue
+        pen.setWidth(2)
+        brush = QtGui.QBrush(QtGui.QColor(60, 100, 200, 80))  # Semi-transparent blue
+        
+        # Create visual fill preview items
+        for x, y in fill_positions:
+            rect = QtCore.QRectF(x * 24, y * 24, 24, 24)
+            rect_item = QtWidgets.QGraphicsRectItem(rect)
+            rect_item.setPen(pen)
+            rect_item.setBrush(brush)
+            globals_.mainWindow.scene.addItem(rect_item)
+            self.fill_preview_items.append(rect_item)
+    
+    def clear_fill_preview(self):
+        """Clear the fill preview visualization"""
+        if not hasattr(self, 'fill_preview_items'):
+            self.fill_preview_items = []
+            return
+        
+        import globals_
+        for item in self.fill_preview_items:
+            try:
+                globals_.mainWindow.scene.removeItem(item)
+            except RuntimeError:
+                # Item already deleted - ignore
+                pass
+        self.fill_preview_items.clear()
+    
+    def apply_fill(self, positions: list):
+        """
+        Apply fill operation - place objects at all fill positions.
+        
+        Merges positions into vertical slices for efficiency.
+        
+        Args:
+            positions: List of (x, y) tile positions to fill
+        """
+        if not positions:
+            return
+        
+        import globals_
+        from dirty import SetDirty
+        
+        # Get fill object ID, tileset, and layer from fill tab
+        fill_tab = self.palette.get_fill_paint_tab()
+        if fill_tab:
+            fill_object_id = fill_tab._fill_object_id if fill_tab._fill_object_id is not None else 0
+            fill_tileset = fill_tab._tileset_idx if fill_tab._tileset_idx is not None else 0
+            current_layer = fill_tab.get_current_layer()
+        else:
+            fill_object_id = 0
+            fill_tileset = 0
+            current_layer = 1
+        
+        print(f"[QPT Hook] Applying fill: {len(positions)} tiles, tileset={fill_tileset}, object={fill_object_id}, layer={current_layer}")
+        
+        # Filter to only empty positions
+        empty_positions = []
+        skipped_count = 0
+        for x, y in positions:
+            tile_type = self._get_tile_type(x, y, current_layer)
+            if tile_type == 'empty':
+                empty_positions.append((x, y))
+            else:
+                skipped_count += 1
+        
+        # Merge positions into vertical slices (by column)
+        merged_placements = self._merge_fill_positions(empty_positions)
+        
+        print(f"[QPT Hook] Merged {len(empty_positions)} positions into {len(merged_placements)} vertical slices")
+        
+        # Create merged objects
+        placed_count = 0
+        for placement in merged_placements:
+            self.paint_at_position(
+                placement['x'], placement['y'], 
+                fill_object_id, current_layer, 
+                tileset=fill_tileset,
+                width=placement['width'], 
+                height=placement['height']
+            )
+            placed_count += 1
+        
+        # Clear the preview
+        self.clear_fill_preview()
+        
+        # Mark level as dirty
+        if placed_count > 0:
+            SetDirty()
+        
+        # Update the scene
+        globals_.mainWindow.scene.update()
+        
+        print(f"[QPT Hook] Fill complete: {placed_count} merged objects placed, {skipped_count} skipped")
+    
+    def _merge_fill_positions(self, positions: list) -> list:
+        """
+        Merge fill positions into optimized rectangles.
+        
+        First creates vertical slices (columns), then merges horizontally
+        adjacent slices that have the same top (y) and height.
+        
+        Args:
+            positions: List of (x, y) positions
+            
+        Returns:
+            List of placement dicts with x, y, width, height
+        """
+        if not positions:
+            return []
+        
+        # Group positions by column (x coordinate)
+        columns = {}
+        for x, y in positions:
+            if x not in columns:
+                columns[x] = []
+            columns[x].append(y)
+        
+        # Sort each column and merge consecutive y values into vertical slices
+        vertical_slices = []
+        for x, y_values in columns.items():
+            y_values.sort()
+            
+            if not y_values:
+                continue
+            
+            run_start = y_values[0]
+            run_end = y_values[0]
+            
+            for i in range(1, len(y_values)):
+                if y_values[i] == run_end + 1:
+                    # Continue the run
+                    run_end = y_values[i]
+                else:
+                    # End current run, create slice
+                    vertical_slices.append({
+                        'x': x,
+                        'y': run_start,
+                        'width': 1,
+                        'height': run_end - run_start + 1
+                    })
+                    # Start new run
+                    run_start = y_values[i]
+                    run_end = y_values[i]
+            
+            # Don't forget the last run
+            vertical_slices.append({
+                'x': x,
+                'y': run_start,
+                'width': 1,
+                'height': run_end - run_start + 1
+            })
+        
+        # Now merge horizontally adjacent slices with same y and height
+        # Group slices by (y, height) for efficient merging
+        slice_groups = {}
+        for s in vertical_slices:
+            key = (s['y'], s['height'])
+            if key not in slice_groups:
+                slice_groups[key] = []
+            slice_groups[key].append(s)
+        
+        # Merge adjacent slices in each group
+        placements = []
+        for (y, height), slices in slice_groups.items():
+            # Sort by x coordinate
+            slices.sort(key=lambda s: s['x'])
+            
+            if not slices:
+                continue
+            
+            # Merge consecutive x values
+            run_start_x = slices[0]['x']
+            run_end_x = slices[0]['x']
+            
+            for i in range(1, len(slices)):
+                if slices[i]['x'] == run_end_x + 1:
+                    # Continue the run (adjacent column)
+                    run_end_x = slices[i]['x']
+                else:
+                    # End current run, create merged placement
+                    placements.append({
+                        'x': run_start_x,
+                        'y': y,
+                        'width': run_end_x - run_start_x + 1,
+                        'height': height
+                    })
+                    # Start new run
+                    run_start_x = slices[i]['x']
+                    run_end_x = slices[i]['x']
+            
+            # Don't forget the last run
+            placements.append({
+                'x': run_start_x,
+                'y': y,
+                'width': run_end_x - run_start_x + 1,
+                'height': height
+            })
+        
+        return placements
+    
     def apply_operations(self):
         """Apply painting operations to the level"""
         if not self.palette:
@@ -401,7 +1134,7 @@ class ReggieQuickPaintHook:
             # Paint operation - create object
             self.paint_at_position(op.x, op.y, op.tile_id, layer)
     
-    def paint_at_position(self, x: int, y: int, tile_id: int, layer: int):
+    def paint_at_position(self, x: int, y: int, tile_id: int, layer: int, tileset: int = None, width: int = 1, height: int = 1):
         """
         Paint an object at a specific position.
         
@@ -409,27 +1142,24 @@ class ReggieQuickPaintHook:
             x, y: Tile coordinates
             tile_id: Tile object ID
             layer: Layer to paint on
+            tileset: Tileset index (uses CurrentPaintType if None)
+            width: Object width in tiles (default 1)
+            height: Object height in tiles (default 1)
         """
         try:
-            # Get tileset and type from tile_id
-            # This is a simplified version - actual implementation depends on
-            # how tile_id maps to tileset/type in your system
             import globals_
-            tileset = 0  # Default to first tileset
-            obj_type = tile_id
             
-            # Create the object
+            # Use provided tileset or default to current
+            paint_type = tileset if tileset is not None else globals_.CurrentPaintType
+            
+            # Create the object with specified dimensions
             obj = globals_.mainWindow.CreateObject(
-                globals_.CurrentPaintType,  # Paint type (usually 0 for terrain)
-                obj_type,
+                paint_type,
+                tile_id,
                 layer,
-                x, y
+                x, y,
+                width, height
             )
-            
-            if obj:
-                # Auto-tile the object
-                from quickpaint_legacy import QuickPaintOperations
-                QuickPaintOperations.autoTileObj(layer, obj)
         
         except Exception as e:
             print(f"Error painting at ({x}, {y}): {str(e)}")
@@ -590,3 +1320,26 @@ def apply_terrain_aware_deletes():
     Called via QTimer after 100ms to make the deletion visually distinct.
     """
     _get_qpt_hook().apply_pending_deletes()
+
+
+def get_tile_type(tile_x: int, tile_y: int, layer: int) -> str:
+    """
+    Get the type of tile at a position.
+    
+    Returns:
+        'empty' - no object at this position
+        'fill' - the assigned fill tile is at this position
+        'deco' - a deco object (from any deco container) is at this position
+        'foreign' - some other object is at this position
+    """
+    return _get_qpt_hook()._get_tile_type(tile_x, tile_y, layer)
+
+
+def show_hotkey_overlay():
+    """Show the QPT hotkey overlay"""
+    _get_qpt_hook().show_hotkey_overlay()
+
+
+def hide_hotkey_overlay():
+    """Hide the QPT hotkey overlay"""
+    _get_qpt_hook().hide_hotkey_overlay()

@@ -115,14 +115,16 @@ class MouseEventHandler(QtCore.QObject):
         self.is_immediate_mode = immediate
         self.engine.set_immediate_mode(immediate)
     
-    def update_object_database(self, database):
+    def update_object_database(self, database, empty_slope_regions=None):
         """
         Update the object database for auto-tiling context.
         
         Args:
             database: Dict mapping (x, y, layer) -> object_id
+            empty_slope_regions: Set of (x, y, layer) positions that are empty tiles
+                                 within slope object bounds
         """
-        self.engine.update_object_database(database)
+        self.engine.update_object_database(database, empty_slope_regions)
     
     # =========================================================================
     # ENGINE CALLBACKS

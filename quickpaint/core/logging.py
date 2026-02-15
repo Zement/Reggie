@@ -8,6 +8,7 @@ from pathlib import Path
 # Log file path
 _log_file = None
 _log_enabled = True
+_console_verbose = False  # Set to True to enable verbose console logging
 
 def init_logging(log_dir: str = None):
     """Initialize file logging for QPT"""
@@ -30,13 +31,14 @@ def init_logging(log_dir: str = None):
         _log_file = None
 
 def log(message: str, prefix: str = "[QPT]"):
-    """Log a message to both console and file"""
-    global _log_file
+    """Log a message to file (and console if verbose mode is enabled)"""
+    global _log_file, _console_verbose
     
     full_message = f"{prefix} {message}"
     
-    # Always print to console
-    print(full_message)
+    # Only print to console if verbose mode is enabled
+    if _console_verbose:
+        print(full_message)
     
     # Write to file if available
     if _log_file and _log_enabled:

@@ -122,7 +122,6 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         # Reset transform to prevent scaling - display at 1:1 pixel ratio
         self.resetTransform()
         
-        print(f"[QPT] Empty grid ({width}x{height}) with tile outlines drawn")
     
     def _draw_tile_outlines(self):
         """Draw minimalistic tile position outlines using QPaint with grass details"""
@@ -613,11 +612,9 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
             return
         
         if self.is_drawing:
-            print("[QPT] Canvas is already drawing, skipping redraw")
             return
         
         self.is_drawing = True
-        print(f"[QPT] Drawing full terrain grid for tileset {self.tileset_idx}")
         
         self.scene.clear()
         self.tile_map.clear()
@@ -677,7 +674,6 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         self.resetTransform()
         
         self.is_drawing = False
-        print(f"[QPT] OK: Full CAT1 grid drawn for tileset {self.tileset_idx}")
     
     def find_object_for_position(self, position_type: str) -> Optional[int]:
         """
@@ -745,11 +741,8 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
             # Apply randomization for RandTiles (similar to levelitems.py randomise method)
             if globals_.TilesetInfo:
                 tileset_name = self.get_tileset_name(tileset_idx)
-                print(f"[QPT] Tileset name: {tileset_name}, TilesetInfo keys: {list(globals_.TilesetInfo.keys())}")
-                
                 if tileset_name in globals_.TilesetInfo:
                     tileset_info = globals_.TilesetInfo[tileset_name]
-                    print(f"[QPT] Found tileset info for {tileset_name}")
                     
                     # Randomize tiles in the object
                     for y in range(len(obj_render)):
@@ -758,7 +751,6 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                             
                             try:
                                 tiles, direction, special = tileset_info[tile]
-                                print(f"[QPT] Randomizing tile {tile} -> {tiles}")
                             except (KeyError, TypeError):
                                 continue
                             
@@ -805,26 +797,19 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                 for x in range(display_width):
                     if y < len(obj_render) and x < len(obj_render[y]):
                         tile_num = obj_render[y][x]
-                        print(f"[QPT]     Tile at ({x},{y}): tile_num={tile_num} (0x{tile_num:04x})")
                         if tile_num > 0:
                             tile = globals_.Tiles[tile_num]
                             if tile is None:
-                                print(f"[QPT]       Tile {tile_num} is None, using OVERRIDE_UNKNOWN")
                                 painter.drawPixmap(x * 24, y * 24, globals_.Overrides[globals_.OVERRIDE_UNKNOWN].getCurrentTile())
                                 tiles_drawn += 1
                             elif isinstance(tile.main, QtGui.QImage):
-                                print(f"[QPT]       Drawing tile {tile_num} as QImage")
                                 painter.drawImage(x * 24, y * 24, tile.main)
                                 tiles_drawn += 1
                             else:
-                                print(f"[QPT]       Drawing tile {tile_num} as QPixmap")
                                 painter.drawPixmap(x * 24, y * 24, tile.main)
                                 tiles_drawn += 1
-                        else:
-                            print(f"[QPT]       Tile {tile_num} is 0 or negative, skipping")
             
             painter.end()
-            print(f"[QPT]   Rendered pixmap with {tiles_drawn} tiles")
             return pm
             
         except Exception as e:
@@ -839,7 +824,6 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
             # Extract base name from path (e.g., "U:/ORIG\Texture\Pa1_nohara.arc" -> "Pa1_nohara")
             import os
             base_name = os.path.splitext(os.path.basename(full_path))[0]
-            print(f"[QPT] Extracted tileset name: {base_name} from {full_path}")
             return base_name
         
         # Fallback to standard names
@@ -848,14 +832,10 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
     
     def mousePressEvent(self, event: QtGui.QMouseEvent):
         """Handle mouse press to select an object and assign it to selected position"""
-        print(f"[QPT] Canvas mousePressEvent at {event.pos()}")
-        
         if not self.selected_position_type:
-            print("[QPT] No position type selected, ignoring click")
             return
         
         pos = self.mapToScene(event.pos())
-        print(f"[QPT] Scene position: {pos}")
         
         # Find which object was clicked
         for (grid_x, grid_y), (obj_id, grid_position_type) in self.tile_map.items():
@@ -869,10 +849,6 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                 # Check if click is within this object's bounds
                 if (grid_x * 24 <= pos.x() < grid_x * 24 + obj_width and
                     grid_y * 24 <= pos.y() < grid_y * 24 + obj_height):
-                    
-                    print(f"[QPT] Clicked on object {obj_id} (grid position: {grid_position_type})")
-                    print(f"[QPT] Assigning to selected position: {self.selected_position_type}")
-                    # Emit signal with selected object and the SELECTED position type (not grid position)
                     self.tile_selected.emit(obj_id, self.selected_position_type)
                     break
     
@@ -893,7 +869,6 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
             tileset_idx: Tileset index (0-3)
         """
         self.tileset_idx = tileset_idx
-        print(f"[QPT] Canvas tileset set to {tileset_idx}")
     
     def set_selected_position(self, position_type: str):
         """
@@ -913,11 +888,9 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
             return
         
         if self.is_drawing:
-            print("[QPT] Canvas is already drawing, skipping update")
             return
         
         self.is_drawing = True
-        print(f"[QPT] Updating canvas display for tileset {self.tileset_idx}")
         
         self.scene.clear()
         self.tile_map.clear()
@@ -946,8 +919,6 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
             if len(position_grid_map[key]) == 1:
                 position_grid_map[key] = position_grid_map[key][0]
         
-        print(f"[QPT] Position grid map: {position_grid_map}")
-        
         # Draw assigned terrain objects
         for position_type in self.brush.terrain_assigned:
             obj_id = self.brush.terrain[position_type]
@@ -958,19 +929,14 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                 if not isinstance(grid_positions, list):
                     grid_positions = [grid_positions]
                 
-                print(f"[QPT] Drawing position_type={position_type}, obj_id={obj_id}, grid_positions={grid_positions}")
-                
                 # Draw object at each grid position for this type
                 for grid_x, grid_y in grid_positions:
                     pixmap = self.render_object(self.tileset_idx, obj_id)
                     
                     if pixmap and not pixmap.isNull():
-                        print(f"[QPT]   OK: Drew object {obj_id} at grid ({grid_x}, {grid_y})")
                         item = self.scene.addPixmap(pixmap)
                         item.setPos(grid_x * 24, grid_y * 24)
                         self.tile_map[(grid_x, grid_y)] = (obj_id, position_type)
-                    else:
-                        print(f"[QPT]   ✗ Failed to render object {obj_id} at grid ({grid_x}, {grid_y})")
         
         # Helper function to get slope dimensions
         def get_slope_dimensions(slope_type):
@@ -994,14 +960,11 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                     if not isinstance(grid_position, list):
                         grid_position = [grid_position]
                     
-                    print(f"[QPT] Drawing slope_type={slope_type}, obj_id={obj_id}, grid_positions={grid_position}")
-                    
                     # Draw slope object at grid position (slopes render at full size)
                     for grid_x, grid_y in grid_position:
                         pixmap = self.render_object(self.tileset_idx, obj_id, cap_size=False)
                         
                         if pixmap and not pixmap.isNull():
-                            print(f"[QPT]   OK: Drew slope {obj_id} at grid ({grid_x}, {grid_y})")
                             item = self.scene.addPixmap(pixmap)
                             item.setPos(grid_x * 24, grid_y * 24)
                             self.tile_map[(grid_x, grid_y)] = (obj_id, slope_type)
@@ -1011,8 +974,6 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
                             for dy in range(slope_height):
                                 for dx in range(slope_width):
                                     self.tile_map[(grid_x + dx, grid_y + dy)] = (obj_id, slope_type)
-                        else:
-                            print(f"[QPT]   ✗ Failed to render slope {obj_id} at grid ({grid_x}, {grid_y})")
         
         # Set scene rect to fit the full grid (16x8)
         width, height = self.get_grid_dimensions()
@@ -1021,7 +982,6 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         self.resetTransform()
         
         self.is_drawing = False
-        print(f"[QPT] OK: Canvas display updated")
     
     def draw_position_objects(self, position_type: str):
         """
@@ -1210,6 +1170,36 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
         
         print("[QPT] OK: All tiles and slopes cleared")
     
+    def _find_parent_slope(self, grid_x: int, grid_y: int) -> str:
+        """
+        Find the parent slope type for a 'floor_covered' cell by scanning
+        leftward and upward to find the slope origin cell.
+        """
+        current_layout = self.get_current_layout()
+        
+        # Scan leftward on the same row first, then check the row above
+        for check_y in [grid_y, grid_y - 1]:
+            if check_y < 0 or check_y >= len(current_layout):
+                continue
+            row = current_layout[check_y]
+            for check_x in range(grid_x, -1, -1):
+                if check_x >= len(row):
+                    continue
+                pos_type, _ = row[check_x]
+                if pos_type and pos_type.startswith('slope_'):
+                    # Verify this slope actually covers the clicked cell
+                    if '1x1' in pos_type:
+                        w, h = 1, 2
+                    elif '2x1' in pos_type:
+                        w, h = 2, 2
+                    elif '4x1' in pos_type:
+                        w, h = 4, 2
+                    else:
+                        w, h = 1, 2
+                    if check_x <= grid_x < check_x + w and check_y <= grid_y < check_y + h:
+                        return pos_type
+        return None
+    
     def mousePressEvent(self, event):
         """
         Handle mouse clicks on the tile picker canvas.
@@ -1251,12 +1241,14 @@ class TilePickerCanvas(QtWidgets.QGraphicsView):
             print(f"[QPT] No position type at ({grid_x}, {grid_y})")
             return
         
+        # If we clicked on a 'floor_covered' cell, find the parent slope it belongs to
+        if position_type == 'floor_covered':
+            position_type = self._find_parent_slope(grid_x, grid_y)
+            if position_type is None:
+                print(f"[QPT] No parent slope found for floor_covered at ({grid_x}, {grid_y})")
+                return
+        
         print(f"[QPT] Position type at ({grid_x}, {grid_y}): {position_type}")
         
         # Emit the signal to notify the parent widget
         self.tile_selected.emit(grid_x * 24 + grid_y * 24, position_type)
-        
-        # Call the parent's handler if available
-        parent = self.parent()
-        if parent and hasattr(parent, 'on_tile_selected_from_canvas'):
-            parent.on_tile_selected_from_canvas(position_type)

@@ -152,7 +152,7 @@ $RECYCLE.BIN/
 log.txt
 settings.ini
 settings.ini.bak
-/reggiedata/patches/NSMLW/
+temp/
 
 # Development and analysis files
 .gitignore

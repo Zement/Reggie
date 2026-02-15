@@ -965,7 +965,8 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
 
     def updateSpriteImageForItem(self, item, sprite_id):
         """
-        Updates the sprite image for a specific tree item
+        Updates the sprite image for a specific tree item.
+        Uses a temporary scene to avoid artifacts on the main canvas.
         """
         if not self.show_sprite_images:
             return
@@ -984,6 +985,7 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
                 globals_.Area.preview_loaded_sprites.add(sprite_id)
             
             temp_sprite = None
+            temp_scene = None
             try:
                 temp_data = RawData(b'\x00\x00\x00\x00\x00\x00\x00\x00', format=RawData.Format.Vanilla)
                 temp_sprite = SpriteItem(sprite_id, 0, 0, temp_data)
@@ -991,21 +993,24 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
                 return
             
             try:
-                globals_.mainWindow.scene.addItem(temp_sprite)
+                # Use a temporary scene instead of the main scene to avoid rendering artifacts
+                temp_scene = QtWidgets.QGraphicsScene()
+                temp_scene.addItem(temp_sprite)
             except:
                 return
             
             img = None
             try:
-                img = temp_sprite.renderInLevelIcon()
+                # Render from the temporary scene, not the main scene
+                img = self._renderSpriteIcon(temp_sprite, temp_scene)
                 if img is None:
                     return
             except:
                 return
             finally:
                 try:
-                    if temp_sprite is not None:
-                        globals_.mainWindow.scene.removeItem(temp_sprite)
+                    if temp_sprite is not None and temp_scene is not None:
+                        temp_scene.removeItem(temp_sprite)
                 except:
                     pass
             
@@ -1031,6 +1036,52 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
             item.setIcon(0, QtGui.QIcon(background))
         except:
             pass
+
+    def _renderSpriteIcon(self, sprite, scene):
+        """
+        Renders a sprite icon from a temporary scene.
+        This avoids using the main scene which can cause zoom artifacts.
+        """
+        # Constants from renderInLevelIcon
+        maxSize = QtCore.QSize(256, 256)
+        marginPct = 0.75
+        maxMargin = 96
+
+        # Get the full bounding rectangle
+        br = sprite.getFullRect()
+
+        # Expand the rect to add extra margins
+        marginX = br.width() * marginPct
+        marginY = br.height() * marginPct
+        marginX = min(marginX, maxMargin)
+        marginY = min(marginY, maxMargin)
+        br.setX(br.x() - marginX)
+        br.setY(br.y() - marginY)
+        br.setWidth(br.width() + marginX)
+        br.setHeight(br.height() + marginY)
+
+        # Take the screenshot from the temporary scene
+        ScreenshotImage = QtGui.QImage(br.size().toSize(), QtGui.QImage.Format.Format_ARGB32)
+        ScreenshotImage.fill(QtCore.Qt.GlobalColor.transparent)
+
+        RenderPainter = QtGui.QPainter(ScreenshotImage)
+        scene.render(
+            RenderPainter,
+            QtCore.QRectF(0, 0, br.width(), br.height()),
+            br,
+        )
+        RenderPainter.end()
+
+        # Shrink if too big
+        final = ScreenshotImage
+        if ScreenshotImage.width() > maxSize.width() or ScreenshotImage.height() > maxSize.height():
+            final = ScreenshotImage.scaled(
+                maxSize,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+
+        return final
 
     SpriteChanged = QtCore.pyqtSignal(int)
     SpriteReplace = QtCore.pyqtSignal(int)

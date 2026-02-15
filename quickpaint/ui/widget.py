@@ -78,6 +78,7 @@ class QuickPaintWidget(QtWidgets.QWidget):
     painting_stopped = QtCore.pyqtSignal()
     preset_changed = QtCore.pyqtSignal(SmartBrush)
     mode_changed = QtCore.pyqtSignal(str)
+    layer_changed = QtCore.pyqtSignal(int)
     
     def __init__(self, preset_manager: PresetManager = None, tileset_selector=None, parent=None):
         """
@@ -121,10 +122,61 @@ class QuickPaintWidget(QtWidgets.QWidget):
         layout.setSpacing(5)
         print("[QPT] OK: Layout created")
         
+        # ===== PAINTING MODE (moved to top) =====
+        print("[QPT] Creating painting mode section...")
+        mode_label = QtWidgets.QLabel("Painting Mode:")
+        layout.addWidget(mode_label)
+        
+        mode_layout = QtWidgets.QHBoxLayout()
+        self.mode_combo = QtWidgets.QComboBox()
+        self.mode_combo.addItems(["SmartPaint (Q)", "Single Tile (S)", "Shape Creator (C)", "Eraser (E)"])
+        self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
+        mode_layout.addWidget(self.mode_combo)
+        layout.addLayout(mode_layout)
+        
+        # Mode description label
+        self.mode_description = QtWidgets.QLabel("")
+        self.mode_description.setWordWrap(True)
+        self.mode_description.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(self.mode_description)
+        self._update_mode_description("SmartPaint (Q)")
+        print("[QPT] OK: Painting mode section created")
+        
+        # ===== LAYER SELECTOR =====
+        import globals_ as globals_module
+        layer_layout = QtWidgets.QHBoxLayout()
+        layer_layout.addWidget(QtWidgets.QLabel(globals_module.trans.string('Palette', 0)))
+        
+        self.layer_button_group = QtWidgets.QButtonGroup(self)
+        self.layer_radio_0 = QtWidgets.QRadioButton("0")
+        self.layer_radio_1 = QtWidgets.QRadioButton("1")
+        self.layer_radio_2 = QtWidgets.QRadioButton("2")
+        self.layer_radio_1.setChecked(True)  # Default to layer 1
+        
+        self.layer_button_group.addButton(self.layer_radio_0, 0)
+        self.layer_button_group.addButton(self.layer_radio_1, 1)
+        self.layer_button_group.addButton(self.layer_radio_2, 2)
+        self.layer_button_group.idClicked.connect(self.on_layer_changed)
+        
+        layer_layout.addWidget(self.layer_radio_0)
+        layer_layout.addWidget(self.layer_radio_1)
+        layer_layout.addWidget(self.layer_radio_2)
+        layer_layout.addStretch(1)
+        layout.addLayout(layer_layout)
+        self.current_layer = 1
+        print("[QPT] OK: Layer selector created")
+        
+        # ===== SMARTPAINT-ONLY WIDGETS CONTAINER =====
+        # These widgets are only visible when SmartPaint mode is selected
+        self.smartpaint_container = QtWidgets.QWidget()
+        smartpaint_layout = QtWidgets.QVBoxLayout(self.smartpaint_container)
+        smartpaint_layout.setContentsMargins(0, 0, 0, 0)
+        smartpaint_layout.setSpacing(5)
+        
         # ===== SLOPE FLAGS =====
         print("[QPT] Creating slope flags section...")
         flags_label = QtWidgets.QLabel("Slope Objects (enable/disable):")
-        layout.addWidget(flags_label)
+        smartpaint_layout.addWidget(flags_label)
         
         # Create slope flag checkboxes
         self.slope_flags = {}
@@ -155,13 +207,13 @@ class QuickPaintWidget(QtWidgets.QWidget):
             col = idx % 4
             flags_grid.addWidget(checkbox, row, col)
         
-        layout.addLayout(flags_grid)
+        smartpaint_layout.addLayout(flags_grid)
         print("[QPT] OK: Slope flags section created")
         
         # ===== TILE PICKER =====
         print("[QPT] Creating tile picker section...")
         picker_label = QtWidgets.QLabel("Tile Picker (click to assign):")
-        layout.addWidget(picker_label)
+        smartpaint_layout.addWidget(picker_label)
         
         # Canvas-based tile picker
         print("[QPT] Creating canvas tile picker...")
@@ -169,7 +221,7 @@ class QuickPaintWidget(QtWidgets.QWidget):
         self.tile_picker_canvas = TilePickerCanvas(self.current_brush)
         self.tile_picker_canvas.tile_selected.connect(self.on_tile_selected_from_canvas)
         print("[QPT] OK: Canvas tile picker created")
-        layout.addWidget(self.tile_picker_canvas)
+        smartpaint_layout.addWidget(self.tile_picker_canvas)
         print("[QPT] OK: Tile picker section created")
         
         # Connect tileset selector changes to tile picker updates
@@ -180,7 +232,7 @@ class QuickPaintWidget(QtWidgets.QWidget):
         # ===== PRESET LIST (moved below Tile Picker) =====
         print("[QPT] Creating preset label...")
         preset_label = QtWidgets.QLabel("Presets:")
-        layout.addWidget(preset_label)
+        smartpaint_layout.addWidget(preset_label)
         print("[QPT] OK: Preset label created")
         
         print("[QPT] Creating preset list...")
@@ -195,7 +247,7 @@ class QuickPaintWidget(QtWidgets.QWidget):
         self.preset_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         self.preset_list.itemSelectionChanged.connect(self.on_preset_selected)
         self.preset_list.cellDoubleClicked.connect(self.on_preset_double_clicked)
-        layout.addWidget(self.preset_list)
+        smartpaint_layout.addWidget(self.preset_list)
         print("[QPT] OK: Preset list configured")
         
         # Preset management buttons (right below preset list)
@@ -214,27 +266,8 @@ class QuickPaintWidget(QtWidgets.QWidget):
         self.delete_preset_btn.setEnabled(False)
         preset_btn_layout.addWidget(self.delete_preset_btn)
         
-        layout.addLayout(preset_btn_layout)
+        smartpaint_layout.addLayout(preset_btn_layout)
         print("[QPT] OK: Preset buttons created")
-        
-        # ===== PAINTING MODE =====
-        print("[QPT] Creating painting mode section...")
-        mode_label = QtWidgets.QLabel("Painting Mode:")
-        layout.addWidget(mode_label)
-        
-        mode_layout = QtWidgets.QHBoxLayout()
-        self.mode_combo = QtWidgets.QComboBox()
-        self.mode_combo.addItems(["SmartPaint", "SingleTile (stub)", "ShapeCreator (stub)", "Eraser (stub)"])
-        self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
-        mode_layout.addWidget(self.mode_combo)
-        layout.addLayout(mode_layout)
-        
-        # Mode description label
-        self.mode_description = QtWidgets.QLabel("")
-        self.mode_description.setWordWrap(True)
-        self.mode_description.setStyleSheet("color: gray; font-size: 10px;")
-        layout.addWidget(self.mode_description)
-        self._update_mode_description("SmartPaint")
         
         # Dampening factor slider
         dampening_layout = QtWidgets.QHBoxLayout()
@@ -242,35 +275,87 @@ class QuickPaintWidget(QtWidgets.QWidget):
         
         self.dampening_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.dampening_slider.setRange(0, 10)
-        self.dampening_slider.setValue(3)  # Default value
+        self.dampening_slider.setValue(2)  # Default value
         self.dampening_slider.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBelow)
         self.dampening_slider.setTickInterval(1)
         self.dampening_slider.valueChanged.connect(self.on_dampening_changed)
         dampening_layout.addWidget(self.dampening_slider)
         
-        self.dampening_label = QtWidgets.QLabel("3")
+        self.dampening_label = QtWidgets.QLabel("2")
         self.dampening_label.setMinimumWidth(20)
         dampening_layout.addWidget(self.dampening_label)
         
-        layout.addLayout(dampening_layout)
-        print("[QPT] OK: Painting mode section created")
+        smartpaint_layout.addLayout(dampening_layout)
+        print("[QPT] OK: Dampening slider created")
         
         # ===== CONTROL BUTTONS =====
         button_layout = QtWidgets.QVBoxLayout()
         
         # Start/Stop Painting
         painting_layout = QtWidgets.QHBoxLayout()
-        self.start_painting_btn = QtWidgets.QPushButton("Start Painting")
+        self.start_painting_btn = QtWidgets.QPushButton("Start Painting (Q)")
         self.start_painting_btn.clicked.connect(self.on_start_painting)
         painting_layout.addWidget(self.start_painting_btn)
         
-        self.stop_painting_btn = QtWidgets.QPushButton("Stop Painting")
+        self.stop_painting_btn = QtWidgets.QPushButton("Stop Painting (Q)")
         self.stop_painting_btn.clicked.connect(self.on_stop_painting)
         self.stop_painting_btn.setEnabled(False)
         painting_layout.addWidget(self.stop_painting_btn)
         button_layout.addLayout(painting_layout)
         
-        layout.addLayout(button_layout)
+        smartpaint_layout.addLayout(button_layout)
+        
+        # Add smartpaint container to main layout
+        layout.addWidget(self.smartpaint_container)
+        
+        # ===== SINGLE TILE PICKER (for Single Tile mode) =====
+        self.single_tile_container = QtWidgets.QWidget()
+        single_tile_layout = QtWidgets.QVBoxLayout(self.single_tile_container)
+        single_tile_layout.setContentsMargins(0, 0, 0, 0)
+        single_tile_layout.setSpacing(5)
+        
+        single_tile_label = QtWidgets.QLabel("Select a tile from the tileset above, then right-click on canvas to paint.")
+        single_tile_label.setWordWrap(True)
+        single_tile_label.setStyleSheet("color: gray; font-size: 10px;")
+        single_tile_layout.addWidget(single_tile_label)
+        
+        # Selected tile display
+        self.selected_tile_label = QtWidgets.QLabel("Selected tile: None")
+        single_tile_layout.addWidget(self.selected_tile_label)
+        
+        single_tile_layout.addStretch()
+        layout.addWidget(self.single_tile_container)
+        self.single_tile_container.hide()  # Hidden by default
+        
+        # ===== ERASER INFO (for Eraser mode) =====
+        self.eraser_container = QtWidgets.QWidget()
+        eraser_layout = QtWidgets.QVBoxLayout(self.eraser_container)
+        eraser_layout.setContentsMargins(0, 0, 0, 0)
+        eraser_layout.setSpacing(5)
+        
+        eraser_label = QtWidgets.QLabel("Right-click and drag on canvas to erase tiles.")
+        eraser_label.setWordWrap(True)
+        eraser_label.setStyleSheet("color: gray; font-size: 10px;")
+        eraser_layout.addWidget(eraser_label)
+        
+        eraser_layout.addStretch()
+        layout.addWidget(self.eraser_container)
+        self.eraser_container.hide()  # Hidden by default
+        
+        # ===== SHAPE CREATOR INFO (stub) =====
+        self.shape_creator_container = QtWidgets.QWidget()
+        shape_layout = QtWidgets.QVBoxLayout(self.shape_creator_container)
+        shape_layout.setContentsMargins(0, 0, 0, 0)
+        shape_layout.setSpacing(5)
+        
+        shape_label = QtWidgets.QLabel("Shape Creator - Coming Soon")
+        shape_label.setWordWrap(True)
+        shape_label.setStyleSheet("color: gray; font-size: 10px;")
+        shape_layout.addWidget(shape_label)
+        
+        shape_layout.addStretch()
+        layout.addWidget(self.shape_creator_container)
+        self.shape_creator_container.hide()  # Hidden by default
         
         layout.addStretch()
     
@@ -350,20 +435,22 @@ class QuickPaintWidget(QtWidgets.QWidget):
         if preset:
             self.load_preset_into_ui(preset)
     
-    def load_preset_into_ui(self, preset: SmartBrush):
+    def load_preset_into_ui(self, preset: SmartBrush, preserve_mode: bool = False):
         """
         Load a preset into the UI, updating all parameters.
         
         Order of operations:
         1. Change tileset slot (this clears the Tile Picker Grid)
-        2. Change painting mode
+        2. Change painting mode (unless preserve_mode is True)
         3. Update slope flags
         4. Update terrain and slopes in the Tile Picker Grid (delayed for tileset sync)
         
         Args:
             preset: SmartBrush preset to load
+            preserve_mode: If True, keep the current painting mode instead of switching
+                          to the preset's mode. Used during auto-load on tileset change.
         """
-        print(f"[QPT] Loading preset '{preset.name}' into UI...")
+        print(f"[QPT] Loading preset '{preset.name}' into UI... (preserve_mode={preserve_mode})")
         
         # Create a copy of the preset to avoid modifying the original in the preset manager
         preset_copy = preset.copy()
@@ -379,11 +466,14 @@ class QuickPaintWidget(QtWidgets.QWidget):
             self.tile_picker_canvas.tileset_idx = slot_index
         print(f"[QPT]   Slot set to {preset_copy.slot}")
         
-        # 2. Change painting mode
-        mode_index = {"SmartPaint": 0, "SingleTile": 1, "ShapeCreator": 2}.get(preset_copy.painting_mode, 0)
-        self.mode_combo.setCurrentIndex(mode_index)
-        self.current_mode = preset_copy.painting_mode
-        print(f"[QPT]   Painting mode set to {preset_copy.painting_mode}")
+        # 2. Change painting mode (skip if preserving current mode during auto-load)
+        if not preserve_mode:
+            mode_index = {"SmartPaint": 0, "SingleTile": 1, "ShapeCreator": 2}.get(preset_copy.painting_mode, 0)
+            self.mode_combo.setCurrentIndex(mode_index)
+            self.current_mode = preset_copy.painting_mode
+            print(f"[QPT]   Painting mode set to {preset_copy.painting_mode}")
+        else:
+            print(f"[QPT]   Painting mode preserved as {self.current_mode}")
         
         # 3. Set the brush (using the copy, not the original)
         self.current_brush = preset_copy
@@ -411,11 +501,94 @@ class QuickPaintWidget(QtWidgets.QWidget):
     
     def on_mode_changed(self, mode: str):
         """Handle painting mode change"""
-        # Extract base mode name (remove " (stub)" suffix if present)
-        base_mode = mode.replace(" (stub)", "")
+        # Extract base mode name (remove hotkey suffix)
+        base_mode = mode.split(" (")[0]
         self.current_mode = base_mode
         self._update_mode_description(mode)
+        self._update_mode_visibility(base_mode)
         self.mode_changed.emit(base_mode)
+    
+    def on_layer_changed(self, layer_id: int):
+        """Handle layer selection change from radio buttons"""
+        if self.current_layer == layer_id:
+            return
+        self.current_layer = layer_id
+        print(f"[QPT] Layer changed to {layer_id}")
+        
+        # Sync globals_.CurrentLayer and Objects palette radio buttons
+        import globals_
+        globals_.CurrentLayer = layer_id
+        if hasattr(globals_, 'mainWindow') and globals_.mainWindow:
+            mw = globals_.mainWindow
+            if hasattr(mw, 'LayerButtonGroup'):
+                btn = mw.LayerButtonGroup.button(layer_id)
+                if btn and not btn.isChecked():
+                    btn.setChecked(True)
+        
+        # Update the painting engine's layer
+        try:
+            if hasattr(globals_, 'qpt_functions') and globals_.qpt_functions:
+                get_hook = globals_.qpt_functions.get('get_hook')
+                if get_hook:
+                    hook = get_hook()
+                    if hook and hook.palette:
+                        tab = hook.palette.get_quick_paint_tab()
+                        if tab and hasattr(tab, 'mouse_handler'):
+                            tab.mouse_handler.engine.set_layer(layer_id)
+                        # Sync Fill Paint tab
+                        fill_tab = hook.palette.get_fill_paint_tab()
+                        if fill_tab:
+                            fill_tab.set_layer_silent(layer_id)
+        except Exception as e:
+            print(f"[QPT] Could not set engine layer: {e}")
+        
+        # Emit signal for other consumers
+        self.layer_changed.emit(layer_id)
+    
+    def set_layer_silent(self, layer_id: int):
+        """Set the layer without triggering sync (called from external sync)"""
+        self.current_layer = layer_id
+        self.layer_button_group.blockSignals(True)
+        btn = self.layer_button_group.button(layer_id)
+        if btn and not btn.isChecked():
+            btn.setChecked(True)
+        self.layer_button_group.blockSignals(False)
+        
+        # Also update the engine
+        try:
+            import globals_
+            if hasattr(globals_, 'qpt_functions') and globals_.qpt_functions:
+                get_hook = globals_.qpt_functions.get('get_hook')
+                if get_hook:
+                    hook = get_hook()
+                    if hook and hook.palette:
+                        tab = hook.palette.get_quick_paint_tab()
+                        if tab and hasattr(tab, 'mouse_handler'):
+                            tab.mouse_handler.engine.set_layer(layer_id)
+        except Exception:
+            pass
+    
+    def get_current_layer(self) -> int:
+        """Get the currently selected layer"""
+        return self.current_layer
+    
+    def _update_mode_visibility(self, mode: str):
+        """Show/hide containers based on selected mode"""
+        # Hide all mode-specific containers first
+        self.smartpaint_container.hide()
+        self.single_tile_container.hide()
+        self.eraser_container.hide()
+        self.shape_creator_container.hide()
+        
+        # Show the appropriate container
+        if mode == "SmartPaint":
+            self.smartpaint_container.show()
+        elif mode == "Single Tile":
+            self.single_tile_container.show()
+        elif mode == "Eraser":
+            self.eraser_container.show()
+        elif mode == "Shape Creator":
+            self.shape_creator_container.show()
     
     def on_dampening_changed(self, value: int):
         """Handle dampening factor change"""
@@ -439,10 +612,10 @@ class QuickPaintWidget(QtWidgets.QWidget):
     def _update_mode_description(self, mode: str):
         """Update the mode description label based on selected mode"""
         descriptions = {
-            "SmartPaint": "Direction-aware auto-tiling. First stroke direction determines wall type.",
-            "SingleTile (stub)": "Not yet implemented. Will paint a single tile type.",
-            "ShapeCreator (stub)": "Not yet implemented. Will create rectangles/ellipses.",
-            "Eraser (stub)": "Not yet implemented. Will erase terrain.",
+            "SmartPaint (Q)": "Direction-aware auto-tiling. First stroke direction determines wall type.",
+            "Single Tile (S)": "Paint with a single tile. Select from tileset above.",
+            "Shape Creator (C)": "Coming soon. Will create rectangles/ellipses.",
+            "Eraser (E)": "Right-click and drag to erase tiles from the canvas.",
         }
         self.mode_description.setText(descriptions.get(mode, ""))
     
@@ -502,6 +675,13 @@ class QuickPaintWidget(QtWidgets.QWidget):
         self.start_painting_btn.setEnabled(False)
         self.stop_painting_btn.setEnabled(True)
         print(f"[QPT] OK: Painting started, painting_active={self.painting_active}")
+        
+        # Set alternate select cursor on main canvas when painting
+        import globals_
+        if hasattr(globals_, 'mainWindow') and globals_.mainWindow and globals_.mainWindow.view:
+            from PyQt6.QtCore import Qt
+            globals_.mainWindow.view.setCursor(Qt.CursorShape.CrossCursor)
+        
         self.painting_started.emit()
     
     def on_stop_painting(self):
@@ -509,6 +689,13 @@ class QuickPaintWidget(QtWidgets.QWidget):
         self.painting_active = False
         self.start_painting_btn.setEnabled(True)
         self.stop_painting_btn.setEnabled(False)
+        
+        # Reset cursor on main canvas when painting stops
+        import globals_
+        if hasattr(globals_, 'mainWindow') and globals_.mainWindow and globals_.mainWindow.view:
+            from PyQt6.QtCore import Qt
+            globals_.mainWindow.view.setCursor(Qt.CursorShape.ArrowCursor)
+        
         self.painting_stopped.emit()
     
     def on_save_preset(self):
@@ -621,14 +808,19 @@ class QuickPaintWidget(QtWidgets.QWidget):
         
         print(f"[QPT] Position selected: {position_type}")
     
-    def on_tile_selected_from_canvas(self, position_type: str):
+    def on_tile_selected_from_canvas(self, tile_id_or_position: int | str, position_type: str = None):
         """
         Handle tile position selection from the canvas picker.
         Assigns the currently selected object to the clicked position.
         
         Args:
-            position_type: The position type to assign the object to
+            tile_id_or_position: Either tile ID (from signal) or position_type (from direct call)
+            position_type: The position type to assign the object to (when called via signal)
         """
+        # Handle both signal connection (int, str) and direct call (str)
+        if position_type is None:
+            # Direct call with just position_type
+            position_type = tile_id_or_position
         if not self.current_brush:
             QtWidgets.QMessageBox.warning(self, "No Brush", "Please select a brush first.")
             return
@@ -671,7 +863,13 @@ class QuickPaintWidget(QtWidgets.QWidget):
         
         # Create a fresh empty brush for this slot (don't modify existing presets)
         # This replaces the old clear_all_tiles() which was modifying preset objects
-        self.current_brush = SmartBrush(f"Pa{tileset_idx}_custom", [], f"Pa{tileset_idx}", "SmartPaint")
+        # Preserve the current painting mode when switching tilesets
+        self.current_brush = SmartBrush(f"Pa{tileset_idx}_custom", [], f"Pa{tileset_idx}", self.current_mode)
+        
+        # Reset Single Tile selected object (tileset objects changed)
+        self.selected_tile_label.setText("Selected tile: None")
+        if self.tileset_selector:
+            self.tileset_selector.selected_object_id = None
         self.tile_picker_canvas.set_brush(self.current_brush)
         self.tile_picker_canvas.draw_empty_grid()
         self.tile_picker_canvas.update_status_indicator()
@@ -704,7 +902,7 @@ class QuickPaintWidget(QtWidgets.QWidget):
                     matching_preset = self.find_matching_preset(tileset_name)
                     if matching_preset:
                         print(f"[QPT] Auto-loading preset: {matching_preset.name}")
-                        self.load_preset_into_ui(matching_preset)
+                        self.load_preset_into_ui(matching_preset, preserve_mode=True)
                         return
         except Exception as e:
             print(f"[QPT] Error getting tileset name: {e}")
@@ -793,11 +991,20 @@ class QuickPaintWidget(QtWidgets.QWidget):
         # Reset canvas tileset index
         self.tile_picker_canvas.tileset_idx = 0
         
-        # Create a fresh empty brush
-        self.current_brush = SmartBrush("Pa0_custom", [], "Pa0", "SmartPaint")
+        # Create a fresh empty brush (preserve current painting mode)
+        self.current_brush = SmartBrush("Pa0_custom", [], "Pa0", self.current_mode)
         self.tile_picker_canvas.set_brush(self.current_brush)
         self.tile_picker_canvas.draw_empty_grid()
         self.tile_picker_canvas.update_status_indicator()
+        
+        # Reset Single Tile selected object (tileset objects changed)
+        self.selected_tile_label.setText("Selected tile: None")
+        if self.tileset_selector:
+            self.tileset_selector.selected_object_id = None
+        
+        # Reset layer to 1
+        self.current_layer = 1
+        self.layer_radio_1.setChecked(True)
         
         # Reload presets for the new context
         self.load_presets()
@@ -818,3 +1025,28 @@ class QuickPaintWidget(QtWidgets.QWidget):
     def get_current_mode(self) -> str:
         """Get the currently selected painting mode"""
         return self.current_mode
+    
+    def set_mode(self, mode: str):
+        """
+        Set the painting mode programmatically (for hotkey activation).
+        
+        Args:
+            mode: Mode name ("SmartPaint", "Single Tile", "Shape Creator", "Eraser")
+        """
+        mode_map = {
+            "SmartPaint": 0,
+            "Single Tile": 1,
+            "Shape Creator": 2,
+            "Eraser": 3
+        }
+        if mode in mode_map:
+            self.mode_combo.setCurrentIndex(mode_map[mode])
+    
+    def set_selected_tile(self, tile_id: int):
+        """Set the selected tile for Single Tile mode"""
+        self.selected_tile_id = tile_id
+        self.selected_tile_label.setText(f"Selected tile: {tile_id}")
+    
+    def get_selected_tile(self) -> int:
+        """Get the selected tile ID for Single Tile mode"""
+        return getattr(self, 'selected_tile_id', None)

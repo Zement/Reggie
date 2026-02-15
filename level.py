@@ -207,7 +207,9 @@ class Level_NSMBW(AbstractLevel):
         SLib.Area = self.areas[number - 1]
 
         # self.areas[number - 1] should be loaded.
-        self.areas[number - 1].load()
+        # Skip if already loaded (e.g. new area created with load_defaults)
+        if not self.areas[number - 1]._is_loaded:
+            self.areas[number - 1].load()
 
         return True
 

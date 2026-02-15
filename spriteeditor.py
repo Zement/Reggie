@@ -1363,7 +1363,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
             dlg = ExternalSpriteOptionDialog(self.type, self.dispvalue)
 
             # only contine if the user pressed "OK"
-            if dlg.exec_() != QtWidgets.QDialog.Accepted:
+            if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
                 return
 
             # read set value from dlg and update self.dispwidget
@@ -2582,7 +2582,7 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
         search.setLayout(L)
 
         # create layout
-        buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
 
         buttonBox.accepted.connect(self.accept)
         buttonBox.rejected.connect(self.reject)
