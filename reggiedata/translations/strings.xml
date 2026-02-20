@@ -738,6 +738,8 @@
 			<entry>Entrance ID</entry>
 			<entry>Path Node ID</entry>
 		</stringlist>
+		<string id="24">Show sprite images</string>
+		<string id="25">Loading images... [current]/[total]</string>
 	</section>
 	<section id="Statusbar">
 		<string id="0">- 1 object selected</string>
@@ -756,20 +758,6 @@
 		<string id="13">[x] objects</string>
 		<string id="14">1 sprite</string>
 		<string id="15">[x] sprites</string>
-		<string id="16">1 entrance</string>
-		<string id="17">[x] entrances</string>
-		<string id="18">1 location</string>
-		<string id="19">[x] locations</string>
-		<string id="20">1 path node</string>
-		<string id="21">[x] path nodes</string>
-		<string id="22">)</string>
-		<string id="23">- Object under mouse: size [width]x[height] at ([xpos], [ypos]) on layer [layer]; type [type] from tileset [tileset]</string>
-		<string id="24">- Sprite under mouse: [name] at [xpos], [ypos]</string>
-		<string id="25">- Entrance under mouse: [name] at [xpos], [ypos] [dest]</string>
-		<string id="26">- Location under mouse: Location ID [id] at [xpos], [ypos]; width [width], height [height]</string>
-		<string id="27">- Path node under mouse: Path [path], Node [node] at [xpos], [ypos]</string>
-		<string id="28">([objx], [objy]) - ([sprx], [spry])</string>
-		<string id="29">- 1 comment selected</string>
 		<string id="30">- [x] comments selected</string>
 		<string id="31">1 comment</string>
 		<string id="32">[x] comments</string>

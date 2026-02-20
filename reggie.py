@@ -1337,7 +1337,14 @@ class ReggieWindow(QtWidgets.QMainWindow):
         showImagesCheckbox.setChecked(self.sprPicker.show_sprite_images)
         showImagesCheckbox.blockSignals(False)
         spl.addWidget(showImagesCheckbox)
-        
+
+        # Loading progress label (hidden when not loading)
+        self.spriteImagesLoadingLabel = QtWidgets.QLabel()
+        self.spriteImagesLoadingLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.spriteImagesLoadingLabel.hide()
+        self.sprPicker.loadingProgress.connect(self._onSpriteImageLoadingProgress)
+        spl.addWidget(self.spriteImagesLoadingLabel)
+
         spl.addWidget(self.sprPicker, 1)
 
         self.defaultPropButton = QtWidgets.QPushButton(globals_.trans.string('Palette', 6))
@@ -4151,6 +4158,19 @@ class ReggieWindow(QtWidgets.QMainWindow):
             self.defaultPropButton.setEnabled(False)
             self.defaultPropDock.setVisible(False)
             self.defaultDataEditor.update()
+
+    def _onSpriteImageLoadingProgress(self, current, total):
+        """
+        Updates the sprite image loading progress label.
+        total == -1 signals that loading is complete.
+        """
+        if total == -1:
+            self.spriteImagesLoadingLabel.hide()
+        else:
+            self.spriteImagesLoadingLabel.setText(
+                globals_.trans.string('Sprites', 25, '[current]', current, '[total]', total)
+            )
+            self.spriteImagesLoadingLabel.show()
 
     def SpriteReplace(self, type):
         """

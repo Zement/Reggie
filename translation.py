@@ -797,7 +797,7 @@ class ReggieTranslation:
                     'Path Node ID',
                 ),
                 24: 'Show Sprite Images',
-                25: 'Sprite Image',
+                25: 'Loading images... [current]/[total]',
             },
             'Statusbar': {
                 0: '- 1 object selected',

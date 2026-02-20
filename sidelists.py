@@ -749,8 +749,8 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
     Widget that shows a list of available sprites
     """
 
-    # Signal emitted when show sprite images setting changes
-    ShowSpriteListImagesChanged = QtCore.pyqtSignal(bool)
+    # Signal emitted with (current, total) during batch loading; total=-1 means done
+    loadingProgress = QtCore.pyqtSignal(int, int)
 
     def __init__(self):
         """
@@ -768,6 +768,13 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
 
         # Load setting for showing sprite images
         self.show_sprite_images = setting('ShowSpriteListImages', False)
+
+        # Batch loading state
+        self._batch_queue = []      # list of (item, sprite_id) pending render
+        self._batch_timer = QtCore.QTimer(self)
+        self._batch_timer.setInterval(0)  # fire as fast as possible between events
+        self._batch_timer.timeout.connect(self._processBatch)
+        self._batch_total = 0
 
         LoadSpriteData()
         LoadSpriteListData()
@@ -858,23 +865,72 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
         # Connect to itemExpanded signal to render search results when expanded
         self.itemExpanded.connect(self.onItemExpanded)
 
-    def updateAllVisibleItems(self):
+    def clearAllIcons(self):
         """
-        Updates sprite images for all visible items in the tree
+        Removes sprite icons from every item in the tree.
         """
-        def updateItemsRecursive(item):
-            # Update this item if it's a sprite (has a valid sprite ID)
+        null_icon = QtGui.QIcon()
+        def clearRecursive(item):
+            item.setIcon(0, null_icon)
+            for i in range(item.childCount()):
+                clearRecursive(item.child(i))
+        for i in range(self.topLevelItemCount()):
+            clearRecursive(self.topLevelItem(i))
+
+    def _collectVisibleItems(self):
+        """
+        Returns a list of (item, sprite_id) for all visible sprite items.
+        """
+        result = []
+        def collectRecursive(item):
             sprite_id = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
             if sprite_id is not None and sprite_id >= 0:
-                self.updateSpriteImageForItem(item, sprite_id)
-            
-            # Recursively update children
+                result.append((item, sprite_id))
             for i in range(item.childCount()):
-                updateItemsRecursive(item.child(i))
-        
-        # Update all top-level items
+                collectRecursive(item.child(i))
         for i in range(self.topLevelItemCount()):
-            updateItemsRecursive(self.topLevelItem(i))
+            top = self.topLevelItem(i)
+            if not top.isHidden():
+                collectRecursive(top)
+        return result
+
+    def _startBatchQueue(self, items):
+        """
+        Starts (or restarts) the batch rendering queue with the given list of
+        (item, sprite_id) pairs. Emits loadingProgress signals as work proceeds.
+        """
+        # Cancel any in-progress batch
+        self._batch_timer.stop()
+        self._batch_queue = list(items)
+        self._batch_total = len(self._batch_queue)
+        if self._batch_total == 0:
+            self.loadingProgress.emit(0, -1)
+            return
+        self.loadingProgress.emit(0, self._batch_total)
+        self._batch_timer.start()
+
+    def _processBatch(self):
+        """
+        Processes a small batch of sprite renders per timer tick to keep the UI responsive.
+        """
+        BATCH_SIZE = 5
+        if not self._batch_queue:
+            self._batch_timer.stop()
+            self.loadingProgress.emit(self._batch_total, -1)
+            return
+
+        for _ in range(BATCH_SIZE):
+            if not self._batch_queue:
+                break
+            item, sprite_id = self._batch_queue.pop(0)
+            self.updateSpriteImageForItem(item, sprite_id)
+
+        done = self._batch_total - len(self._batch_queue)
+        if self._batch_queue:
+            self.loadingProgress.emit(done, self._batch_total)
+        else:
+            self._batch_timer.stop()
+            self.loadingProgress.emit(self._batch_total, -1)
 
     def SwitchView(self, view):
         """
@@ -886,22 +942,23 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
         for node in view[2]:
             node.setHidden(False)
         
-        # Update images for newly visible items (only if scene is ready)
+        # Queue images for newly visible items (only if scene is ready)
         if self.show_sprite_images:
             import spritelib as SLib
             if SLib.Tiles and not all(tile is None for tile in SLib.Tiles):
-                for node in view[2]:
-                    self.updateItemsInCategory(node)
+                self._startBatchQueue(self._collectVisibleItems())
     
     def updateItemsInCategory(self, category_item):
         """
         Updates sprite images for all items in a category
         """
+        items = []
         for i in range(category_item.childCount()):
             item = category_item.child(i)
             sprite_id = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
             if sprite_id is not None and sprite_id >= 0:
-                self.updateSpriteImageForItem(item, sprite_id)
+                items.append((item, sprite_id))
+        self._startBatchQueue(items)
 
     def HandleItemChange(self, current, previous):
         """
@@ -935,6 +992,10 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
         if not self.show_sprite_images:
             return
         
+        import spritelib as SLib
+        if not (SLib.Tiles and not all(tile is None for tile in SLib.Tiles)):
+            return
+
         # Only render if it's the search results category
         if hasattr(self, 'SearchResultsCategory') and item == self.SearchResultsCategory:
             self.updateItemsInCategory(item)
@@ -955,13 +1016,19 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
         # state is 0 (unchecked) or 2 (checked) from stateChanged signal
         self.show_sprite_images = state == 2
         setSetting('ShowSpriteListImages', self.show_sprite_images)
-        self.ShowSpriteListImagesChanged.emit(self.show_sprite_images)
-        
-        # Only update images if scene is ready (tiles loaded)
+
+        if not self.show_sprite_images:
+            # Cancel any pending batch and remove all icons
+            self._batch_timer.stop()
+            self._batch_queue = []
+            self.loadingProgress.emit(0, -1)
+            self.clearAllIcons()
+            return
+
+        # Load images: only if scene is ready (tiles loaded)
         import spritelib as SLib
         if SLib.Tiles and not all(tile is None for tile in SLib.Tiles):
-            # Update all visible items to show/hide images
-            self.updateAllVisibleItems()
+            self._startBatchQueue(self._collectVisibleItems())
 
     def updateSpriteImageForItem(self, item, sprite_id):
         """
@@ -977,12 +1044,6 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
             
             if globals_.Area is None:
                 return
-            
-            if not hasattr(globals_.Area, 'preview_loaded_sprites'):
-                globals_.Area.preview_loaded_sprites = set()
-            
-            if sprite_id not in globals_.Area.preview_loaded_sprites:
-                globals_.Area.preview_loaded_sprites.add(sprite_id)
             
             temp_sprite = None
             temp_scene = None

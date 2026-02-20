@@ -1076,8 +1076,7 @@ class Area:
         """
         Saves the list of loaded sprites back to block 9
         """
-        # Include sprites in level, force-loaded sprites, and preview-loaded sprites (for rendering)
-        ls = sorted(set(sprite.type for sprite in self.sprites) | self.force_loaded_sprites | self.preview_loaded_sprites)
+        ls = sorted(set(sprite.type for sprite in self.sprites) | self.force_loaded_sprites)
 
         offset = 0
         sprstruct = struct.Struct('>Hxx')
