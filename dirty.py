@@ -24,7 +24,8 @@ SETTING_GROUPS = {
                'FreezeLocations', 'FreezePaths', 'FreezeComments'],
     'Preferences': ['Translation', 'ZoneEntIndicators', 'ZoneBoundIndicators',
                     'ResetDataWhenHiding', 'HideResetSpritedata', 'EnablePadding',
-                    'PaddingLength', 'PlaceObjectsAtFullSize', 'InsertPathNode', 'Theme'],
+                    'PaddingLength', 'PlaceObjectsAtFullSize', 'InsertPathNode', 'Theme',
+                    'UIScale', 'FontScale'],
     # Geometry settings are NOT in a group - they stay at root level for Qt
 }
 

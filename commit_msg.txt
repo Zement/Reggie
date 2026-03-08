@@ -1,8 +1,0 @@
-feat(sprites): sprite list image loading indicator, unload on untick, batch queue
-
-- Add QTimer-batched image loading to prevent UI freeze during sprite list rendering
-- Add loading progress label showing 'Loading images... N/total' while batch runs
-- Unload all sprite icons when 'Show Sprite Images' checkbox is unticked
-- Remove unused ShowSpriteListImagesChanged signal
-- Add translation strings for checkbox label and loading progress
-- Bump version to v4.9.1-21

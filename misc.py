@@ -1914,20 +1914,104 @@ class PreferencesDialog(QtWidgets.QDialog):
                 self.toolbarDockingGroup.addButton(self.toolbarCombinedRadio, 0)
                 self.toolbarDockingGroup.addButton(self.toolbarSeparateRadio, 1)
 
+                # UI Scaling section
+                self.scalingLabel = QtWidgets.QLabel('<b>UI Scaling:</b>')
+                
+                # Use grid layout for aligned columns
+                scalingGrid = QtWidgets.QGridLayout()
+                scalingGrid.setColumnStretch(1, 1)  # Slider column stretches
+                
+                # Widget Scale slider (row 0)
+                scalingGrid.addWidget(QtWidgets.QLabel('Widget Scale:'), 0, 0)
+                self.uiScaleSlider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+                self.uiScaleSlider.setMinimum(50)
+                self.uiScaleSlider.setMaximum(300)
+                self.uiScaleSlider.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBelow)
+                self.uiScaleSlider.setTickInterval(25)
+                self.uiScaleSlider.valueChanged.connect(self.onUIScaleChanged)
+                scalingGrid.addWidget(self.uiScaleSlider, 0, 1)
+                self.uiScaleLabel = QtWidgets.QLabel('100%')
+                self.uiScaleLabel.setMinimumWidth(50)
+                scalingGrid.addWidget(self.uiScaleLabel, 0, 2)
+                
+                # Font Scale slider (row 1)
+                scalingGrid.addWidget(QtWidgets.QLabel('Font Scale:'), 1, 0)
+                self.fontScaleSlider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+                self.fontScaleSlider.setMinimum(50)
+                self.fontScaleSlider.setMaximum(300)
+                self.fontScaleSlider.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBelow)
+                self.fontScaleSlider.setTickInterval(25)
+                self.fontScaleSlider.valueChanged.connect(self.onFontScaleChanged)
+                scalingGrid.addWidget(self.fontScaleSlider, 1, 1)
+                self.fontScaleLabel = QtWidgets.QLabel('100%')
+                self.fontScaleLabel.setMinimumWidth(50)
+                scalingGrid.addWidget(self.fontScaleLabel, 1, 2)
+                
+                # Working indicator (row 2)
+                self.scalingWorkingLabel = QtWidgets.QLabel('')
+                scalingGrid.addWidget(self.scalingWorkingLabel, 2, 0, 1, 3)  # Span all columns
+
                 # Create the main layout
                 L = QtWidgets.QVBoxLayout()
                 L.addWidget(self.toolbarDockingLabel)
                 L.addWidget(self.toolbarCombinedRadio)
                 L.addWidget(self.toolbarSeparateRadio)
+                L.addSpacing(20)
+                L.addWidget(self.scalingLabel)
+                L.addLayout(scalingGrid)
                 L.addStretch(1)
                 self.setLayout(L)
 
                 # Set the current values
                 self.Reset()
+                
+                # Debounce timer for smooth slider updates (same as ScalingDialog)
+                self.scaling_timer = QtCore.QTimer(self)
+                self.scaling_timer.setSingleShot(True)
+                self.scaling_timer.timeout.connect(self.applyLivePreview)
+                self.debounce_delay = 700  # ms
+                
+                # Update slider states based on theme
+                self.updateSliderStates()
+
+            def onUIScaleChanged(self, value):
+                """Handle UI scale slider change"""
+                # Update label immediately for responsive feedback
+                self.uiScaleLabel.setText(f"{value}%")
+                # Show working indicator and restart debounce timer
+                self.scalingWorkingLabel.setText("⏳ Applying scaling...")
+                self.scaling_timer.stop()
+                self.scaling_timer.start(self.debounce_delay)
+                
+            def onFontScaleChanged(self, value):
+                """Handle font scale slider change"""
+                # Update label immediately for responsive feedback
+                self.fontScaleLabel.setText(f"{value}%")
+                # Show working indicator and restart debounce timer
+                self.scalingWorkingLabel.setText("⏳ Applying scaling...")
+                self.scaling_timer.stop()
+                self.scaling_timer.start(self.debounce_delay)
+            
+            def applyLivePreview(self):
+                """Apply scaling preview (debounced)"""
+                ui_scale = self.uiScaleSlider.value() / 100.0
+                font_scale = self.fontScaleSlider.value() / 100.0
+                globals_.scalingManager.setUIScale(ui_scale)
+                globals_.scalingManager.setFontScale(font_scale)
+                globals_.scalingManager.applyScaling()
+                # Clear working indicator
+                self.scalingWorkingLabel.setText("")
+            
+            def updateSliderStates(self):
+                """Update slider states - widget scaling now works for all themes"""
+                # Widget scaling is now enabled for all themes
+                # Classic theme uses minimal QSS (icons only)
+                # Styled themes use full QSS (padding, margins, etc.)
+                pass  # No need to disable anything
 
             def Reset(self):
                 """
-                Read the preferences and set the radio buttons
+                Read the preferences and set the radio buttons and sliders
                 """
                 # Get the current toolbar docking setting
                 # Default to combined (False) on Windows, separate (True) on other platforms
@@ -1941,6 +2025,23 @@ class PreferencesDialog(QtWidgets.QDialog):
                     self.toolbarSeparateRadio.setChecked(True)
                 else:
                     self.toolbarCombinedRadio.setChecked(True)
+                
+                # Load UI scaling settings
+                ui_scale = setting('UIScale', 1.0)
+                font_scale = setting('FontScale', 1.0)
+                
+                # Block signals to prevent triggering applyScaling during initialization
+                self.uiScaleSlider.blockSignals(True)
+                self.fontScaleSlider.blockSignals(True)
+                
+                self.uiScaleSlider.setValue(int(ui_scale * 100))
+                self.fontScaleSlider.setValue(int(font_scale * 100))
+                
+                self.uiScaleLabel.setText(f"{int(ui_scale * 100)}%")
+                self.fontScaleLabel.setText(f"{int(font_scale * 100)}%")
+                
+                self.uiScaleSlider.blockSignals(False)
+                self.fontScaleSlider.blockSignals(False)
 
         return InterfaceTab()
 

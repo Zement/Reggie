@@ -638,6 +638,12 @@ class ReggieWindow(QtWidgets.QMainWindow):
         )
 
         self.CreateAction(
+            'uiscaling', self.HandleUIScaling, None,
+            'UI Scaling...', 'Adjust UI and font scaling for better readability',
+            None,
+        )
+
+        self.CreateAction(
             'zoommax', self.HandleZoomMax, GetIcon('zoommax'),
             globals_.trans.stringOneLine('MenuItems', 62), globals_.trans.stringOneLine('MenuItems', 63),
             QtGui.QKeySequence('Ctrl+PgDown'),
@@ -819,6 +825,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         vmenu.addAction(self.actions['showpaths'])
         vmenu.addSeparator()
         vmenu.addAction(self.actions['grid'])
+        vmenu.addAction(self.actions['uiscaling'])
         vmenu.addSeparator()
         vmenu.addAction(self.actions['zoommax'])
         vmenu.addAction(self.actions['zoomin'])
@@ -1343,9 +1350,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.spriteImagesLoadingLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.spriteImagesLoadingLabel.hide()
         self.sprPicker.loadingProgress.connect(self._onSpriteImageLoadingProgress)
-        spl.addWidget(self.spriteImagesLoadingLabel)
 
         spl.addWidget(self.sprPicker, 1)
+
+        spl.addWidget(self.spriteImagesLoadingLabel)
 
         self.defaultPropButton = QtWidgets.QPushButton(globals_.trans.string('Palette', 6))
         self.defaultPropButton.setEnabled(False)
@@ -2792,6 +2800,18 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # Get the Interface tab settings
         toolbar_separate = dlg.interfaceTab.toolbarSeparateRadio.isChecked()
         setSetting('ToolbarSeparate', toolbar_separate)
+        
+        # Get UI scaling settings
+        ui_scale = dlg.interfaceTab.uiScaleSlider.value() / 100.0
+        font_scale = dlg.interfaceTab.fontScaleSlider.value() / 100.0
+        
+        # Apply scaling if changed
+        if (ui_scale != globals_.scalingManager.getUIScale() or 
+            font_scale != globals_.scalingManager.getFontScale()):
+            globals_.scalingManager.setUIScale(ui_scale)
+            globals_.scalingManager.setFontScale(font_scale)
+            globals_.scalingManager.saveSettings()
+            globals_.scalingManager.applyScaling()
 
         # Get the theme settings
         setSetting('Theme', dlg.themesTab.themeBox.currentText())
@@ -3261,6 +3281,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         setSetting('GridType', globals_.GridType)
         self.scene.update()
+
+    def HandleUIScaling(self):
+        """
+        Handle opening the UI Scaling dialog
+        """
+        from ui_scaling import ScalingDialog
+        
+        dlg = ScalingDialog(self)
+        dlg.exec()
 
     def HandleZoomIn(self, *, towardsCursor=False):
         """
@@ -5034,6 +5063,13 @@ def main():
     LoadOverrides()
     print("[BOOT] ✓ Overrides loaded")
 
+    # Initialize UI scaling manager
+    print("[BOOT] Initializing UI scaling...")
+    from ui_scaling import ScalingManager
+    globals_.scalingManager = ScalingManager()
+    globals_.scalingManager.loadSettings()
+    print("[BOOT] ✓ UI scaling manager initialized")
+
     # Initialise spritelib
     print("[BOOT] Initializing spritelib...")
     SLib.OutlineColor = globals_.theme.color('smi')
@@ -5058,6 +5094,11 @@ def main():
     print("[BOOT] Setting app style...")
     SetAppStyle()
     print("[BOOT] ✓ App style set")
+    
+    # Apply UI scaling after app style is set
+    print("[BOOT] Applying UI scaling...")
+    globals_.scalingManager.applyScaling()
+    print("[BOOT] ✓ UI scaling applied")
 
     # Set the default window icon (used for random popups and stuff)
     print("[BOOT] Setting window icon...")

@@ -339,31 +339,48 @@ class IconsOnlyTabBar(QtWidgets.QTabBar):
         return res
 
 # Related functions
-def SetAppStyle(styleKey=''):
+def SetAppStyle(styleKey='', skip_style_reset=False):
     """
     Set the application window color
+    
+    Args:
+        styleKey: The style key to use (e.g. "Fusion")
+        skip_style_reset: If True, skip recreating the style (for scaling updates only)
     """
     # Change the color if applicable
     if globals_.theme.color('ui') is not None and not globals_.theme.forceStyleSheet:
         globals_.app.setPalette(QtGui.QPalette(globals_.theme.color('ui')))
 
-    # Change the style
-    if not styleKey: styleKey = setting('uiStyle', "Fusion")
-    style = QtWidgets.QStyleFactory.create(styleKey)
-    globals_.app.setStyle(style)
+    # Change the style (skip if only updating scaling to preserve toolbar margins)
+    if not skip_style_reset:
+        if not styleKey: styleKey = setting('uiStyle', "Fusion")
+        style = QtWidgets.QStyleFactory.create(styleKey)
+        globals_.app.setStyle(style)
 
-    # Apply the style sheet, if exists
+    # Build the complete stylesheet
+    final_qss = ""
+    
+    # Apply the theme style sheet, if exists
     if globals_.theme.styleSheet:
-        globals_.app.setStyleSheet(globals_.theme.styleSheet)
+        final_qss = globals_.theme.styleSheet
 
-    # Manually set the background color
+    # Manually set the background color if needed
     if globals_.theme.forceUiColor and not globals_.theme.forceStyleSheet:
         color = globals_.theme.color('ui').getRgb()
         bgColor = "#%02x%02x%02x" % tuple(map(lambda x: x // 2, color[:3]))
-        globals_.app.setStyleSheet("""
+        bg_qss = """
             QListView, QTreeWidget, QLineEdit, QDoubleSpinBox, QSpinBox, QTextEdit, QPlainTextEdit{
                 background-color: %s;
-            }""" % bgColor)
+            }""" % bgColor
+        final_qss = final_qss + "\n" + bg_qss if final_qss else bg_qss
+    
+    # Append scaling stylesheet if it exists
+    if hasattr(globals_.theme, '_scaling_qss') and globals_.theme._scaling_qss:
+        final_qss = final_qss + "\n" + globals_.theme._scaling_qss if final_qss else globals_.theme._scaling_qss
+    
+    # Apply the complete stylesheet
+    if final_qss:
+        globals_.app.setStyleSheet(final_qss)
 
 
 def GetIcon(name, big=False):

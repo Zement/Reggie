@@ -763,7 +763,6 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
         self.currentItemChanged.connect(self.HandleItemChange)
         
         # Set icon size for sprite images
-        # Don't set uniform row heights so rows can auto-size based on icon
         self.setIconSize(QtCore.QSize(48, 48))
 
         # Load setting for showing sprite images
@@ -1079,7 +1078,7 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
             background.fill(globals_.theme.color('bg'))
             
             scaled_img = img.scaled(
-                80, 80,
+                48, 48,
                 QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                 QtCore.Qt.TransformationMode.SmoothTransformation
             )
@@ -1105,7 +1104,7 @@ class SpritePickerWidget(QtWidgets.QTreeWidget):
         """
         # Constants from renderInLevelIcon
         maxSize = QtCore.QSize(256, 256)
-        marginPct = 0.75
+        marginPct = 0.08
         maxMargin = 96
 
         # Get the full bounding rectangle
