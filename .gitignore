@@ -155,14 +155,12 @@ settings.ini.bak
 temp/
 
 # Development and analysis files
-.gitignore
-git-workflow-standards.md
-BRANCH_MERGE_ANALYSIS.md
 reggiedata/patches/*
 Reggie-Next.code-workspace
 
-# Documentation and test files (moved to _docs folder)
-_docs/
+# Local workspace: docs, logs, meta (cascade/CLAUDE/workflow) and scratch scripts.
+# Everything under here is developer-local and never committed. See _workspace/.
+_workspace/
 
 # Assets folder contents (keep folder structure only)
 assets/mods/*

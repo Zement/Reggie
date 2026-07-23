@@ -17,9 +17,7 @@
  QMainWindow {
      background: #222;
 }
- :not QDialog {
-     border: none;
-}
+
  QDialog QCheckBox, QDialog QComboBox, QDialog QRadioButton, QDialog QSpinBox, QDialog QTextEdit, QDialog QLineEdit {
      border: none;
 }
@@ -90,7 +88,6 @@
  QSpinBox {
      background: #333;
      color: #fff;
-     max-width: 90px;
 }
  QSpinBox:hover {
      background: #2f76c4;
@@ -103,7 +100,6 @@
  QDoubleSpinBox {
      background: #333;
      color: #fff;
-     max-width: 90px;
 }
  QDoubleSpinBox:hover {
      background: #2f76c4;
@@ -139,7 +135,7 @@
 }
  QLabel:hover {
 }
- QDialog QPushButton, QDockWidget QPushButton {
+QDialog QPushButton, QDockWidget QPushButton {
      color: #000;
      background-color: #b1b1b1;
      min-width: 50px;
@@ -161,7 +157,6 @@
      background-color: #333;
      color: #fff;
      padding: 0;
-     padding-left: 4px;
      margin: 0;
 }
  QComboBox:hover {
@@ -176,8 +171,6 @@
      background-color: #00487f;
 }
  QComboBox QAbstractItemView {
-     border-left: 5px solid #00487f;
-     padding-left: 2px;
      color: #fff;
      selection-background-color: QLinearGradient( x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #2f8eff, stop: 1 #1a8fd7);
 }
@@ -334,7 +327,6 @@
      spacing: 3px;
 }
  QMainWindow::separator:hover {
-     background-color: QLinearGradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1a8fd7, stop:0.5 #b56c17 stop:1 #2f8eff);
      color: white;
      padding-left: 4px;
      border: 1px solid #6c6c6c;
@@ -393,11 +385,10 @@
      background-color: #222;
      border: none;
 }
- QToolBar * {
-}
- QToolBar :hover {
+
+/* QToolBar :hover {
      background-color: #2f76c4;
-}
+} */
  QToolBar :on {
      background-color: #00487f;
 }
