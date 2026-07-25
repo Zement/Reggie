@@ -579,7 +579,8 @@ class SpriteDefinition:
             'multidualbox',
             'dynamicblockvalues',
             'hexvalue',
-            'dynamicstring'
+            'dynamicstring',
+            'spritetex'
         ]
 
         for field in elem:
@@ -599,6 +600,8 @@ class SpriteDefinition:
 
             advanced = attribs.get("advanced", "False").lower() == "true"
             comment = comment2 = advancedcomment = required = idtype = None
+            start = 0
+            increment = 1
 
             if 'comment' in attribs:
                 comment = globals_.trans.string('SpriteDataEditor', 1, '[name]', title, '[note]', attribs['comment'])
@@ -659,11 +662,24 @@ class SpriteDefinition:
 
                     required.append(((bit_range,), (a, b + 1), blocks.pop(0)))
 
+            # NOTE: idtype must be the LAST field passed to a sprite
             if 'idtype' in attribs:
                 idtype = attribs['idtype']
 
                 if field.tag not in {'value', 'list'}:
                     raise ValueError("Only values and lists support idtypes.")
+
+            if 'start' in attribs:
+                start = int(attribs['start'])
+
+                if field.tag != 'value':
+                    raise ValueError("Only values support a start index.")
+
+            if 'increment' in attribs:
+                increment = int(attribs['increment'])
+
+                if field.tag != 'value':
+                    raise ValueError("Only values support an increment.")
 
             # Parse the remaining type-specific attributes.
             if field.tag == 'checkbox':
@@ -687,7 +703,13 @@ class SpriteDefinition:
             elif field.tag == 'value':
                 bit, max_ = self.parseBits(attribs.get("nybble"))
 
-                fields.append((2, attribs['title'], bit, max_, comment, required, advanced, comment2, advancedcomment, idtype, block))
+                overrides = []
+                for o in field:
+                    if o.tag != 'override': continue
+
+                    overrides.append((int(o.attrib['index']), int(o.attrib['value'])))
+
+                fields.append((2, attribs['title'], bit, max_, comment, required, advanced, comment2, advancedcomment, start, increment, overrides, idtype, block))
 
             elif field.tag == 'bitfield':
                 startbit = int(attribs['startbit'])
@@ -706,7 +728,7 @@ class SpriteDefinition:
                 fields.append((5, attribs['title1'], attribs['title2'], bit, comment, required, advanced, comment2, advancedcomment, block))
 
             elif field.tag == 'dependency':
-                type_dict = {'required': 0, 'suggested': 1}
+                type_dict = {'required': 0, 'suggested': 1, 'resource': 2, 'suggestedresource': 3}
 
                 for entry in field:
                     if entry.attrib['sprite'] == "":
@@ -743,6 +765,23 @@ class SpriteDefinition:
 
             elif field.tag == 'dynamicstring':
                 fields.append((10, attribs['title'], comment, required, advanced, comment2, advancedcomment, idtype, block))
+
+            elif field.tag == 'spritetex':
+                # SpriteTex field: a value spinbox paired with a list of named
+                # entries. (Upstream uses field-type id 8 for this; this fork
+                # already uses 8/9/10 for its extended-spritedata field types, so
+                # spritetex is remapped to id 11 here. The id is an internal
+                # widget-dispatch tag only and is unrelated to the raw nybbles.)
+                bit, max_ = self.parseBits(attribs.get("nybble"))
+
+                entries = []
+                for e in field:
+                    if e.tag != 'entry': continue
+
+                    entries.append((int(e.attrib['value']), e.text))
+
+                model = SpriteDefinition.ListPropertyModel(entries)
+                fields.append((11, title, bit, model, max_, comment, required, advanced, comment2, advancedcomment, block))
 
     def parseBits(self, nybble_val: str) -> tuple[list[tuple[int, int]], int]:
         """

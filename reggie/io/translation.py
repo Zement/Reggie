@@ -741,6 +741,8 @@ class ReggieTranslation:
                 26: 'Add Sprite',
                 27: 'Resize',
                 28: 'NO TITLE GIVEN!',
+                30: 'Sprite [id]: required resource',
+                31: 'Add to Loaded Sprites',
             },
             'Sprites': {
                 0: '[b]Sprite [type]:[/b][br][name]',
@@ -1031,7 +1033,14 @@ class ReggieTranslation:
             'SpriteUpgradeDlg': {
                 0: 'Sprite Upgrader',
                 1: 'Reggie Next has detected that the game patch\'s sprites.py file is outdated, and must be upgraded to PyQt6 in order to work correctly.[br][br]Would you like to upgrade?[br]A copy of the old file will remain in the game patch folder.',
-            }
+            },
+            'ExternalOptionDlg': {
+                0: 'Actors',
+                1: 'Models',
+                2: 'Sound Effects',
+                3: 'Graphical Effects',
+                4: 'Search:',
+            },
         }
 
     def InitFromXML(self, name):

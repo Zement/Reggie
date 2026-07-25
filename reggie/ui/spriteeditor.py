@@ -111,18 +111,25 @@ class IntSpinBox(QtWidgets.QAbstractSpinBox):
     _value: int
     _minimum: int
     _maximum: int
+    _start: int
+    _increment: int
+    # Formatted like: ((raw value, num to display), ...)
+    _overrides: list
 
     valueChanged = QtCore.pyqtSignal('int')
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, start=0, increment=1, overrides=None):
         QtWidgets.QAbstractSpinBox.__init__(self, parent)
         self.editingFinished.connect(self.interpretText)
 
         self._value = None
         self._minimum = 0
         self._maximum = 1 << 32
+        self._start = start
+        self._increment = increment
+        self._overrides = overrides if overrides is not None else []
 
-        self.setValue(0)
+        self.setValue(self._start)
 
     def interpretText(self):
         """
@@ -132,7 +139,7 @@ class IntSpinBox(QtWidgets.QAbstractSpinBox):
         # empty string
         text = self.lineEdit().text()
         if not text:
-            text = "0"
+            text = str(self._start)
 
         self.setValue(self.valueFromText(text))
 
@@ -152,7 +159,7 @@ class IntSpinBox(QtWidgets.QAbstractSpinBox):
         # This implementation really only works well if all prefixes of numbers
         # between the minimum and maximum are themselves numbers between the
         # minimum and maximum...
-        if not self._minimum <= val <= self._maximum:
+        if not self._minimum <= val <= self._maximum and not self._start <= val <= ((self._maximum * self._increment) + self._start):
             return (QtGui.QValidator.State.Invalid, text, pos)
 
         return (QtGui.QValidator.State.Acceptable, text, pos)
@@ -196,7 +203,7 @@ class IntSpinBox(QtWidgets.QAbstractSpinBox):
         )
 
     def valueFromText(self, text: str) -> int:
-        return int(text)
+        return (int(text) - self._start) // self._increment
 
     def textFromValue(self, val: int) -> str:
         return str(val)
@@ -208,10 +215,22 @@ class IntSpinBox(QtWidgets.QAbstractSpinBox):
         """
         if self._value == val:
             if val == 0:
-                self.lineEdit().setText("0")
+                self.lineEdit().setText(self.textFromValue(self._start))
+
+                # Fixes a bug when reloading spritedata
+                for rawVal, dispNum in self._overrides:
+                    if val == rawVal:
+                        self.lineEdit().setText(self.textFromValue(dispNum))
             return
 
-        self.lineEdit().setText(self.textFromValue(val))
+        textVal = (val * self._increment) + self._start
+
+        # Check for any value overrides
+        for rawVal, dispNum in self._overrides:
+            if val == rawVal:
+                textVal = dispNum
+
+        self.lineEdit().setText(self.textFromValue(textVal))
         self._value = val
         self.valueChanged.emit(val)
 
@@ -793,13 +812,13 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         Class that decodes/encodes sprite data to/from a spinbox
         """
 
-        def __init__(self, title, bit, max_, comment, required, _, comment2, commentAdv, idtype, layout, row, parent, block: int = 0):
+        def __init__(self, title, bit, max_, comment, required, _, comment2, commentAdv, start, increment, overrides, idtype, layout, row, parent, block: int = 0):
             """
             Creates the widget
             """
             super().__init__()
 
-            self.widget = IntSpinBox()
+            self.widget = IntSpinBox(None, start, increment, overrides)
             self.widget.setRange(0, max_ - 1)
             self.widget.valueChanged.connect(self.HandleValueChanged)
 
@@ -810,6 +829,8 @@ class SpriteEditorWidget(QtWidgets.QWidget):
             self.comment = comment
             self.comment2 = comment2
             self.commentAdv = commentAdv
+            self.start = start
+            self.increment = increment
             self.idtype = idtype
             self.layout = layout
             self.row = row
@@ -1971,6 +1992,136 @@ class SpriteEditorWidget(QtWidgets.QWidget):
 
             return data
 
+    class SpriteTexPropertyDecoder(PropertyDecoder):
+        """
+        Class that decodes/encodes sprite data to/from a SpriteTex element
+        (a value spinbox paired with a list combobox). Ported from upstream
+        NSMBW-Community (field-type id 8 there); remapped to id 11 in this fork
+        to avoid colliding with the extended-spritedata field types.
+        """
+
+        def __init__(self, title, bit, model, max_, comment, required, _, comment2, commentAdv, layout, row, parent, block: int = 0):
+            """
+            Creates the widgets
+            """
+            super().__init__()
+
+            self.spinBox = IntSpinBox()
+            self.spinBox.setRange(0, max_ - 1)
+            self.spinBox.valueChanged.connect(self.HandleValueChanged)
+
+            self.comboBox = QtWidgets.QComboBox()
+            self.comboBox.setModel(model)
+            self.comboBox.currentIndexChanged.connect(self.HandleIndexChanged)
+
+            self.model = model
+
+            self.bit = bit
+            self.block = block
+            self.required = required
+            self.parent = parent
+            self.comment = comment
+            self.comment2 = comment2
+            self.commentAdv = commentAdv
+            self.layout = layout
+            self.row = row
+            self.prev_value = None
+            self.editWidget = 0  # 0 = spin box, 1 = combo box
+
+            label = QtWidgets.QLabel(title + ':')
+
+            layout.addWidget(label, row, 0, QtCore.Qt.AlignmentFlag.AlignRight)
+            layout.addWidget(self.comboBox, row, 1, 1, 1)
+            layout.addWidget(self.spinBox,  row, 2, 1, 1)
+
+            col = 3
+            if comment is not None:
+                button_com = QtWidgets.QToolButton()
+                button_com.setIcon(GetIcon('setting-comment'))
+                button_com.setStyleSheet("border-radius: 50%")
+                button_com.clicked.connect(self.ShowComment)
+                button_com.setAutoRaise(True)
+
+                layout.addWidget(button_com, row, col)
+                col += 1
+
+            if comment2 is not None:
+                button_com2 = QtWidgets.QToolButton()
+                button_com2.setIcon(GetIcon('setting-comment2'))
+                button_com2.setStyleSheet("border-radius: 50%")
+                button_com2.clicked.connect(self.ShowComment2)
+                button_com2.setAutoRaise(True)
+
+                layout.addWidget(button_com2, row, col)
+                col += 1
+
+            if commentAdv is not None:
+                button_adv = QtWidgets.QToolButton()
+                button_adv.setIcon(GetIcon('setting-comment-adv'))
+                button_adv.setStyleSheet("border-radius: 50%")
+                button_adv.clicked.connect(self.ShowAdvancedComment)
+                button_adv.setAutoRaise(True)
+
+                layout.addWidget(button_adv, row, col)
+
+        def update(self, data, first=False):
+            """
+            Updates the value shown by the widgets
+            """
+            # check if requirements are met
+            self.checkReq(data, first)
+
+            value = self.retrieve(data)
+            self.spinBox.setValue(value)
+
+            for i, x in enumerate(self.model.entries):
+                if x[0] == value:
+                    self.comboBox.setCurrentIndex(i)
+                    break
+            else:
+                self.comboBox.setCurrentIndex(-1)
+
+        def assign(self, data):
+            """
+            Assigns the selected value to the data
+            """
+            if self.editWidget == 0:
+                return self.insertvalue(data, self.spinBox.value())
+            else:
+                return self.insertvalue(data, self.model.entries[self.comboBox.currentIndex()][0])
+
+        def HandleDataChanged(self, value):
+            """
+            Handle the data changing in either widget
+            """
+            self.updateData.emit(self)
+            self.spinBox.setValue(value)
+
+            for i, x in enumerate(self.model.entries):
+                if x[0] == value:
+                    self.comboBox.setCurrentIndex(i)
+                    break
+            else:
+                self.comboBox.setPlaceholderText(str(value) + ': Undefined Entry')
+                self.comboBox.setCurrentIndex(-1)
+
+        def HandleValueChanged(self, value):
+            """
+            Handle the value changing in the spinbox
+            """
+            self.editWidget = 0
+            self.HandleDataChanged(value)
+
+        def HandleIndexChanged(self, index):
+            """
+            Handle the current index changing in the combobox
+            """
+            if index < 0:
+                return
+
+            self.editWidget = 1
+            self.HandleDataChanged(self.model.entries[index][0])
+
 
 
 
@@ -2073,12 +2224,17 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         rownum = 0
 
         # (sprite id, importance level)
-        # importance level is 0 for 'required', 1 for 'suggested'
-        missing = [[], []]
+        # importance level is 0 for 'required', 1 for 'suggested', 2 for 'resource',
+        # 3 for 'suggestedresource'
+        missing = [[], [], [], []]
         cur_sprites = [s.type for s in globals_.Area.sprites]
         for dependency, importance in sprite.dependencies:
             if dependency not in cur_sprites:
-                missing[importance].append(dependency)
+                if importance == 2:
+                    if dependency not in globals_.Area.force_loaded_sprites:
+                        missing[importance].append(dependency)
+                else:
+                    missing[importance].append(dependency)
 
         # if there are missing things
         for missingSprite in missing[0]:
@@ -2103,6 +2259,33 @@ class SpriteEditorWidget(QtWidgets.QWidget):
 
             addButton = QtWidgets.QPushButton(action)
             addButton.clicked.connect(self.HandleSpritePlaced(missingSprite, addButton))
+
+            self.com_deplist.addWidget(QtWidgets.QLabel(name), rownum, 0)
+            self.com_deplist.addWidget(addButton, rownum, 1)
+            rownum += 1
+
+        for missingSprite in missing[2]:
+            name = globals_.trans.string('SpriteDataEditor', 30, '[id]', missingSprite)
+            action = globals_.trans.string('SpriteDataEditor', 31)
+            addButton = QtWidgets.QPushButton(action)
+
+            message = self.addMessage(name, level = 3, close = action)
+            callback = self.closeMessageCallback(message, self.HandleAppendToLoadList(missingSprite, addButton))
+            self.addCallbackToMessage(message, callback)
+
+            addButton.clicked.connect(callback)
+
+            self.com_deplist.addWidget(QtWidgets.QLabel(name), rownum, 0)
+            self.com_deplist.addWidget(addButton, rownum, 1)
+
+            rownum += 1
+
+        for missingSprite in missing[3]:
+            name = globals_.trans.string('SpriteDataEditor', 30, '[id]', missingSprite)
+            action = globals_.trans.string('SpriteDataEditor', 31)
+
+            addButton = QtWidgets.QPushButton(action)
+            addButton.clicked.connect(self.HandleAppendToLoadList(missingSprite, addButton))
 
             self.com_deplist.addWidget(QtWidgets.QLabel(name), rownum, 0)
             self.com_deplist.addWidget(addButton, rownum, 1)
@@ -2154,7 +2337,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
                 nf = SpriteEditorWidget.ListPropertyDecoder(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], layout, row, self, f[-1])
 
             elif f[0] == 2:
-                nf = SpriteEditorWidget.ValuePropertyDecoder(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], layout, row, self, f[-1])
+                nf = SpriteEditorWidget.ValuePropertyDecoder(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], layout, row, self, f[-1])
 
             elif f[0] == 3:
                 nf = SpriteEditorWidget.BitfieldPropertyDecoder(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], layout, row, self, f[-1])
@@ -2185,6 +2368,9 @@ class SpriteEditorWidget(QtWidgets.QWidget):
                 if initial_data is not None:
                     block_count += len(initial_data.blocks) - f[-1]
                 nf = SpriteEditorWidget.DynamicStringPropertyDecoder(f[1], f[2], f[3], f[4], f[5], f[6], layout, row, self, f[-1], block_count = block_count)
+
+            elif f[0] == 11:
+                nf = SpriteEditorWidget.SpriteTexPropertyDecoder(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], layout, row, self, f[-1])
 
 
             nf.updateData.connect(self.HandleFieldUpdate)
@@ -2489,6 +2675,28 @@ class SpriteEditorWidget(QtWidgets.QWidget):
 
         return placeSprite
 
+    def HandleAppendToLoadList(self, id_, button_):
+        def addToLoadList():
+            globals_.Area.force_loaded_sprites.add(id_)
+            SetDirty()
+
+            # remove this dependency, because it is now fulfilled.
+            # get row of button
+            idx = self.com_deplist.indexOf(button_)
+            row, *_ = self.com_deplist.getItemPosition(idx)
+
+            # remove this row
+            l = self.com_deplist
+            for column in range(l.columnCount()):
+                w = l.itemAtPosition(row, column)
+                if w is not None:
+                    widget = w.widget()
+                    l.removeWidget(widget)
+                    widget.setParent(None)
+
+
+        return addToLoadList
+
     def HandleSizeButtonClicked(self, e):
         """
         Handles the 'resize' button being clicked
@@ -2545,6 +2753,12 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
         # each of these functions should assign the editing thing to self.widget
         self.type = type
 
+        # Set appropriate window title
+        types = ['actors', 'models', 'sfx', 'gfx']
+        for idx, extType in enumerate(types):
+            if extType == self.type:
+                self.setWindowTitle(globals_.trans.string('ExternalOptionDlg', idx))
+
         items, order = self.loadItemsFromXML()
         self.fillWidgetFromItems(items, order)
 
@@ -2576,7 +2790,7 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
         searchbar.textEdited.connect(self.search)
 
         L = QtWidgets.QHBoxLayout()
-        L.addWidget(QtWidgets.QLabel("Search:"))
+        L.addWidget(QtWidgets.QLabel(globals_.trans.string('ExternalOptionDlg', 4)))
         L.addWidget(searchbar)
 
         search = QtWidgets.QWidget()
