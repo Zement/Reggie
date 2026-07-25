@@ -54,7 +54,7 @@ ImageCache = SLib.ImageCache
 
 def LoadBasics():
     """
-    Loads basic images used in NSMBW
+    Loads basic images used in NSMBW. This runs every time a new GameDef is loaded
     """
     # Load some coins, because coins are in almost every Mario level ever
     ImageCache['Coin'] = SLib.GetImg('coin.png')
@@ -90,6 +90,12 @@ def LoadBasics():
     SLib.loadIfNotInImageCache('VineMid', 'vine_mid.png')
     SLib.loadIfNotInImageCache('VineBtm', 'vine_btm.png')
 
+    # Load some arrows for previewing movement directions of platforms and stuff
+    SLib.loadIfNotInImageCache('DirectionArrowUp', 'direction_arrow_up.png')
+    SLib.loadIfNotInImageCache('DirectionArrowDown', 'direction_arrow_down.png')
+    SLib.loadIfNotInImageCache('DirectionArrowRight', 'direction_arrow_right.png')
+    SLib.loadIfNotInImageCache('DirectionArrowLeft', 'direction_arrow_left.png')
+
 
 # ---- Low-Level Classes ----
 
@@ -98,6 +104,7 @@ class SpriteImage_WoodenPlatform(SLib.SpriteImage):  # 23, 31, 50, 103, 106, 122
     def __init__(self, parent, scale=1.5):
         super().__init__(parent, scale)
         self.spritebox.shown = False
+        self.xOffset = -2 / 1.5
 
     @staticmethod
     def loadImages():
@@ -126,15 +133,15 @@ class SpriteImage_WoodenPlatform(SLib.SpriteImage):  # 23, 31, 50, 103, 106, 122
             color = 'Bone'
 
         if self.width > 32:
-            painter.drawTiledPixmap(24, 0, int((self.width * 1.5) - 48), int(self.height * 1.5), ImageCache[color + 'PlatformM'])
+            painter.drawTiledPixmap(26, 0, int((self.width * 1.5) - 44), int(self.height * 1.5), ImageCache[color + 'PlatformM'])
 
         if self.width == 24:
-            # replicate glitch effect foRotControlled by sprite 50
+            # replicate glitch effect for some platforms
             painter.drawPixmap(0, 0, ImageCache[color + 'PlatformR'])
-            painter.drawPixmap(8, 0, ImageCache[color + 'PlatformL'])
+            painter.drawPixmap(10, 0, ImageCache[color + 'PlatformL'])
         else:
             # normal rendering
-            painter.drawPixmap(int((self.width - 16) * 1.5), 0, ImageCache[color + 'PlatformR'])
+            painter.drawPixmap(round((self.width - 16) * 1.5 - 2), 0, ImageCache[color + 'PlatformR'])
             painter.drawPixmap(0, 0, ImageCache[color + 'PlatformL'])
 
 
@@ -473,17 +480,24 @@ class SpriteImage_Amp(SLib.SpriteImage_Static):  # 104, 108
     def __init__(self, parent, scale=1.5):
         super().__init__(
             parent,
-            scale,
-            ImageCache['Amp'],
-            (-8, -8),
+            scale
         )
+
+        self.dimensions = (-5 / 1.5, -5 / 1.5, 34 / 1.5, 34 / 1.5)
+
+        self.aux.append(SLib.AuxiliaryImage(parent, 59, 50))
+        self.aux[0].image = ImageCache['Amp']
+        self.aux[0].setPos(-13, -13)
 
     @staticmethod
     def loadImages():
         SLib.loadIfNotInImageCache('Amp', 'amp.png')
 
+    def dataChanged(self):
+        pass
 
-class SpriteImage_SpikedStake(SLib.SpriteImage):  # 137, 140, 141, 142
+
+class SpriteImage_Skewer(SLib.SpriteImage):  # 137, 140, 141, 142
     def __init__(self, parent, scale=1.5):
         super().__init__(parent, scale)
         self.spritebox.shown = False
@@ -495,12 +509,12 @@ class SpriteImage_SpikedStake(SLib.SpriteImage):  # 137, 140, 141, 142
 
     @staticmethod
     def loadImages():
-        if 'StakeM0up' not in ImageCache:
+        if 'SkewerM0up' not in ImageCache:
             for dir in ['up', 'down', 'left', 'right']:
-                ImageCache['StakeM0' + dir] = SLib.GetImg('stake_%s_m_0.png' % dir)
-                ImageCache['StakeM1' + dir] = SLib.GetImg('stake_%s_m_1.png' % dir)
-                ImageCache['StakeE0' + dir] = SLib.GetImg('stake_%s_e_0.png' % dir)
-                ImageCache['StakeE1' + dir] = SLib.GetImg('stake_%s_e_1.png' % dir)
+                ImageCache['SkewerM0' + dir] = SLib.GetImg('skewer_%s_m_0.png' % dir)
+                ImageCache['SkewerM1' + dir] = SLib.GetImg('skewer_%s_m_1.png' % dir)
+                ImageCache['SkewerE0' + dir] = SLib.GetImg('skewer_%s_e_0.png' % dir)
+                ImageCache['SkewerE1' + dir] = SLib.GetImg('skewer_%s_e_1.png' % dir)
 
     def dataChanged(self):
         super().dataChanged()
@@ -536,11 +550,11 @@ class SpriteImage_SpikedStake(SLib.SpriteImage):  # 137, 140, 141, 142
 
         color = self.parent.spritedata[3] & 15
         if color == 2 or color == 3 or color == 7:
-            mid = ImageCache['StakeM1' + self.dir]
-            end = ImageCache['StakeE1' + self.dir]
+            mid = ImageCache['SkewerM1' + self.dir]
+            end = ImageCache['SkewerE1' + self.dir]
         else:
-            mid = ImageCache['StakeM0' + self.dir]
-            end = ImageCache['StakeE0' + self.dir]
+            mid = ImageCache['SkewerM0' + self.dir]
+            end = ImageCache['SkewerE0' + self.dir]
 
         tiles = 16
         tilesize = 36
@@ -569,7 +583,7 @@ class SpriteImage_ScrewMushroom(SLib.SpriteImage):  # 172, 382
         self.spritebox.shown = False
 
         self.hasBolt = False
-        self.size = (122, 190)
+        self.size = (124, 180)
 
     @staticmethod
     def loadImages():
@@ -582,25 +596,30 @@ class SpriteImage_ScrewMushroom(SLib.SpriteImage):  # 172, 382
     def dataChanged(self):
         super().dataChanged()
 
-        # I wish I knew what this does
-        SomeOffset = self.parent.spritedata[3]
-        if SomeOffset == 0 or SomeOffset > 8: SomeOffset = 8
+        mushroomId = self.parent.spritedata[2] >> 4 & 0xf
+        posOffset = self.parent.spritedata[3]
 
-        self.height = 206 if self.hasBolt else 190
-        self.yOffset = SomeOffset * -16
-        if self.hasBolt:
-            self.yOffset -= 16
+        if posOffset == 0:
+            posOffset = 8
+        elif mushroomId == 0:
+            posOffset += 1
+        elif mushroomId > 0 and posOffset > 1:
+            posOffset = 1
+
+        self.height = 196 if self.hasBolt else 180
+        self.xOffset = 2
+        self.yOffset = posOffset * -16 + 16
 
     def paint(self, painter):
         super().paint(painter)
 
         y = 0
         if self.hasBolt:
-            painter.drawPixmap(70, 0, ImageCache['Bolt'])
+            painter.drawPixmap(71, 0, ImageCache['Bolt'])
             y += 24
         painter.drawPixmap(0, y, ImageCache['ScrewShroomT'])
-        painter.drawTiledPixmap(76, y + 93, 31, 172, ImageCache['ScrewShroomM'])
-        painter.drawPixmap(76, y + 253, ImageCache['ScrewShroomB'])
+        painter.drawTiledPixmap(78, y + 96, 30, 144, ImageCache['ScrewShroomM'])
+        painter.drawPixmap(78, y + 240, ImageCache['ScrewShroomB'])
 
 
 class SpriteImage_Door(SLib.SpriteImage):  # 182, 259, 276, 277, 278
@@ -751,6 +770,7 @@ class SpriteImage_Block(SLib.SpriteImage):  # 207, 208, 209, 221, 255, 256, 402,
         self.eightIsMushroom = False
         self.twelveIsMushroom = False
         self.rotates = False
+        self.flipOverride = False
 
     def dataChanged(self):
         super().dataChanged()
@@ -793,6 +813,11 @@ class SpriteImage_Block(SLib.SpriteImage):  # 207, 208, 209, 221, 255, 256, 402,
 
             transform.translate(-12, -12)
             self.parent.setTransform(transform)
+
+        # Flip a switch override
+        if self.flipOverride:
+            flip = self.image.toImage().mirrored(True, True)
+            self.image = self.image.fromImage(flip)
 
     def paint(self, painter):
         super().paint(painter)
@@ -982,7 +1007,7 @@ class SpriteImage_RollingHillWithPipe(SLib.SpriteImage):  # 355, 360
         self.aux.append(SLib.AuxiliaryCircleOutline(parent, 800))
 
 
-class SpriteImage_LongSpikedStake(SLib.SpriteImage):  # 398, 400
+class SpriteImage_LongSkewer(SLib.SpriteImage):  # 398, 400
     def __init__(self, parent, scale=1.5):
         super().__init__(parent, scale)
         self.parent.setZValue(24999) # to see sprites behind it easily
@@ -993,12 +1018,12 @@ class SpriteImage_LongSpikedStake(SLib.SpriteImage):  # 398, 400
 
     @staticmethod
     def loadImages():
-        if 'LongStakeM0left' in ImageCache: return
+        if 'LongSkewerM0left' in ImageCache: return
         for dir in ['left', 'right']:
-            ImageCache['LongStakeM0' + dir] = SLib.GetImg('stake_%s_m_0.png' % dir)
-            ImageCache['LongStakeM1' + dir] = SLib.GetImg('stake_%s_m_1.png' % dir)
-            ImageCache['LongStakeE0' + dir] = SLib.GetImg('stake_%s_e_0.png' % dir)
-            ImageCache['LongStakeE1' + dir] = SLib.GetImg('stake_%s_e_1.png' % dir)
+            ImageCache['LongSkewerM0' + dir] = SLib.GetImg('skewer_%s_m_0.png' % dir)
+            ImageCache['LongSkewerM1' + dir] = SLib.GetImg('skewer_%s_m_1.png' % dir)
+            ImageCache['LongSkewerE0' + dir] = SLib.GetImg('skewer_%s_e_0.png' % dir)
+            ImageCache['LongSkewerE1' + dir] = SLib.GetImg('skewer_%s_e_1.png' % dir)
 
     def dataChanged(self):
         super().dataChanged()
@@ -1014,11 +1039,11 @@ class SpriteImage_LongSpikedStake(SLib.SpriteImage):  # 398, 400
         paint = QtGui.QPainter(pix)
 
         if color == 2 or color == 3 or color == 6 or color == 7:
-            mid = ImageCache['LongStakeM1' + self.dir]
-            end = ImageCache['LongStakeE1' + self.dir]
+            mid = ImageCache['LongSkewerM1' + self.dir]
+            end = ImageCache['LongSkewerE1' + self.dir]
         else:
-            mid = ImageCache['LongStakeM0' + self.dir]
-            end = ImageCache['LongStakeE0' + self.dir]
+            mid = ImageCache['LongSkewerM0' + self.dir]
+            end = ImageCache['LongSkewerE0' + self.dir]
 
         if self.dir == 'left':
             self.aux[0].setPos(-1896, 36)
@@ -1034,11 +1059,10 @@ class SpriteImage_LongSpikedStake(SLib.SpriteImage):  # 398, 400
         self.aux[1].alpha = 0.9
 
 
-class SpriteImage_MassiveSpikedStake(SLib.SpriteImage):  # 401, 404
+class SpriteImage_MassiveSkewer(SLib.SpriteImage):  # 401, 404
     def __init__(self, parent, scale=1.5):
         super().__init__(parent, scale)
         self.parent.setZValue(24999) # to see sprites behind it easily
-        self.spritebox.shown = False
 
         self.SpikeLength = ((72 * 40) + 136) / 1.5
         # (40 mid sections + an end section), accounting for image/sprite size difference
@@ -1046,12 +1070,12 @@ class SpriteImage_MassiveSpikedStake(SLib.SpriteImage):  # 401, 404
 
     @staticmethod
     def loadImages():
-        if 'MassiveStakeM0up' in ImageCache: return
+        if 'MassiveSkewerM0up' in ImageCache: return
         for dir in ['up', 'down']:
-            ImageCache['MassiveStakeM0'] = SLib.GetImg('massive_stake_m_0.png')
-            ImageCache['MassiveStakeM1'] = SLib.GetImg('massive_stake_m_1.png')
-            ImageCache['MassiveStakeE0' + dir] = SLib.GetImg('massive_stake_%s_e_0.png' % dir)
-            ImageCache['MassiveStakeE1' + dir] = SLib.GetImg('massive_stake_%s_e_1.png' % dir)
+            ImageCache['MassiveSkewerM0'] = SLib.GetImg('massive_skewer_m_0.png')
+            ImageCache['MassiveSkewerM1'] = SLib.GetImg('massive_skewer_m_1.png')
+            ImageCache['MassiveSkewerE0' + dir] = SLib.GetImg('massive_skewer_%s_e_0.png' % dir)
+            ImageCache['MassiveSkewerE1' + dir] = SLib.GetImg('massive_skewer_%s_e_1.png' % dir)
 
     def dataChanged(self):
         super().dataChanged()
@@ -1067,27 +1091,31 @@ class SpriteImage_MassiveSpikedStake(SLib.SpriteImage):  # 401, 404
         paint = QtGui.QPainter(pix)
 
         if color == 2 or color == 3 or color == 6 or color == 7:
-            mid = ImageCache['MassiveStakeM1']
-            end = ImageCache['MassiveStakeE1' + self.dir]
+            mid = ImageCache['MassiveSkewerM1']
+            end = ImageCache['MassiveSkewerE1' + self.dir]
         else:
-            mid = ImageCache['MassiveStakeM0']
-            end = ImageCache['MassiveStakeE0' + self.dir]
+            mid = ImageCache['MassiveSkewerM0']
+            end = ImageCache['MassiveSkewerE0' + self.dir]
+
+        offsX = 91
+        offsY = -183 # Only used for down skewer
 
         if self.dir == 'up':
-            self.aux[0].setPos(112, -96)
-            self.aux[1].setPos(4, -2592)
+            self.aux[0].setPos(102 - offsX, -96)
+            self.aux[1].setPos(-7  - offsX, -2592)
+            self.aux[2].setPos(-10 - offsX, 0)
             paint.drawPixmap(0, 0, end)
             paint.drawTiledPixmap(0, endsize, width, tilesize * tiles, mid)
         elif self.dir == 'down':
-            self.aux[0].setPos(112, 184)
-            self.aux[1].setPos(4, 137)
-            self.aux[2].setPos(0, -2808)
+            self.aux[0].setPos(102 - offsX, 184   + offsY)
+            self.aux[1].setPos(-7  - offsX, 137   + offsY)
+            self.aux[2].setPos(-10 - offsX, -2808 + offsY)
             paint.drawTiledPixmap(0, 0, width, tilesize * tiles, mid)
             paint.drawPixmap(0, 2880, end)
 
         paint = None
         self.aux[2].image = pix
-        self.aux[2].alpha = 0.9
+        self.aux[2].alpha = 0.5
 
 
 class SpriteImage_ToadHouseBalloon(SLib.SpriteImage_StaticMultiple):  # 411, 412
@@ -1106,29 +1134,29 @@ class SpriteImage_ToadHouseBalloon(SLib.SpriteImage_StaticMultiple):  # 411, 412
                     SLib.GetImg('mg_house_balloon_' + handleFileStr + str(num) + '.png')
 
     def dataChanged(self):
-
         self.image = ImageCache['ToadHouseBalloon' + ('Handle' if self.hasHandle else '') + str(self.livesNum)]
-
-        self.xOffset = 8 - (self.image.width() / 3)
+        self.xOffset = -13
 
         super().dataChanged()
 
+
+# ---- High-Level Classes ----
 
 class SpriteImage_HorzMovingPlatform(SpriteImage_WoodenPlatform):  # 23
     def __init__(self, parent):
         super().__init__(parent, 1.5)
 
-        self.width = ((self.parent.spritedata[5] & 0xF) + 1) << 4
+        self.width = (((self.parent.spritedata[5] & 0xF) + 1) << 4) + (4 / 1.5)
         self.aux.append(SLib.AuxiliaryTrackObject(parent, self.width, 16, SLib.AuxiliaryTrackObject.Horizontal))
 
     def dataChanged(self):
         super().dataChanged()
 
         # get width and distance
-        self.width = ((self.parent.spritedata[5] & 0xF) + 1) << 4
-        if self.width == 16: self.width = 32
+        self.width = (((self.parent.spritedata[5] & 0xF) + 1) << 4) + (4 / 1.5)
+        if self.width < 20: self.width = 32 + (4 / 1.5)
 
-        distance = (self.parent.spritedata[4] & 0xF) << 4
+        distance = ((self.parent.spritedata[4] & 0xF) << 4) - 1
 
         # update the track
         self.aux[0].setSize(self.width + distance, 16)
@@ -1208,15 +1236,15 @@ class SpriteImage_VertMovingPlatform(SpriteImage_WoodenPlatform):  # 31
     def __init__(self, parent):
         super().__init__(parent, 1.5)
 
-        self.width = ((self.parent.spritedata[5] & 0xF) + 1) << 4
+        self.width = (((self.parent.spritedata[5] & 0xF) + 1) << 4) + (4 / 1.5)
         self.aux.append(SLib.AuxiliaryTrackObject(parent, self.width, 16, SLib.AuxiliaryTrackObject.Vertical))
 
     def dataChanged(self):
         super().dataChanged()
 
         # get width and distance
-        self.width = ((self.parent.spritedata[5] & 0xF) + 1) << 4
-        if self.width == 16: self.width = 32
+        self.width = (((self.parent.spritedata[5] & 0xF) + 1) << 4) + (4 / 1.5)
+        if self.width < 20: self.width = 32 + (4 / 1.5)
 
         distance = (self.parent.spritedata[4] & 0xF) << 4
 
@@ -1240,6 +1268,42 @@ class SpriteImage_StarCoinRegular(SpriteImage_StarCoin):  # 32
     pass
 
 
+class SpriteImage_QSwitchBlock(SpriteImage_Block):  # 43
+    def __init__(self, parent):
+        super().__init__(parent, 1.5)
+        self.tilenum = 48
+        self.contentsOverride = 17
+
+    def dataChanged(self):
+        upsideDown = self.parent.spritedata[5] & 1
+        self.flipOverride = upsideDown
+        super().dataChanged()
+
+
+class SpriteImage_PSwitchBlock(SpriteImage_Block):  # 44
+    def __init__(self, parent):
+        super().__init__(parent, 1.5)
+        self.tilenum = 48
+        self.contentsOverride = 18
+
+    def dataChanged(self):
+        upsideDown = self.parent.spritedata[5] & 1
+        self.flipOverride = upsideDown
+        super().dataChanged()
+
+
+class SpriteImage_ExcSwitchBlock(SpriteImage_Block):  # 45
+    def __init__(self, parent):
+        super().__init__(parent, 1.5)
+        self.tilenum = 48
+        self.contentsOverride = 19
+
+    def dataChanged(self):
+        upsideDown = self.parent.spritedata[5] & 1
+        self.flipOverride = upsideDown
+        super().dataChanged()
+
+
 class SpriteImage_FallingPlatform(SpriteImage_WoodenPlatform):  # 50
     def __init__(self, parent):
         super().__init__(parent, 1.5)
@@ -1251,7 +1315,7 @@ class SpriteImage_FallingPlatform(SpriteImage_WoodenPlatform):  # 50
         raw_width = self.parent.spritedata[5] & 0xF
         slow = (self.parent.spritedata[5] >> 4) & 1
 
-        self.width = (raw_width + 1) << 4
+        self.width = ((raw_width + 1) << 4) + (4 / 1.5)
         if raw_width == 0:
             # override this for the "glitchy" effect caused by length=0
             self.width = 24
@@ -1260,7 +1324,7 @@ class SpriteImage_FallingPlatform(SpriteImage_WoodenPlatform):  # 50
             if slow:
                 self.xOffset = 0
             else:
-                self.xOffset = -16 * (raw_width >> 1)
+                self.xOffset = -16 * (raw_width >> 1) - 2 / 1.5
 
         # set color
         color = (self.parent.spritedata[3] >> 4) & 3
@@ -1386,9 +1450,8 @@ class SpriteImage_RotationControlledSolidBetaPlatform(SpriteImage_UnusedBlockPla
         self.isDark = True
 
     def dataChanged(self):
-        size = self.parent.spritedata[4]
-        width = size >> 4
-        height = size & 0xF
+        width = (self.parent.spritedata[3] & 1) << 4 | (self.parent.spritedata[4] >> 4)
+        height = self.parent.spritedata[4] & 0xF
 
         if width == 0 or height == 0:
             self.spritebox.shown = True
@@ -1403,16 +1466,28 @@ class SpriteImage_RotationControlledSolidBetaPlatform(SpriteImage_UnusedBlockPla
 
 
 class SpriteImage_PlatformGenerator(SpriteImage_WoodenPlatform):  # 103
-    # TODO: Add arrows
     def __init__(self, parent):
         super().__init__(parent, 1.5)
         self.yOffset = 16
+        self.aux.append(SLib.AuxiliaryImage(parent, 24, 24))
 
     def dataChanged(self):
         super().dataChanged()
 
-        # get width
         self.width = self.parent.spritedata[5] & 0xF0
+        direction = self.parent.spritedata[3] & 0xF
+
+        # adjust offset since each direction is slightly different
+        if direction == 0: # up
+            self.yOffset = 22 / 1.5
+        elif direction == 1: # down
+            self.yOffset = -22 / 1.5
+        else: # right, left
+            self.yOffset = 0
+
+        # setup direction preview arrow
+        self.showArrow = True
+        self.arrowDir = direction
 
         # length 0 results in the same width as length 4
         if self.width == 0: self.width = 64
@@ -1420,11 +1495,21 @@ class SpriteImage_PlatformGenerator(SpriteImage_WoodenPlatform):  # 103
         # override the x offset for the "glitchy" effect caused by length 0
         if self.width in {16, 24}:
             self.width = 24
-            self.xOffset = -8
+            self.xOffset = -4
         else:
-            self.xOffset = 0
+            self.width += 4 / 1.5
+            self.xOffset = -2 / 1.5
 
         self.color = 0
+
+        # Draw a direction arrow
+        dirStr = ('Up', 'Down', 'Right', 'Left')[self.arrowDir % 4]
+        self.aux[0].image = ImageCache['DirectionArrow%s' % dirStr]
+        self.aux[0].setPos(int(((self.width - 16) / 2) * 1.5), 0)
+
+        self.aux[0].setIsBehindSprite(False)
+        self.aux[0].alpha = 0.25
+        self.aux[0].hover = False
 
 
 class SpriteImage_AmpNormal(SpriteImage_Amp):  # 104
@@ -1444,12 +1529,16 @@ class SpriteImage_LinePlatform(SpriteImage_WoodenPlatform):  # 106
 
         # length=0 becomes length=4
         if self.width == 0: self.width = 64
-
         # override this for the "glitchy" effect caused by length=0
         if self.width == 16: self.width = 24
 
         # reposition platform
-        self.xOffset = 32 - (self.width / 2)
+        self.xOffset = 32 - (self.width / 2) - (2 / 1.5)
+
+        if self.width == 0 or self.width > 24:
+            self.width += 4 / 1.5
+        else:
+            self.xOffset += 2 / 1.5
 
         color = (self.parent.spritedata[4] & 0xF0) >> 4
         if color > 1: color = 0
@@ -1490,7 +1579,7 @@ class SpriteImage_OneWayPlatform(SpriteImage_WoodenPlatform):  # 122
         super().dataChanged()
         width = self.parent.spritedata[5] & 0xF
         if width < 2: width = 1
-        self.width = width * 32 + 32
+        self.width = width * 32 + (52 / 1.5)
 
         self.xOffset = self.width * -0.5
 
@@ -1537,7 +1626,7 @@ class SpriteImage_UnusedBlockPlatform1(SpriteImage_UnusedBlockPlatform):  # 132
         super().dataChanged()
 
 
-class SpriteImage_SpikedStakeDown(SpriteImage_SpikedStake):  # 137
+class SpriteImage_SkewerDown(SpriteImage_Skewer):  # 137
     def __init__(self, parent):
         super().__init__(parent, 1.5)
         self.dir = 'down'
@@ -1564,6 +1653,7 @@ class SpriteImage_Water(SpriteImage_LiquidOrFog):  # 138
         ImageCache['LiquidWaterCrest'] = SLib.GetImg('liquid_water_crest.png')
         ImageCache['LiquidWaterRise'] = SLib.GetImg('liquid_water_rise.png')
         ImageCache['LiquidWaterRiseCrest'] = SLib.GetImg('liquid_water_rise_crest.png')
+        ImageCache['LiquidWaterFull'] = SLib.GetImg('liquid_water_full.png')
 
     def dataChanged(self):
         self.locId = self.parent.spritedata[5] & 0x7F
@@ -1575,11 +1665,9 @@ class SpriteImage_Water(SpriteImage_LiquidOrFog):  # 138
             self.risingHeight = -self.risingHeight
 
         if not self.drawCrest and self.locId == 0:
-            self.top = self.parent.objy + 20
-            self.mid.alpha = 0.1
+            self.mid = ImageCache['LiquidWaterFull']
         else:
-            self.top = self.parent.objy
-            self.mid.alpha = 1
+            self.mid = ImageCache['LiquidWater']
 
         super().dataChanged()
 
@@ -1623,7 +1711,7 @@ class SpriteImage_Lava(SpriteImage_LiquidOrFog):  # 139
         super().positionChanged()
 
 
-class SpriteImage_SpikedStakeUp(SpriteImage_SpikedStake):  # 140
+class SpriteImage_SkewerUp(SpriteImage_Skewer):  # 140
     def __init__(self, parent):
         super().__init__(parent, 1.5)
         self.dir = 'up'
@@ -1632,7 +1720,7 @@ class SpriteImage_SpikedStakeUp(SpriteImage_SpikedStake):  # 140
         self.dimensions = (0, 0, 66, self.VertSpikeLength)
 
 
-class SpriteImage_SpikedStakeRight(SpriteImage_SpikedStake):  # 141
+class SpriteImage_SkewerRight(SpriteImage_Skewer):  # 141
     def __init__(self, parent):
         super().__init__(parent, 1.5)
         self.dir = 'right'
@@ -1641,7 +1729,7 @@ class SpriteImage_SpikedStakeRight(SpriteImage_SpikedStake):  # 141
         self.dimensions = (16 - self.HorzSpikeLength, 0, self.HorzSpikeLength, 66)
 
 
-class SpriteImage_SpikedStakeLeft(SpriteImage_SpikedStake):  # 142
+class SpriteImage_SkewerLeft(SpriteImage_Skewer):  # 142
     def __init__(self, parent):
         super().__init__(parent, 1.5)
         self.dir = 'left'
@@ -1658,6 +1746,8 @@ class SpriteImage_UnusedBlockPlatform2(SpriteImage_UnusedBlockPlatform):  # 160
     def dataChanged(self):
         self.width = ((self.parent.spritedata[4] & 0xF) + 1) * 16
         self.height = ((self.parent.spritedata[4] >> 4) + 1) * 16
+        self.xOffset = (self.parent.spritedata[3] & 0xF)
+        self.yOffset = ((self.parent.spritedata[3] >> 4) & 0xF)
         super().dataChanged()
 
 
@@ -1791,23 +1881,95 @@ class SpriteImage_GhostDoor(SpriteImage_Door):  # 276
     def __init__(self, parent):
         super().__init__(parent, 1.5)
         self.doorName = 'GhostDoor'
-        self.doorDimensions = (0, 0, 32, 48)
+        self.doorDimensions = (0, 0, 34, 48)
 
 
 class SpriteImage_TowerDoor(SpriteImage_Door):  # 277
     def __init__(self, parent):
         super().__init__(parent, 1.5)
         self.doorName = 'TowerDoor'
-        self.doorDimensions = (-2, -13, 53, 61)
-        self.entranceOffset = (15, 68)
+        self.doorDimensions = (-2, -12, 53, 61)
+        self.entranceOffset = (15, 66)
 
 
 class SpriteImage_CastleDoor(SpriteImage_Door):  # 278
     def __init__(self, parent):
         super().__init__(parent, 1.5)
         self.doorName = 'CastleDoor'
-        self.doorDimensions = (-2, -13, 53, 61)
-        self.entranceOffset = (15, 68)
+        self.doorDimensions = (-2, -12, 53, 61)
+        self.entranceOffset = (15, 66)
+
+
+class SpriteImage_RiseFallWater(SpriteImage_LiquidOrFog):  # 285
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        self.crest = ImageCache['LiquidWaterCrest']
+        self.mid = ImageCache['LiquidWater']
+        self.rise = ImageCache['LiquidWaterRiseCrest']
+        self.riseCrestless = ImageCache['LiquidWaterRise']
+
+        self.top = self.parent.objy
+        self.depth = 48
+
+    @staticmethod
+    def loadImages():
+        if 'LiquidWater' in ImageCache: return
+        ImageCache['LiquidWater'] = SLib.GetImg('liquid_water.png')
+        ImageCache['LiquidWaterCrest'] = SLib.GetImg('liquid_water_crest.png')
+        ImageCache['LiquidWaterRise'] = SLib.GetImg('liquid_water_rise.png')
+        ImageCache['LiquidWaterRiseCrest'] = SLib.GetImg('liquid_water_rise_crest.png')
+
+    def dataChanged(self):
+
+        self.risingHeight = ((self.parent.spritedata[5] >> 4) & 0xF)* 2 + 2 # distance
+        self.depth = (self.parent.spritedata[5] & 0xF) * 2 + 2
+
+        if self.parent.spritedata[3] & 8:  # it Fall
+            self.risingHeight = -self.risingHeight
+
+        super().dataChanged()
+
+    def realViewZone(self, painter, zoneRect):
+        crest_rect = QtCore.QRectF()
+        rise_rect = QtCore.QRectF()
+
+        # Create the fill_rect (the area where the liquid or fog should be)
+        fill_rect = QtCore.QRectF(zoneRect)
+        fill_rect.setTop(self.top * 1.5)
+
+        # Translate the fill_rect to be relative to the zone
+        fill_rect.translate(-zoneRect.topLeft())
+
+        # Determine where to put the rise image
+        rise_rect = fill_rect.translated(0, -24 * self.risingHeight)
+
+        # Determine what image to draw for the rise indicator
+        rise_img = self.rise
+
+        # Set the correct height
+        rise_rect.setHeight(rise_img.height())
+
+        # Determine crest & fill's dimensions
+        crest_rect = QtCore.QRectF(fill_rect)
+
+        # Limit the crest to not draw past its maximum dimensions
+        if (self.depth*24 < self.crest.height()):
+            crest_rect.setHeight(self.depth*24)
+        else:
+            crest_rect.setHeight(self.crest.height())
+        fill_rect.setTop(crest_rect.bottom())
+        fill_rect.setHeight(self.depth*24 - self.crest.height())
+
+        # Draw everything
+        painter.drawTiledPixmap(crest_rect, self.crest)
+        painter.drawTiledPixmap(rise_rect, rise_img)
+        painter.drawTiledPixmap(fill_rect, self.mid)
+
+
+    def positionChanged(self):
+        self.top = self.parent.objy
+        super().positionChanged()
 
 
 class SpriteImage_HammerBroPlatform(SpriteImage_HammerBroNormal):  # 308
@@ -1964,7 +2126,7 @@ class SpriteImage_BoltControlledCoin(SpriteImage_SpecialCoin):  # 390
     pass
 
 
-class SpriteImage_LongSpikedStakeRight(SpriteImage_LongSpikedStake):  # 398
+class SpriteImage_LongSkewerRight(SpriteImage_LongSkewer):  # 398
     def __init__(self, parent):
         super().__init__(parent, 1.5)
         self.dir = 'right'
@@ -1974,7 +2136,7 @@ class SpriteImage_LongSpikedStakeRight(SpriteImage_LongSpikedStake):  # 398
         self.dimensions = (-112, 0, 128, 66) # 6 mid sections + end section
 
 
-class SpriteImage_LongSpikedStakeLeft(SpriteImage_LongSpikedStake):  # 400
+class SpriteImage_LongSkewerLeft(SpriteImage_LongSkewer):  # 400
     def __init__(self, parent):
         super().__init__(parent, 1.5)
         self.dir = 'left'
@@ -1984,15 +2146,13 @@ class SpriteImage_LongSpikedStakeLeft(SpriteImage_LongSpikedStake):  # 400
         self.dimensions = (0, 0, 128, 66)
 
 
-class SpriteImage_MassiveSpikedStakeDown(SpriteImage_MassiveSpikedStake):  # 401
+class SpriteImage_MassiveSkewerDown(SpriteImage_MassiveSkewer):  # 401
     def __init__(self, parent):
         super().__init__(parent, 1.5)
         self.dir = 'down'
         self.aux.append(SLib.AuxiliaryTrackObject(parent, 16, 80, SLib.AuxiliaryTrackObject.Vertical))
         self.aux.append(SLib.AuxiliaryRectOutline(parent, 240, 2664, 4, 2944))
         self.aux.append(SLib.AuxiliaryImage(parent, 248, 3016))
-
-        self.dimensions = (-67, -123, 165, 139)
 
 class SpriteImage_LineQBlock(SpriteImage_Block):  # 402
     def __init__(self, parent):
@@ -2007,15 +2167,13 @@ class SpriteImage_LineBrickBlock(SpriteImage_Block):  # 403
         self.tilenum = 48
 
 
-class SpriteImage_MassiveSpikedStakeUp(SpriteImage_MassiveSpikedStake):  # 404
+class SpriteImage_MassiveSkewerUp(SpriteImage_MassiveSkewer):  # 404
     def __init__(self, parent):
         super().__init__(parent, 1.5)
         self.dir = 'up'
         self.aux.append(SLib.AuxiliaryTrackObject(parent, 16, 80, SLib.AuxiliaryTrackObject.Vertical))
         self.aux.append(SLib.AuxiliaryRectOutline(parent, 240, 2664, 4, -2592))
         self.aux.append(SLib.AuxiliaryImage(parent, 248, 3016))
-
-        self.dimensions = (-67, 0, 165, 139)
 
 
 class SpriteImage_ToadHouseBalloonUnused(SpriteImage_ToadHouseBalloon):  # 411
@@ -2032,13 +2190,16 @@ class SpriteImage_ToadHouseBalloonUsed(SpriteImage_ToadHouseBalloon):  # 412
 
         self.livesNum = (self.parent.spritedata[4] >> 4) & 3
         self.hasHandle = not ((self.parent.spritedata[5] >> 4) & 1)
+        shiftPos = self.parent.spritedata[3] & 1
+        posAdj = 8 if shiftPos else 0
 
         super().dataChanged()
 
+        self.xOffset = -13 + posAdj
         if self.hasHandle:
-            self.yOffset = 12
+            self.yOffset = 12 - posAdj
         else:
-            self.yOffset = 16 - (self.image.height() / 3)
+            self.yOffset = 16 - (self.image.height() / 3) - posAdj
 
 
 class SpriteImage_ToadQBlock(SpriteImage_Block):  # 422
