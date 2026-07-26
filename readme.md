@@ -77,13 +77,16 @@ Developers:
  * MidiGuyDP - Background Images & Names (NewerSMBW)
  * SnakeBlock - Sprite Data (NSMBW)
  * Danster64 - Sprite Data (NSMBW, NewerSMBW), Sprite Images (NSMBW, NewerSMBW), Windows Builds
+ * MandyIGuess - Programmer, UI, Sprite Data (NSMBW, NewerSMBW), Sprite Images (NSMBW, NewerSMBW), Background Names, Data, RE, Other QoL improvements
+ * B1Gaming - Sprite Data (NSMBW, NewerSMBW), Sprite Images (NSMBW, NewerSMBW), Data / Docs, Other QoL improvements
 
 Other Testers and Contributors:
  * BulletBillTime, Dirbaio, EdgarAllen, FirePhoenix, GrandMasterJimmy, Mooseknuckle2000, MotherBrainsBrain, RainbowIE, Skawo, Sonicandtails, Tanks, Vibestar, angelsl, ant888, gamesquest1, iZackefx
  * Tobias and Valeth - Text Tileset Addon
  * Meorge and grishhung - The Reggie Next Icons (Windows and Mac)
  * Toms - Mac Builds
- * MandyIGuess, Shudfly, N-I-N-0, B1Gaming, Stage13-10, techmuse8 - Miscellaneous Contributions
+ * Stage13-10 - Background Images
+ * Shudfly, N-I-N-0, techmuse8 - Miscellaneous Contributions
 
 
 ### Dependencies/Libraries/Resources
