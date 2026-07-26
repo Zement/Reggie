@@ -162,12 +162,13 @@ class DockBuilder:
         self.win.createObjectLayout = oel
 
         ll = QtWidgets.QHBoxLayout()
+        layerChangeStr = globals_.trans.string('Palette', 38)
         self.win.objUseLayer0 = QtWidgets.QRadioButton('0')
-        self.win.objUseLayer0.setToolTip(globals_.trans.string('Palette', 1))
+        self.win.objUseLayer0.setToolTip(globals_.trans.string('Palette', 1) + layerChangeStr)
         self.win.objUseLayer1 = QtWidgets.QRadioButton('1')
-        self.win.objUseLayer1.setToolTip(globals_.trans.string('Palette', 2))
+        self.win.objUseLayer1.setToolTip(globals_.trans.string('Palette', 2) + layerChangeStr)
         self.win.objUseLayer2 = QtWidgets.QRadioButton('2')
-        self.win.objUseLayer2.setToolTip(globals_.trans.string('Palette', 3))
+        self.win.objUseLayer2.setToolTip(globals_.trans.string('Palette', 3) + layerChangeStr)
 
         self.win.layerChangeButton = QtWidgets.QPushButton(globals_.trans.string('Palette', 36))
         self.win.layerChangeButton.clicked.connect(self.win.ChangeSelectionLayer)
