@@ -34,7 +34,7 @@ class DockBuilder:
         from reggie.ui.sidelists import StampChooserWidget, SpriteList, SpritePickerWidget, ObjectPickerWidget, LevelOverviewWidget
         from reggie.ui.spriteeditor import SpriteEditorWidget
         from reggie.ui.editors import LocationEditorWidget, PathNodeEditorWidget, EntranceEditorWidget
-        from reggie.io.misc import LoadSpriteCategories
+        from reggie.io.misc import LoadSpriteCategories, GetKeybind
         # level overview
         dock = QtWidgets.QDockWidget(globals_.trans.string('MenuItems', 94), self.win)
         dock.setFeatures(
@@ -50,9 +50,11 @@ class DockBuilder:
         self.win.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         dock.setVisible(True)
         act = dock.toggleViewAction()
-        act.setShortcut(QtGui.QKeySequence('Ctrl+M'))
+        act.setShortcut(GetKeybind('leveloverview'))
         act.setIcon(GetIcon('overview'))
         act.setStatusTip(globals_.trans.string('MenuItems', 95))
+        # Register so the keybind editor (SetKeybind) can update the shortcut
+        self.win.actions['leveloverview'] = act
         self.win.vmenu.addAction(act)
 
         # create the sprite editor panel
@@ -125,9 +127,11 @@ class DockBuilder:
 
         self.win.creationDock = dock
         act = dock.toggleViewAction()
-        act.setShortcut(QtGui.QKeySequence('Ctrl+P'))
+        act.setShortcut(GetKeybind('palette'))
         act.setIcon(GetIcon('palette'))
         act.setStatusTip(globals_.trans.string('MenuItems', 97))
+        # Register so the keybind editor (SetKeybind) can update the shortcut
+        self.win.actions['palette'] = act
         self.win.vmenu.addAction(act)
 
         self.win.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)

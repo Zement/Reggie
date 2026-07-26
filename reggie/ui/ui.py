@@ -509,3 +509,58 @@ class ListWidgetWithToolTipSignal(QtWidgets.QListWidget):
                 self.toolTipAboutToShow.emit(item)
 
         return super().viewportEvent(e)
+
+
+# Key combinations that must never be rebound. OS-reserved combos would
+# shadow window management; the bare keys are claimed by the Quick Paint
+# Tool's raw key hook (see reggie/plugins/quickpaint/reggie_hook.py).
+OS_RESERVED_KEYBINDS = ('Alt+F4', 'Alt+Tab', 'Ctrl+Esc')
+QPT_RESERVED_KEYBINDS = ('Q', 'S', 'C', 'E', 'F', 'D', 'F1', 'F2', 'F3', 'Esc')
+
+
+class KeybindLineEdit(QtWidgets.QKeySequenceEdit):
+    """
+    A wrapper for QtWidgets.QKeySequenceEdit
+    """
+    def __init__(self, keySequence=None, name=str):
+        QtWidgets.QKeySequenceEdit.__init__(self, keySequence)
+        self.name = name
+
+        # Only record one sequence input
+        self.setMaximumSequenceLength(1)
+
+        self.setClearButtonEnabled(True)
+
+        # Set placeholder text on the QLineEdit
+        lineEdit = self.findChild(QtWidgets.QLineEdit, "qt_keysequenceedit_lineedit")
+        if lineEdit: lineEdit.setPlaceholderText(globals_.trans.string('PrefsDlg', 60)) # No keybind set
+
+        # Reject reserved combos as they are entered
+        self.keySequenceChanged.connect(self._validateSequence)
+
+    def _validateSequence(self, keySequence):
+        """
+        Clears the entered sequence if it is reserved by the OS or the
+        Quick Paint Tool, and tells the user why
+        """
+        seq_str = keySequence.toString()
+        if seq_str in OS_RESERVED_KEYBINDS:
+            message = globals_.trans.string('PrefsDlg', 69)
+        elif seq_str in QPT_RESERVED_KEYBINDS:
+            message = globals_.trans.string('PrefsDlg', 70)
+        else:
+            return
+
+        self.blockSignals(True)
+        self.clear()
+        self.blockSignals(False)
+        QtWidgets.QToolTip.showText(self.mapToGlobal(self.rect().center()), message, self)
+
+    def keyPressEvent(self, event):
+        """
+        Clears the current keybind if Delete or Backspace is pressed
+        """
+        QtWidgets.QKeySequenceEdit.keyPressEvent(self, event)
+
+        if event.key() == QtCore.Qt.Key.Key_Delete or event.key() == QtCore.Qt.Key.Key_Backspace:
+            self.clear()

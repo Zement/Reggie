@@ -454,9 +454,9 @@
 		<string id="69">Zoom out of the main level view</string>
 		<string id="70">Zoom to Minimum</string>
 		<string id="71">Zoom out all the way</string>
-		<string id="72">Area[br]Settings...</string>
+		<string id="72">Area Settings...</string>
 		<string id="73">Control tileset swapping, stage timer, entrance on load, and stage wrap</string>
-		<string id="74">Zone[br]Settings...</string>
+		<string id="74">Zone Settings...</string>
 		<string id="75">Zone creation, deletion, and preference editing</string>
 		<string id="76">Backgrounds...</string>
 		<string id="77">Apply backgrounds to individual zones in the current area</string>
@@ -636,6 +636,21 @@
 		<string id="47">Dark Mode</string>
 		<string id="48">[b]Dark Mode[/b][br]This determines the overall color style Reggie uses, independent from the current theme.[br][br]Note that this may cause issues with certain themes.</string>
 		<string id="49">Display full filepath of opened level</string>
+		<string id="56">Keybinds</string>
+		<string id="57">[b]Configure Keybinds[/b][br]Customize the keybinds used for drop-down actions.[br]Press Backspace/Delete to clear a keybind, or hit the X button.[br]</string>
+		<string id="58">Reset All Keybinds</string>
+		<string id="59">Check for Conflicts</string>
+		<string id="60">No keybind set</string>
+		<string id="61">Reset Keybinds</string>
+		<string id="62">Are you sure you want to reset all keybinds to their default values?[br]This cannot be undone.</string>
+		<string id="63">Conflicts Found</string>
+		<string id="64">The following options were found to have conflicting keybinds:[br][conflicts][br]Reusing keybinds can cause issues, so ensure all keybinds are unique!</string>
+		<string id="65">No conflicts found.</string>
+		<string id="66">Hotbar</string>
+		<string id="67">Hotbar Slot [slot]</string>
+		<string id="68">Numpad Slot [slot]</string>
+		<string id="69">This key combination is reserved by the operating system and cannot be used.</string>
+		<string id="70">This key is reserved by the Quick Paint Tool and cannot be used.</string>
 	</section>
 	<section id="ScrShtDlg">
 		<string id="0">Level Screenshot</string>

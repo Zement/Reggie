@@ -1321,6 +1321,12 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 ToolbarSettings[box.InternalName] = box.isChecked()
         setSetting('ToolbarActs', ToolbarSettings)
 
+        # Get keybinds and save them
+        from reggie.io.misc import SetKeybind
+        for tab in dlg.keybindsTab.tabs:
+            for keyEdit in tab.keyEdits:
+                SetKeybind(keyEdit.name, keyEdit.keySequence())
+
         # Get the Interface tab settings
         toolbar_separate = dlg.interfaceTab.toolbarSeparateRadio.isChecked()
         setSetting('ToolbarSeparate', toolbar_separate)

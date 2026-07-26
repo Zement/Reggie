@@ -83,7 +83,7 @@ from reggie.core import spritelib as SLib
 from reggie.core.dirty import setting, setSetting
 from reggie.core.tiles import LoadOverrides
 from reggie.io.misc import (
-    LoadActionsLists, FilesAreMissing, module_path,
+    LoadActionsLists, LoadDefaultKeybinds, FilesAreMissing, module_path,
     SetGamePaths, areValidGamePaths, validateFolderForPatch,
 )
 from reggie.io.translation import LoadTranslation
@@ -292,6 +292,7 @@ def main():
     # Load remaining requirements
     print("[BOOT] Loading actions lists...")
     LoadActionsLists()
+    LoadDefaultKeybinds()
     print("[BOOT] ✓ Actions lists loaded")
     
     print("[BOOT] Loading number font...")

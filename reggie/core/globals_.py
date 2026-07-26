@@ -88,6 +88,13 @@ UseFullFilepath = False
 UseRoundedRectangles = True
 DarkMode = False
 
+FileKeybinds = None
+EditKeybinds = None
+ViewKeybinds = None
+SettingsKeybinds = None
+HelpKeybinds = None
+HotbarKeybinds = None
+
 app = None
 firstLoad = True
 gamedef = None
