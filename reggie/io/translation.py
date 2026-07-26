@@ -376,7 +376,7 @@ class ReggieTranslation:
                 17: 'Error',
                 18: 'An error occurred while attempting to load this game patch. It will now be unloaded. Here\'s the specific error:[br][error]',
                 19: 'Add a Reggie Patch Folder...',
-                20: 'Creates a symlink in the /reggiedata/patches folder using add_reggie_patch',
+                20: 'Registers an external Reggie patch folder (containing a main.xml) so it appears in the game-patch list',
             },
             'InfoDlg': {
                 0: 'Level Information',
