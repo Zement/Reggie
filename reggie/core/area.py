@@ -62,9 +62,9 @@ class LoadingTab(QtWidgets.QWidget):
         self.credits.setToolTip(globals_.trans.string('AreaDlg', 35))
         self.credits.setChecked(globals_.Area.creditsFlag)
 
-        self.ambush = QtWidgets.QCheckBox(globals_.trans.string('AreaDlg', 36))
-        self.ambush.setToolTip(globals_.trans.string('AreaDlg', 37))
-        self.ambush.setChecked(globals_.Area.ambushFlag)
+        self.faceLeft = QtWidgets.QCheckBox(globals_.trans.string('AreaDlg', 36))
+        self.faceLeft.setToolTip(globals_.trans.string('AreaDlg', 37))
+        self.faceLeft.setChecked(globals_.Area.faceLeftFlag)
 
         self.unk1 = QtWidgets.QCheckBox(globals_.trans.string('AreaDlg', 38))
         self.unk1.setToolTip(globals_.trans.string('AreaDlg', 39))
@@ -90,7 +90,7 @@ class LoadingTab(QtWidgets.QWidget):
         settingsLayout.addRow(globals_.trans.string('AreaDlg', 32), self.toadHouseType)
         settingsLayout.addRow(self.wrap)
         settingsLayout.addRow(self.credits)
-        settingsLayout.addRow(self.ambush)
+        settingsLayout.addRow(self.faceLeft)
         settingsLayout.addRow(self.unk1)
         settingsLayout.addRow(self.unk2)
         settingsLayout.addRow(globals_.trans.string('AreaDlg', 42), self.unk3)
@@ -313,6 +313,7 @@ class LoadedSpritesTab(QtWidgets.QWidget):
         )
 
         self.sprite_input = QtWidgets.QLineEdit()
+        self.sprite_input.setPlaceholderText(globals_.trans.string('AreaDlg', 52))
         self.sprite_input.textChanged.connect(self.handle_input_change)
 
         self.add_button = QtWidgets.QPushButton(globals_.trans.string('AreaDlg', 47))
@@ -334,6 +335,10 @@ class LoadedSpritesTab(QtWidgets.QWidget):
         auto_list = QtWidgets.QListView()
         auto_list.setModel(self.auto_model)
         auto_list.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+
+        # Dark mode readability fixes
+        self.custom_list.setStyleSheet("color: #7f7f7f;")
+        auto_list.setStyleSheet("color: #7f7f7f;")
 
         sprites_layout.addWidget(QtWidgets.QLabel(globals_.trans.string('AreaDlg', 49)), 0, 0)
         sprites_layout.addWidget(QtWidgets.QLabel(globals_.trans.string('AreaDlg', 50)), 0, 1)

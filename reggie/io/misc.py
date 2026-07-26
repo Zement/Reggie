@@ -10,8 +10,8 @@ from xml.etree import ElementTree
 ################################################################################
 
 from reggie.core import globals_
-from reggie.ui.ui import GetIcon, ReggieTheme, clipStr
-from reggie.core.dirty import setting, setSetting
+from reggie.ui.ui import GetIcon, ReggieTheme, clipStr, KeybindLineEdit
+from reggie.core.dirty import setting, setSetting, delSetting
 from reggie.ui.dialogs import DiagnosticToolDialog
 from reggie.io.translation import ReggieTranslation
 from libs import lh
@@ -84,7 +84,7 @@ def FilesAreMissing():
         QtWidgets.QMessageBox.warning(None, globals_.trans.string('Err_MissingFiles', 0), globals_.trans.string('Err_MissingFiles', 1))
         return True
 
-    required = ['icon.png', 'about.png', ]
+    required = ['icon.png', ]
 
     missing = []
 
@@ -127,10 +127,20 @@ def areValidGamePaths(stage_check='ug', texture_check='ug'):
     if not os.path.isdir(stage_check) or not os.path.isdir(texture_check):
         return False
 
-    # Check that a readable 01-01 file is located in the stage folder
-    for ext in globals_.FileExtentions:
-        if os.path.isfile(os.path.join(stage_check, "01-01" + ext)):
-            return True
+    # Check that at least one readable level is located in the stage folder
+    files = [f for f in os.listdir(stage_check) if os.path.isfile(os.path.join(stage_check, f))]
+    for fname in files:
+        if os.path.isfile(os.path.join(stage_check, fname)):
+            name, ext = os.path.splitext(os.path.join(stage_check, fname))
+
+            # For compressed files, splitting only gives us the LH/LZ extension, while '.arc' is considered part of the filename
+            if ext in ('.LH', '.LZ'):
+                ext = globals_.FileExtentions[0] + ext
+                name = name.removesuffix('.arc')
+
+            if ext in globals_.FileExtentions:
+                globals_.FirstStageFilename = name + ext
+                return True
 
     return False
 
@@ -362,13 +372,14 @@ def LoadTilesetNames_Category(node):
             if 'override' not in child.attrib:
                 continue
 
-            # override present, add it to the correct type
-            type_ = str(child.attrib['override'])
+            # override present, add it to the correct type(s)
+            types = str(child.attrib['override']).split(',')
 
-            if type_ not in globals_.OverriddenTilesets:
-                raise ValueError("Unknown override type '%s' for tileset '%s'" % (type_, fname))
+            for type_ in types:
+                if type_ not in globals_.OverriddenTilesets:
+                    raise ValueError("Unknown override type '%s' for tileset '%s'" % (type_, fname))
 
-            globals_.OverriddenTilesets[type_].add(fname)
+                globals_.OverriddenTilesets[type_].add(fname)
 
     return list(cat)
 
@@ -579,7 +590,8 @@ class SpriteDefinition:
             'multidualbox',
             'dynamicblockvalues',
             'hexvalue',
-            'dynamicstring'
+            'dynamicstring',
+            'spritetex'
         ]
 
         for field in elem:
@@ -599,6 +611,8 @@ class SpriteDefinition:
 
             advanced = attribs.get("advanced", "False").lower() == "true"
             comment = comment2 = advancedcomment = required = idtype = None
+            start = 0
+            increment = 1
 
             if 'comment' in attribs:
                 comment = globals_.trans.string('SpriteDataEditor', 1, '[name]', title, '[note]', attribs['comment'])
@@ -659,11 +673,24 @@ class SpriteDefinition:
 
                     required.append(((bit_range,), (a, b + 1), blocks.pop(0)))
 
+            # NOTE: idtype must be the LAST field passed to a sprite
             if 'idtype' in attribs:
                 idtype = attribs['idtype']
 
                 if field.tag not in {'value', 'list'}:
                     raise ValueError("Only values and lists support idtypes.")
+
+            if 'start' in attribs:
+                start = int(attribs['start'])
+
+                if field.tag != 'value':
+                    raise ValueError("Only values support a start index.")
+
+            if 'increment' in attribs:
+                increment = int(attribs['increment'])
+
+                if field.tag != 'value':
+                    raise ValueError("Only values support an increment.")
 
             # Parse the remaining type-specific attributes.
             if field.tag == 'checkbox':
@@ -687,7 +714,13 @@ class SpriteDefinition:
             elif field.tag == 'value':
                 bit, max_ = self.parseBits(attribs.get("nybble"))
 
-                fields.append((2, attribs['title'], bit, max_, comment, required, advanced, comment2, advancedcomment, idtype, block))
+                overrides = []
+                for o in field:
+                    if o.tag != 'override': continue
+
+                    overrides.append((int(o.attrib['index']), int(o.attrib['value'])))
+
+                fields.append((2, attribs['title'], bit, max_, comment, required, advanced, comment2, advancedcomment, start, increment, overrides, idtype, block))
 
             elif field.tag == 'bitfield':
                 startbit = int(attribs['startbit'])
@@ -706,7 +739,7 @@ class SpriteDefinition:
                 fields.append((5, attribs['title1'], attribs['title2'], bit, comment, required, advanced, comment2, advancedcomment, block))
 
             elif field.tag == 'dependency':
-                type_dict = {'required': 0, 'suggested': 1}
+                type_dict = {'required': 0, 'suggested': 1, 'resource': 2, 'suggestedresource': 3}
 
                 for entry in field:
                     if entry.attrib['sprite'] == "":
@@ -743,6 +776,23 @@ class SpriteDefinition:
 
             elif field.tag == 'dynamicstring':
                 fields.append((10, attribs['title'], comment, required, advanced, comment2, advancedcomment, idtype, block))
+
+            elif field.tag == 'spritetex':
+                # SpriteTex field: a value spinbox paired with a list of named
+                # entries. (Upstream uses field-type id 8 for this; this fork
+                # already uses 8/9/10 for its extended-spritedata field types, so
+                # spritetex is remapped to id 11 here. The id is an internal
+                # widget-dispatch tag only and is unrelated to the raw nybbles.)
+                bit, max_ = self.parseBits(attribs.get("nybble"))
+
+                entries = []
+                for e in field:
+                    if e.tag != 'entry': continue
+
+                    entries.append((int(e.attrib['value']), e.text))
+
+                model = SpriteDefinition.ListPropertyModel(entries)
+                fields.append((11, title, bit, model, max_, comment, required, advanced, comment2, advancedcomment, block))
 
     def parseBits(self, nybble_val: str) -> tuple[list[tuple[int, int]], int]:
         """
@@ -1253,6 +1303,7 @@ class RecentFilesMenu(QtWidgets.QMenu):
         """
         QtWidgets.QMenu.__init__(self)
         self.setMinimumWidth(192)
+        self.setToolTipsVisible(True)
 
         # Here's how this works:
         # - Upon startup, RecentFiles is obtained from QSettings and put into self.FileList
@@ -1558,6 +1609,7 @@ def LoadActionsLists():
         (globals_.trans.string('MenuItems', 10), False, 'saveas'),
         (globals_.trans.string('MenuItems', 128), False, 'savecopyas'),
         (globals_.trans.string('MenuItems', 12), False, 'metainfo'),
+        (globals_.trans.string('MenuItems', 98), False, 'changegamedef'),
         (globals_.trans.string('MenuItems', 14), True, 'screenshot'),
         (globals_.trans.string('MenuItems', 16), False, 'changegamepath'),
         (globals_.trans.string('MenuItems', 18), False, 'preferences'),
@@ -1582,6 +1634,9 @@ def LoadActionsLists():
         (globals_.trans.string('MenuItems', 48), True, 'showlay0'),
         (globals_.trans.string('MenuItems', 50), True, 'showlay1'),
         (globals_.trans.string('MenuItems', 52), True, 'showlay2'),
+        (globals_.trans.string('MenuItems', 108), False, 'tileanim'),
+        (globals_.trans.string('MenuItems', 110), False, 'collisions'),
+        (globals_.trans.string('MenuItems', 118), False, 'realview'),
         (globals_.trans.string('MenuItems', 54), True, 'showsprites'),
         (globals_.trans.string('MenuItems', 56), False, 'showspriteimages'),
         (globals_.trans.string('MenuItems', 58), True, 'showlocations'),
@@ -1595,6 +1650,7 @@ def LoadActionsLists():
     )
     globals_.SettingsActions = (
         (globals_.trans.string('MenuItems', 72), True, 'areaoptions'),
+        (globals_.trans.string('MenuItems', 140), False, 'camprofiles'),
         (globals_.trans.string('MenuItems', 74), True, 'zones'),
         (globals_.trans.string('MenuItems', 76), True, 'backgrounds'),
         (globals_.trans.string('MenuItems', 78), False, 'addarea'),
@@ -1610,6 +1666,154 @@ def LoadActionsLists():
         (globals_.trans.string('MenuItems', 90), False, 'tipbox'),
         (globals_.trans.string('MenuItems', 92), False, 'aboutqt'),
     )
+
+
+def LoadDefaultKeybinds():
+    """
+    Defines the default keybinds (and display strings) for each menu item.
+    Defaults MUST match the fork's shipped shortcuts (menus.py / docks.py),
+    which differ from upstream in places (e.g. shiftitems = Ctrl+Shift+S).
+    """
+    globals_.FileKeybinds = {
+        # Identifier      # Key Sequence                          # Display String, used by Preferences
+        'newlevel':       (QtGui.QKeySequence.StandardKey.New,    globals_.trans.string('MenuItems', 0)),
+        'openfromname':   (QtGui.QKeySequence.StandardKey.Open,   globals_.trans.string('MenuItems', 2)),
+        'openfromfile':   ('Ctrl+Shift+O',                        globals_.trans.string('MenuItems', 4)),
+        'save':           (QtGui.QKeySequence.StandardKey.Save,   globals_.trans.string('MenuItems', 8)),
+        'saveas':         (QtGui.QKeySequence.StandardKey.SaveAs, globals_.trans.string('MenuItems', 10)),
+        'savecopyas':     (None,                                  globals_.trans.string('MenuItems', 128)),
+        'metainfo':       ('Ctrl+Alt+I',                          globals_.trans.string('MenuItems', 12)),
+        'screenshot':     ('Ctrl+Alt+S',                          globals_.trans.string('MenuItems', 14)),
+        'changegamepath': ('Ctrl+Alt+G',                          globals_.trans.string('MenuItems', 16)),
+        'preferences':    ('Ctrl+Alt+P',                          globals_.trans.string('MenuItems', 18)),
+        'exit':           ('Ctrl+Q',                              globals_.trans.string('MenuItems', 20)),
+    }
+    globals_.EditKeybinds = {
+        'selectall':           (QtGui.QKeySequence.StandardKey.SelectAll, globals_.trans.string('MenuItems', 22)),
+        'deselect':            ('Ctrl+D',                                 globals_.trans.string('MenuItems', 24)),
+        'undo':                (QtGui.QKeySequence.StandardKey.Undo,      globals_.trans.string('MenuItems', 124)),
+        'redo':                (QtGui.QKeySequence.StandardKey.Redo,      globals_.trans.string('MenuItems', 126)),
+        'cut':                 (QtGui.QKeySequence.StandardKey.Cut,       globals_.trans.string('MenuItems', 26)),
+        'copy':                (QtGui.QKeySequence.StandardKey.Copy,      globals_.trans.string('MenuItems', 28)),
+        'paste':               (QtGui.QKeySequence.StandardKey.Paste,     globals_.trans.string('MenuItems', 30)),
+        'shiftitems':          ('Ctrl+Shift+S',                           globals_.trans.string('MenuItems', 32)),
+        'mergelocations':      ('Ctrl+Shift+E',                           globals_.trans.string('MenuItems', 34)),
+        'swapobjectstilesets': ('Ctrl+Shift+L',                           globals_.trans.string('MenuItems', 104)),
+        'swapobjectstypes':    ('Ctrl+Shift+Y',                           globals_.trans.string('MenuItems', 106)),
+        'diagnostic':          ('Ctrl+Shift+D',                           globals_.trans.string('MenuItems', 36)),
+        'freezeobjects':       ('Ctrl+Shift+1',                           globals_.trans.string('MenuItems', 38)),
+        'freezesprites':       ('Ctrl+Shift+2',                           globals_.trans.string('MenuItems', 40)),
+        'freezeentrances':     ('Ctrl+Shift+3',                           globals_.trans.string('MenuItems', 42)),
+        'freezelocations':     ('Ctrl+Shift+4',                           globals_.trans.string('MenuItems', 44)),
+        'freezepaths':         ('Ctrl+Shift+5',                           globals_.trans.string('MenuItems', 46)),
+        'freezecomments':      ('Ctrl+Shift+9',                           globals_.trans.string('MenuItems', 114)),
+    }
+    globals_.ViewKeybinds = {
+        'showlay0':         ('Ctrl+1',                               globals_.trans.string('MenuItems', 48)),
+        'showlay1':         ('Ctrl+2',                               globals_.trans.string('MenuItems', 50)),
+        'showlay2':         ('Ctrl+3',                               globals_.trans.string('MenuItems', 52)),
+        'tileanim':         ('Ctrl+7',                               globals_.trans.string('MenuItems', 108)),
+        'collisions':       ('Ctrl+8',                               globals_.trans.string('MenuItems', 110)),
+        'realview':         ('Ctrl+9',                               globals_.trans.string('MenuItems', 118)),
+        'showsprites':      ('Ctrl+4',                               globals_.trans.string('MenuItems', 54)),
+        'showspriteimages': ('Ctrl+6',                               globals_.trans.string('MenuItems', 56)),
+        'showlocations':    ('Ctrl+5',                               globals_.trans.string('MenuItems', 58)),
+        'showcomments':     (None,                                   globals_.trans.string('MenuItems', 116)),
+        'showpaths':        ('Ctrl+*',                               globals_.trans.string('MenuItems', 130)),
+        'grid':             ('Ctrl+G',                               globals_.trans.string('MenuItems', 60)),
+        'zoommax':          ('Ctrl+PgDown',                          globals_.trans.string('MenuItems', 62)),
+        'zoomin':           (QtGui.QKeySequence.StandardKey.ZoomIn,  globals_.trans.string('MenuItems', 64)),
+        'zoomactual':       ('Ctrl+0',                               globals_.trans.string('MenuItems', 66)),
+        'zoomout':          (QtGui.QKeySequence.StandardKey.ZoomOut, globals_.trans.string('MenuItems', 68)),
+        'zoommin':          ('Ctrl+PgUp',                            globals_.trans.string('MenuItems', 70)),
+        'leveloverview':    ('Ctrl+M',                               globals_.trans.string('MenuItems', 94)),
+        'palette':          ('Ctrl+P',                               globals_.trans.string('MenuItems', 96)),
+    }
+    globals_.SettingsKeybinds = {
+        'areaoptions':  ('Ctrl+Alt+A',   globals_.trans.string('MenuItems', 72)),
+        'zones':        ('Ctrl+Alt+Z',   globals_.trans.string('MenuItems', 74)),
+        'backgrounds':  ('Ctrl+Alt+B',   globals_.trans.string('MenuItems', 76)),
+        'camprofiles':  ('Ctrl+Alt+C',   globals_.trans.string('MenuItems', 140)),
+        'addarea':      ('Ctrl+Alt+N',   globals_.trans.string('MenuItems', 78)),
+        'importarea':   ('Ctrl+Alt+O',   globals_.trans.string('MenuItems', 80)),
+        'deletearea':   ('Ctrl+Alt+D',   globals_.trans.string('MenuItems', 82)),
+        'reloadgfx':    ('Ctrl+Shift+R', globals_.trans.string('MenuItems', 84)),
+        'reloaddata':   (None,           globals_.trans.string('MenuItems', 138)),
+        # Fork-only actions (labels are literals in menus.py too)
+        'patchmanager': (None,           'Patch Manager'),
+        'uiscaling':    (None,           'UI Scaling...'),
+    }
+    globals_.HelpKeybinds = {
+        'infobox': ('Ctrl+Shift+I', globals_.trans.string('MenuItems', 86)),
+        'helpbox': ('Ctrl+Shift+H', globals_.trans.string('MenuItems', 88)),
+        'tipbox':  ('Ctrl+Shift+T', globals_.trans.string('MenuItems', 90)),
+        'aboutqt': ('Ctrl+Shift+Q', globals_.trans.string('MenuItems', 92)),
+    }
+    # Placeholder entries only — no actions are wired to these yet. The real
+    # hotbar feature lands later with the QPT work; reserving the entries now
+    # lets users pre-assign keys and keeps the settings schema stable.
+    globals_.HotbarKeybinds = {}
+    for i in range(1, 9):
+        globals_.HotbarKeybinds['hotbar%d' % i] = (str(i), globals_.trans.string('PrefsDlg', 67, '[slot]', str(i)))
+    for i in range(1, 10):
+        globals_.HotbarKeybinds['numpad%d' % i] = ('Num+%d' % i, globals_.trans.string('PrefsDlg', 68, '[slot]', str(i)))
+
+
+def _keybindGroups():
+    return [
+        globals_.FileKeybinds,
+        globals_.EditKeybinds,
+        globals_.ViewKeybinds,
+        globals_.SettingsKeybinds,
+        globals_.HelpKeybinds,
+        globals_.HotbarKeybinds,
+    ]
+
+
+def GetKeybind(name):
+    """
+    Returns a QKeySequence from the settings, or a default keybind
+    """
+    for g in _keybindGroups():
+        if name in g:
+            saved = setting('Keybind_' + name)
+            if saved is None:
+                default = g[name][0]
+                return QtGui.QKeySequence() if default is None else QtGui.QKeySequence(default)
+
+            # setting() may coerce digit-only strings to int — undo that
+            return QtGui.QKeySequence(str(saved))
+
+    print(f'GetKeybind(): Unknown identifier \'{name}\'!')
+    return QtGui.QKeySequence()
+
+
+def SetKeybind(name, keySeq):
+    """
+    Saves a QKeySequence keybind to the settings, and updates the relevant menubar action
+    """
+    # Fix issues with items that have no default keybind
+    if keySeq is None:
+        keySeq = QtGui.QKeySequence()
+
+    # Update the action keybind. Placeholder entries (hotbar/numpad) have no
+    # action yet, so guard the lookup.
+    act = globals_.mainWindow.actions.get(name)
+    if act is not None:
+        act.setShortcut(keySeq)
+
+    # Check if the given keybind is identical to the default
+    # If so, remove the keybind setting, no need to store it
+    for g in _keybindGroups():
+        if name in g:
+            default = g[name][0]
+            defSeq = QtGui.QKeySequence() if default is None else QtGui.QKeySequence(default)
+            if defSeq == keySeq:
+                delSetting('Keybind_' + name)
+                return
+
+    # Convert QKeySequence to string for storage
+    setSetting('Keybind_' + name, keySeq.toString())
 
 
 class PreferencesDialog(QtWidgets.QDialog):
@@ -1633,12 +1837,14 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.infoLabel = QtWidgets.QLabel()
         self.generalTab = self.getGeneralTab()
         self.toolbarTab = self.getToolbarTab()
+        self.keybindsTab = self.getKeybindsTab()
         self.interfaceTab = self.getInterfaceTab()
-        self.themesTab = self.getThemesTab(QtWidgets.QWidget)()
+        self.appearanceTab = self.getAppearanceTab(QtWidgets.QWidget)()
         self.tabWidget.addTab(self.generalTab, globals_.trans.string('PrefsDlg', 1))
         self.tabWidget.addTab(self.toolbarTab, globals_.trans.string('PrefsDlg', 2))
+        self.tabWidget.addTab(self.keybindsTab, globals_.trans.string('PrefsDlg', 56))
         self.tabWidget.addTab(self.interfaceTab, globals_.trans.string('PrefsDlg', 42))
-        self.tabWidget.addTab(self.themesTab, globals_.trans.string('PrefsDlg', 3))
+        self.tabWidget.addTab(self.appearanceTab, globals_.trans.string('PrefsDlg', 3))
 
         # Create the buttonbox
         buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
@@ -1715,6 +1921,9 @@ class PreferencesDialog(QtWidgets.QDialog):
                 # Insert new path node
                 self.insertPathNode = QtWidgets.QCheckBox(globals_.trans.string('PrefsDlg', 39))
 
+                # Display full filepath
+                self.fullFileTitle = QtWidgets.QCheckBox(globals_.trans.string('PrefsDlg', 49))
+
                 # Create the main layout
                 L = QtWidgets.QFormLayout()
                 L.addRow(globals_.trans.string('PrefsDlg', 14), self.Trans)
@@ -1727,6 +1936,7 @@ class PreferencesDialog(QtWidgets.QDialog):
                 L.addWidget(self.erbIndicator)
                 L.addWidget(self.fullObjSize)
                 L.addWidget(self.insertPathNode)
+                L.addWidget(self.fullFileTitle)
                 self.setLayout(L)
 
                 # Set the buttons
@@ -1765,6 +1975,7 @@ class PreferencesDialog(QtWidgets.QDialog):
 
                 self.fullObjSize.setChecked(globals_.PlaceObjectsAtFullSize)
                 self.insertPathNode.setChecked(globals_.InsertPathNode)
+                self.fullFileTitle.setChecked(globals_.UseFullFilepath)
 
             def ClearRecent(self):
                 """
@@ -1882,6 +2093,152 @@ class PreferencesDialog(QtWidgets.QDialog):
                         box.setChecked(default[1])
 
         return ToolbarTab()
+
+    def getKeybindsTab(self):
+        """
+        Returns the Keybinds Tab
+        """
+        groups = _keybindGroups()
+
+        class KeybindEditorTab(QtWidgets.QWidget):
+            """
+            Represents a tab within the Keybinds tab
+            """
+            def __init__(self, index):
+                QtWidgets.QWidget.__init__(self)
+                self.index = index
+                widget = QtWidgets.QWidget()
+
+                # Make the tab scrollable so the window doesn't become absurdly tall
+                scrollArea = QtWidgets.QScrollArea()
+                scrollArea.setWidget(widget)
+                scrollArea.setWidgetResizable(True)
+
+                scrollLyt = QtWidgets.QFormLayout(widget)
+                self.keyEdits = []
+
+                # Create each keybind entry
+                for name in groups[index]:
+                    edit = KeybindLineEdit(GetKeybind(name), name)
+                    self.keyEdits.append(edit)
+
+                    # Get the label from the keybind data
+                    label = groups[index][name][1]
+                    scrollLyt.addRow(label, edit)
+
+                L = QtWidgets.QVBoxLayout()
+                L.addWidget(scrollArea)
+                self.setLayout(L)
+
+            def resetKeys(self):
+                """
+                Resets keybinds for this tab
+                """
+                for kEdit in self.keyEdits:
+                    if kEdit.name in groups[self.index]:
+                        # Get default and update the action's keybind
+                        defKey = groups[self.index][kEdit.name][0]
+                        if defKey is None:
+                            kEdit.clear()
+                        else:
+                            kEdit.setKeySequence(QtGui.QKeySequence(defKey))
+
+                        # Restore default keybind
+                        SetKeybind(kEdit.name, QtGui.QKeySequence(defKey) if defKey is not None else None)
+
+
+        class KeybindsTab(QtWidgets.QWidget):
+            """
+            Keybinds Tab
+            """
+            info = globals_.trans.string('PrefsDlg', 57)
+
+            def __init__(self):
+                """
+                Initializes the Keybinds Tab
+                """
+                QtWidgets.QWidget.__init__(self)
+                self.tabWidget = QtWidgets.QTabWidget()
+                self.tabs = []
+
+                # Create tabs — 5 menubar groups plus the hotbar placeholder group
+                tab_names = [globals_.trans.string('Menubar', i) for i in range(5)]
+                tab_names.append(globals_.trans.string('PrefsDlg', 66))
+                for i, tab_name in enumerate(tab_names):
+                    tab = KeybindEditorTab(i)
+                    self.tabs.append(tab)
+                    self.tabWidget.addTab(tab, tab_name)
+
+                # Reset button
+                reset = QtWidgets.QPushButton(globals_.trans.string('PrefsDlg', 58))
+                reset.clicked.connect(self.reset)
+
+                # Check for Conflicts button
+                self.chkConflict = QtWidgets.QPushButton(globals_.trans.string('PrefsDlg', 59))
+                self.chkConflict.clicked.connect(self.checkConflicts)
+
+                # Create the main layout
+                L = QtWidgets.QGridLayout()
+                L.addWidget(self.tabWidget, 0, 0, 1, 2)
+                L.addWidget(reset, 1, 0, 1, 1)
+                L.addWidget(self.chkConflict, 1, 1, 1, 1)
+                self.setLayout(L)
+
+            def reset(self):
+                """
+                Resets all keybinds to their original values
+                """
+                result = QtWidgets.QMessageBox.warning(None, globals_.trans.string('PrefsDlg', 61), globals_.trans.string('PrefsDlg', 62),
+                                                       QtWidgets.QMessageBox.StandardButton.Yes, QtWidgets.QMessageBox.StandardButton.No)
+                if result == QtWidgets.QMessageBox.StandardButton.Yes:
+                    for tab in self.tabs:
+                        tab.resetKeys()
+
+            def checkConflicts(self):
+                """
+                Checks for any conflicting (duplicate) keybinds
+                """
+                # Get all of the current keybinds
+                currKeys = {}
+                for tab in self.tabs:
+                    for kEdit in tab.keyEdits:
+                        if kEdit.keySequence().toString() != '': # Ignore blanks
+                            currKeys[kEdit.name] = kEdit.keySequence()
+
+                # Group everything together
+                grouped = collections.defaultdict(list)
+                for key, value in currKeys.items():
+                    grouped[value.toString()].append(key)
+
+                conflicts = {
+                    value: keys
+                    for value, keys in grouped.items()
+                    if len(keys) > 1
+                }
+
+                if not conflicts:
+                    # No conflicts, show a quick tooltip
+                    pos = self.chkConflict.mapToGlobal(self.chkConflict.rect().center())
+                    QtWidgets.QToolTip.showText(pos, globals_.trans.string('PrefsDlg', 65), self.chkConflict)
+                else:
+                    # Conflicts were detected, list them in a warning message
+                    outStr = ''
+
+                    for keybind, names in conflicts.items():
+                        outStr += f'* {keybind}: '
+
+                        # We have the shortname identifier, but we need
+                        # to show the translation string instead
+                        for i, name in enumerate(names):
+                            for g in groups:
+                                if name in g:
+                                    outStr += f'<i>{g[name][1]}</i>'
+                                    if i != len(names)-1: outStr += ', '
+                        outStr += '<br>'
+
+                    QtWidgets.QMessageBox.warning(None, globals_.trans.string('PrefsDlg', 63), globals_.trans.string('PrefsDlg', 64, '[conflicts]', outStr))
+
+        return KeybindsTab()
 
     def getInterfaceTab(self):
         """
@@ -2046,20 +2403,20 @@ class PreferencesDialog(QtWidgets.QDialog):
         return InterfaceTab()
 
     @staticmethod
-    def getThemesTab(parent):
+    def getAppearanceTab(parent):
         """
-        Returns the Themes Tab
+        Returns the Appearance Tab
         """
 
-        class ThemesTab(parent):
+        class AppearanceTab(parent):
             """
-            Themes Tab
+            Appearance Tab
             """
             info = globals_.trans.string('PrefsDlg', 6)
 
             def __init__(self):
                 """
-                Initializes the Themes Tab
+                Initializes the Appearance Tab
                 """
                 super().__init__()
 
@@ -2074,13 +2431,36 @@ class PreferencesDialog(QtWidgets.QDialog):
 
                 index = self.themeBox.findText(setting('Theme'), QtCore.Qt.MatchFlag.MatchFixedString)
                 if index >= 0:
-                     self.themeBox.setCurrentIndex(index)
+                    self.themeBox.setCurrentIndex(index)
 
                 self.themeBox.currentIndexChanged.connect(self.UpdatePreview)
+
+                # Create the options box options
+                keys = QtWidgets.QStyleFactory().keys()
+                self.windowStyle = QtWidgets.QComboBox()
+                self.windowStyle.setToolTip(globals_.trans.string('PrefsDlg', 24))
+                self.windowStyle.addItems(keys)
+                ui_style = setting('uiStyle', "Fusion")
+                if ui_style in keys:
+                    self.windowStyle.setCurrentIndex(keys.index(ui_style))
+
+                # Dark Mode
+                self.darkMode = QtWidgets.QCheckBox(globals_.trans.string('PrefsDlg', 47))
+                self.darkMode.setToolTip(globals_.trans.string('PrefsDlg', 48))
+                self.darkMode.setChecked(globals_.DarkMode)
+
+                # Use Rounded Rectangles
+                self.roundedRects = QtWidgets.QCheckBox(globals_.trans.string('PrefsDlg', 45))
+                self.roundedRects.setToolTip(globals_.trans.string('PrefsDlg', 46))
+                self.roundedRects.setChecked(globals_.UseRoundedRectangles)
+                self.roundedRects.clicked.connect(self.UpdatePreview)
 
                 boxGB = QtWidgets.QGroupBox(globals_.trans.string('PrefsDlg', 40))
                 L = QtWidgets.QFormLayout()
                 L.addRow(globals_.trans.string('PrefsDlg', 41), self.themeBox)
+                L.addRow(globals_.trans.string('PrefsDlg', 25), self.windowStyle)
+                L.addRow(self.darkMode)
+                L.addRow(self.roundedRects)
                 L2 = QtWidgets.QGridLayout()
                 L2.addLayout(L, 0, 0)
                 boxGB.setLayout(L2)
@@ -2095,27 +2475,10 @@ class PreferencesDialog(QtWidgets.QDialog):
                 previewGB = QtWidgets.QGroupBox(globals_.trans.string('PrefsDlg', 22))
                 previewGB.setLayout(L)
 
-                # Create the options box options
-                keys = QtWidgets.QStyleFactory().keys()
-                self.NonWinStyle = QtWidgets.QComboBox()
-                self.NonWinStyle.setToolTip(globals_.trans.string('PrefsDlg', 24))
-                self.NonWinStyle.addItems(keys)
-                ui_style = setting('uiStyle', "Fusion")
-
-                if ui_style in keys:
-                    self.NonWinStyle.setCurrentIndex(keys.index(ui_style))
-
-                # Create the options groupbox
-                L = QtWidgets.QVBoxLayout()
-                L.addWidget(self.NonWinStyle)
-                optionsGB = QtWidgets.QGroupBox(globals_.trans.string('PrefsDlg', 25))
-                optionsGB.setLayout(L)
-
                 # Create a main layout
                 Layout = QtWidgets.QGridLayout()
                 Layout.addWidget(boxGB, 0, 0)
-                Layout.addWidget(optionsGB, 0, 1)
-                Layout.addWidget(previewGB, 1, 1)
+                Layout.addWidget(previewGB, 0, 1)
                 Layout.setRowStretch(1, 1)
                 self.setLayout(Layout)
 
@@ -2151,8 +2514,8 @@ class PreferencesDialog(QtWidgets.QDialog):
                     if name == self.themeBox.currentText():
                         t = themeObj
                         self.preview.setPixmap(self.drawPreview(t))
-                        text = globals_.trans.string('PrefsDlg', 26, '[name]', t.themeName, '[creator]', t.creator,
-                                            '[description]', t.description)
+                        text = globals_.trans.string('PrefsDlg', 26, '[name]', t.themeName, '[version]', t.version,
+                                            '[creator]', t.creator, '[description]', t.description)
                         self.description.setText(text)
 
             def drawPreview(self, theme):
@@ -2161,8 +2524,9 @@ class PreferencesDialog(QtWidgets.QDialog):
                 """
 
                 scene = QtWidgets.QGraphicsScene(0, 0, 32 * 16, 17 * 16, self)
-                old_theme, old_real_view = globals_.theme, globals_.RealViewEnabled
+                old_theme, old_real_view, old_round_rect = globals_.theme, globals_.RealViewEnabled, globals_.UseRoundedRectangles
                 globals_.theme = theme
+                globals_.UseRoundedRectangles = self.roundedRects.isChecked()
                 globals_.RealViewEnabled = False  # Disable so the zone looks 'plain'
 
                 # Sprite [38] at (11, 4)
@@ -2175,6 +2539,7 @@ class PreferencesDialog(QtWidgets.QDialog):
 
                 # Entrance [0] at (13, 8)
                 ent = globals_.mainWindow.CreateEntrance(13 * 16, 8 * 16, 0, add_to_scene=False)
+                scene.addItem(ent)
 
                 # Location [1] at (1, 9) size (6, 2)
                 loc = globals_.mainWindow.CreateLocation(1 * 16, 9 * 16, 6 * 16, 2 * 16, 1, add_to_scene=False)
@@ -2188,7 +2553,7 @@ class PreferencesDialog(QtWidgets.QDialog):
                 path = Path(1, scene, loops=True)
 
                 for x, y in ((13, 5), (18, 5), (18, 9), (13, 9)):
-                    path.add_node(x * 16, y * 16)
+                    path.add_node(x * 16, y * 16, add_to_list=False)
 
                 # Empty comment at (2, 3)
                 comment = CommentItem(2 * 16, 3 * 16, "")
@@ -2212,8 +2577,9 @@ class PreferencesDialog(QtWidgets.QDialog):
                 # Restore globals that were changed
                 globals_.theme = old_theme
                 globals_.RealViewEnabled = old_real_view
+                globals_.UseRoundedRectangles = old_round_rect
 
                 return px
 
-        return ThemesTab
+        return AppearanceTab
 

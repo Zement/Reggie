@@ -33,6 +33,7 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         self.spritebrush = QtGui.QBrush(globals_.theme.color('overview_sprite'))
         self.entrancebrush = QtGui.QBrush(globals_.theme.color('overview_entrance'))
         self.locationbrush = QtGui.QBrush(globals_.theme.color('overview_location_fill'))
+        self.pathbrush = QtGui.QBrush(globals_.theme.color('overview_path'))
 
         self.Reset()
 
@@ -123,6 +124,15 @@ class LevelOverviewWidget(QtWidgets.QWidget):
             fr(rect, b)
             dr(rect)
 
+        b = self.pathbrush
+
+        for path in globals_.Area.paths:
+            for node in path._nodes:
+                rect = transform.mapRect(node.sceneBoundingRect())
+                fr(rect, b)
+
+            # TODO: Draw the path lines
+
         painter.setPen(QtGui.QPen(globals_.theme.color('overview_viewbox'), 1))
 
         scalar = 1 / (24 * self.mainWindowScale)
@@ -160,6 +170,10 @@ class LevelOverviewWidget(QtWidgets.QWidget):
 
         for location in globals_.Area.locations:
             rect |= transform.mapRect(location.sceneBoundingRect())
+
+        for path in globals_.Area.paths:
+            for node in path._nodes:
+                rect |= node.LevelRect
 
         _, _, self.maxX, self.maxY = rect.getCoords()
 
@@ -653,7 +667,7 @@ class Stamp:
                         if tile > 0:
                             if globals_.Tiles[tile] is None: continue
                             r = globals_.Tiles[tile].main
-                            painter.drawPixmap(destx + drawOffsetX, desty + drawOffsetY, r)
+                            painter.drawPixmap(int(destx + drawOffsetX), int(desty + drawOffsetY), r)
                         destx += 24
                     desty += 24
                 painter.restore()
@@ -722,6 +736,7 @@ class Stamp:
         # Draw the text
         textRect = QtCore.QRectF(0, prevIcon.height() + 2, totalWidth, textSize.height())
         painter.setFont(QtGui.QFont())
+        painter.setPen(QtCore.Qt.GlobalColor.gray)
         painter.drawText(textRect, QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.TextFlag.TextWordWrap, self.Name)
 
         # Return the pixmap
@@ -1176,7 +1191,17 @@ class SpriteList(QtWidgets.QWidget):
         # Set of row ids
         self.SearchResults = set()
 
-        self.table = QtWidgets.QTableWidget(0, len(globals_.trans.stringList('Sprites', 23)) + 1)
+        # A QTableWidget that also selects the current sprite when Space or
+        # Enter/Return is pressed.
+        class SpriteTableWidget(QtWidgets.QTableWidget):
+            def keyPressEvent(self, event):
+                if event.key() in (QtCore.Qt.Key.Key_Space, QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
+                    if self.currentItem() is not None:
+                        SpriteList.moveToSprite(self.currentItem())
+
+                super().keyPressEvent(event)
+
+        self.table = SpriteTableWidget(0, len(globals_.trans.stringList('Sprites', 23)) + 1)
         headers = [globals_.trans.string('Sprites', 21), globals_.trans.string('Sprites', 22)] + list(globals_.trans.stringList('Sprites', 23)[1:])
         self.table.setHorizontalHeaderLabels(headers)
         self.table.verticalHeader().setVisible(False) # hide row numbers
@@ -1493,6 +1518,3 @@ class SpriteList(QtWidgets.QWidget):
 
     def row(self, item):
         return self.table.row(item)
-
-    def clearSelection(self):
-        self.table.setCurrentItem(None)

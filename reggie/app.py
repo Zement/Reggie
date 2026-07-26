@@ -31,7 +31,7 @@
 ################################################################
 
 # Python version: sanity check
-minimum = (3, 5)
+minimum = (3, 9)
 import sys
 
 if sys.version_info < minimum:
@@ -83,7 +83,7 @@ from reggie.core import spritelib as SLib
 from reggie.core.dirty import setting, setSetting
 from reggie.core.tiles import LoadOverrides
 from reggie.io.misc import (
-    LoadActionsLists, FilesAreMissing, module_path,
+    LoadActionsLists, LoadDefaultKeybinds, FilesAreMissing, module_path,
     SetGamePaths, areValidGamePaths, validateFolderForPatch,
 )
 from reggie.io.translation import LoadTranslation
@@ -292,6 +292,7 @@ def main():
     # Load remaining requirements
     print("[BOOT] Loading actions lists...")
     LoadActionsLists()
+    LoadDefaultKeybinds()
     print("[BOOT] ✓ Actions lists loaded")
     
     print("[BOOT] Loading number font...")
@@ -342,6 +343,9 @@ def main():
     globals_.PaddingLength = int(setting('PaddingLength', 0))
     globals_.PlaceObjectsAtFullSize = setting('PlaceObjectsAtFullSize', True)
     globals_.InsertPathNode = setting('InsertPathNode', False)
+    globals_.UseFullFilepath = setting('UseFullFilepath', False)
+    globals_.UseRoundedRectangles = setting('UseRoundedRectangles', True)
+    globals_.DarkMode = setting('DarkMode', False)
     SLib.RealViewEnabled = globals_.RealViewEnabled
     print("[BOOT] ✓ Global settings loaded")
 
@@ -407,10 +411,11 @@ def main():
         if areValidGamePaths():
             break
 
-        QtWidgets.QMessageBox.information(
-            None, globals_.trans.string('ChangeGamePath', 1),
-            globals_.trans.string('ChangeGamePath', 3)
-        )
+        if globals_.gamedef.custom:
+            msg = globals_.trans.string('ChangeGamePath', 3, '[game]', globals_.gamedef.name)
+        else:
+            msg = globals_.trans.string('ChangeGamePath', 2)
+        QtWidgets.QMessageBox.information(None, globals_.trans.string('ChangeGamePath', 1), msg)
     
     # Open Patch Manager only if we just did initial setup
     print("[BOOT] Checking if patch manager needed...")
@@ -438,6 +443,9 @@ def main():
             setSetting('AutoSaveFileData', 'x')
         print("[BOOT] ✓ Autosave dialog handled")
     print("[BOOT] ✓ Autosave check complete")
+
+    # Toggle light/dark mode
+    deferred.SetColorScheme()
 
     # Create and show the main window
     print("[BOOT] Creating main window...")

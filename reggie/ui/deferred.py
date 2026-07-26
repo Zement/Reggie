@@ -21,6 +21,7 @@ _docs/plan/DIRECTORY_STRUCTURE.md.
 # ``deferred.X`` attribute access have something to bind to before load() runs.
 GetIcon = None
 SetAppStyle = None
+SetColorScheme = None
 ListWidgetWithToolTipSignal = None
 LoadNumberFont = None
 LoadTheme = None
@@ -54,7 +55,7 @@ def load():
     import sys as _sys
     mod = _sys.modules[__name__]
 
-    from reggie.ui.ui import GetIcon, SetAppStyle, ListWidgetWithToolTipSignal, LoadNumberFont, LoadTheme, IconsOnlyTabBar
+    from reggie.ui.ui import GetIcon, SetAppStyle, SetColorScheme, ListWidgetWithToolTipSignal, LoadNumberFont, LoadTheme, IconsOnlyTabBar
     from reggie.io.gamedef import GameDefMenu, LoadGameDef
     from reggie.patches.patch_manager_dialog import PatchManagerDialog
     from reggie.core.background import BGDialog
@@ -64,7 +65,7 @@ def load():
     from reggie.ui.spriteeditor import SpriteEditorWidget
 
     for name in (
-        'GetIcon', 'SetAppStyle', 'ListWidgetWithToolTipSignal', 'LoadNumberFont', 'LoadTheme', 'IconsOnlyTabBar',
+        'GetIcon', 'SetAppStyle', 'SetColorScheme', 'ListWidgetWithToolTipSignal', 'LoadNumberFont', 'LoadTheme', 'IconsOnlyTabBar',
         'GameDefMenu', 'LoadGameDef', 'PatchManagerDialog', 'BGDialog', 'ZonesDialog', 'AreaOptionsDialog',
         'Stamp', 'StampChooserWidget', 'SpriteList', 'SpritePickerWidget', 'ObjectPickerWidget', 'LevelOverviewWidget',
         'SpriteEditorWidget',

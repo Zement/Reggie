@@ -285,7 +285,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 loaded = self.LoadLevel(lastlevel, True, 1)
 
         if not loaded:
-            self.LoadLevel('01-01', False, 1)
+            self.LoadLevel(globals_.FirstStageFilename, True, 1)
 
         # call each toggle-button handler to set each feature correctly upon
         # startup
@@ -659,8 +659,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
     def SelectAll(self):
         """
-        Select all objects in the current area
+        Select all objects in the current area, or all text in the focused widget
         """
+        if globals_.app.activeWindow() is not globals_.mainWindow:
+            focus = globals_.app.focusWidget()
+            if focus is not None:
+                if isinstance(focus, (QtWidgets.QTextEdit, QtWidgets.QPlainTextEdit, QtWidgets.QLineEdit)):
+                    focus.selectAll()
+            return
+
         paintRect = QtGui.QPainterPath()
         paintRect.addRect(0, 0, 1024 * 24, 512 * 24)
         self.scene.setSelectionArea(paintRect)
@@ -695,6 +702,21 @@ class ReggieWindow(QtWidgets.QMainWindow):
         return self._clipboard.Cut()
 
     def Copy(self):
+        # If a separate window (e.g. the sprite-data editor) is focused, copy the
+        # selected text from it instead of the selected scene items.
+        if globals_.app.activeWindow() is not globals_.mainWindow:
+            focus = globals_.app.focusWidget()
+            if focus is not None:
+                if isinstance(focus, (QtWidgets.QTextEdit, QtWidgets.QPlainTextEdit)):
+                    text = focus.textCursor().selectedText()
+                elif isinstance(focus, QtWidgets.QLineEdit):
+                    text = focus.selectedText()
+                else:
+                    return
+
+                self.systemClipboard.setText(text)
+            return
+
         return self._clipboard.Copy()
 
     def Paste(self):
@@ -770,8 +792,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
 
-        from_tileset = dlg.FromTS.value() - 1
-        to_tileset = dlg.ToTS.value() - 1
+        from_tileset = dlg.FromTS.currentIndex()
+        to_tileset = dlg.ToTS.currentIndex()
         do_exchange = dlg.DoExchange.isChecked()
 
         if from_tileset == to_tileset:
@@ -895,7 +917,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         return obj
 
-    def CreateEntrance(self, x, y, id_ = None, add_to_scene = True):
+    def CreateEntrance(self, x, y, id_ = None, add_to_scene = True, allow_dupe_id = False):
         """
         Creates and returns a new entrance and makes sure it's added to the
         right lists. This function returns None if this entrance could not be
@@ -906,9 +928,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
             id_ = common.find_first_available_id(all_ids, 256)
 
         if id_ is None:
-            print("ReggieWindow#CreateEntrance: No free entrance id")
+            QtWidgets.QMessageBox.warning(self, globals_.trans.string('MainWindow', 2), globals_.trans.string('MainWindow', 3),
+                                          QtWidgets.QMessageBox.StandardButton.Ok)
             return None
-        elif id_ in all_ids and add_to_scene:
+        elif id_ in all_ids and add_to_scene and not allow_dupe_id:
             print("ReggieWindow#CreateEntrance: Given entrance id (%d) already in use" % id_)
             return None
 
@@ -1217,8 +1240,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 break
 
         if not auto:
-            # Try loading 01-01. If that fails, load up an empty canvas.
-            ok = self.LoadLevel('01-01', False, 1)
+            # Try loading the first detected file in our Stage folder. If that fails, load up an empty canvas.
+            ok = self.LoadLevel(globals_.FirstStageFilename, True, 1)
             if not ok:
                 self.LoadLevel(None, False, 1)
 
@@ -1275,6 +1298,18 @@ class ReggieWindow(QtWidgets.QMainWindow):
         globals_.InsertPathNode = dlg.generalTab.insertPathNode.isChecked()
         setSetting('InsertPathNode', globals_.InsertPathNode)
 
+        # Display full filepath setting
+        globals_.UseFullFilepath = dlg.generalTab.fullFileTitle.isChecked()
+        setSetting('UseFullFilepath', globals_.UseFullFilepath)
+
+        # Update window title
+        if self.fileSavePath:
+            if globals_.UseFullFilepath:
+                self.fileTitle = self.fileSavePath
+            else:
+                self.fileTitle = os.path.basename(self.fileSavePath)
+            self.UpdateTitle()
+
         # Get the Toolbar tab settings
         boxes = (
             dlg.toolbarTab.FileBoxes, dlg.toolbarTab.EditBoxes, dlg.toolbarTab.ViewBoxes, dlg.toolbarTab.SettingsBoxes,
@@ -1285,6 +1320,12 @@ class ReggieWindow(QtWidgets.QMainWindow):
             for box in boxList:
                 ToolbarSettings[box.InternalName] = box.isChecked()
         setSetting('ToolbarActs', ToolbarSettings)
+
+        # Get keybinds and save them
+        from reggie.io.misc import SetKeybind
+        for tab in dlg.keybindsTab.tabs:
+            for keyEdit in tab.keyEdits:
+                SetKeybind(keyEdit.name, keyEdit.keySequence())
 
         # Get the Interface tab settings
         toolbar_separate = dlg.interfaceTab.toolbarSeparateRadio.isChecked()
@@ -1303,8 +1344,17 @@ class ReggieWindow(QtWidgets.QMainWindow):
             globals_.scalingManager.applyScaling()
 
         # Get the theme settings
-        setSetting('Theme', dlg.themesTab.themeBox.currentText())
-        setSetting('uiStyle', dlg.themesTab.NonWinStyle.currentText())
+        setSetting('Theme', dlg.appearanceTab.themeBox.currentText())
+        setSetting('uiStyle', dlg.appearanceTab.windowStyle.currentText())
+
+        globals_.UseRoundedRectangles = dlg.appearanceTab.roundedRects.isChecked()
+        globals_.DarkMode = dlg.appearanceTab.darkMode.isChecked()
+
+        setSetting('UseRoundedRectangles', globals_.UseRoundedRectangles)
+        setSetting('DarkMode', globals_.DarkMode)
+
+        # Update mode
+        deferred.SetColorScheme()
 
         # Warn the user that they may need to restart
         QtWidgets.QMessageBox.warning(None, globals_.trans.string('PrefsDlg', 0), globals_.trans.string('PrefsDlg', 30))
@@ -1751,6 +1801,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.objAllTab.setTabEnabled(2, (globals_.Area.tileset2 != ''))
         self.objAllTab.setTabEnabled(3, (globals_.Area.tileset3 != ''))
 
+        if globals_.Area.tileset0 == '' and globals_.Area.tileset1 == '' and globals_.Area.tileset2 == '' and globals_.Area.tileset3 == '':
+            self.actions['swapobjectstypes'].setEnabled(False)
+            self.actions['swapobjectstilesets'].setEnabled(False)
+
         # Load events
         self.LoadEventTabFromLevel()
 
@@ -1874,7 +1928,6 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.selObj = None
         self.selObjs = None
 
-        self.spriteList.clearSelection()
         self.entranceList.setCurrentItem(None)
         self.locationList.setCurrentItem(None)
         self.pathList.setCurrentItem(None)
@@ -2650,13 +2703,14 @@ class ReggieWindow(QtWidgets.QMainWindow):
         globals_.Area.toadHouseType = dlg.LoadingTab.toadHouseType.currentIndex()
         globals_.Area.wrapFlag = dlg.LoadingTab.wrap.isChecked()
         globals_.Area.creditsFlag = dlg.LoadingTab.credits.isChecked()
-        globals_.Area.ambushFlag = dlg.LoadingTab.ambush.isChecked()
+        globals_.Area.faceLeftFlag = dlg.LoadingTab.faceLeft.isChecked()
         globals_.Area.unkFlag1 = dlg.LoadingTab.unk1.isChecked()
         globals_.Area.unkFlag2 = dlg.LoadingTab.unk2.isChecked()
         globals_.Area.unkVal1 = dlg.LoadingTab.unk3.value()
         globals_.Area.unkVal2 = dlg.LoadingTab.unk4.value()
 
         # Tilesets
+        tilesetNum = 0
         for idx, fname in enumerate(dlg.TilesetsTab.values()):
 
             if fname in ('', None):
@@ -2674,6 +2728,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 globals_.Area.tileset3 = fname
 
             if fname != '':
+                tilesetNum += 1
                 LoadTileset(idx, fname)
             else:
                 UnloadTileset(idx)
@@ -2688,6 +2743,9 @@ class ReggieWindow(QtWidgets.QMainWindow):
         for layer in globals_.Area.layers:
             for obj in layer:
                 obj.updateObjCache()
+
+        self.actions['swapobjectstypes'].setEnabled(tilesetNum != 0)
+        self.actions['swapobjectstilesets'].setEnabled(tilesetNum != 0)
 
         self.scene.update()
 
@@ -2820,8 +2878,14 @@ class ReggieWindow(QtWidgets.QMainWindow):
             return
 
         screenshot_type = dlg.zoneCombo.currentIndex()
+        grid_type = dlg.gridCombo.currentIndex()
         hide_background = dlg.hide_background.isChecked()
         do_save = dlg.save_img.isChecked()
+
+        grid_type_list = [None, 'grid', 'checker']
+        gt = globals_.GridType
+        globals_.GridType = grid_type_list[grid_type]
+        self.scene.update()
 
         if do_save:
             fn = QtWidgets.QFileDialog.getSaveFileName(self,
@@ -2883,6 +2947,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
             ss_img.save(fn, 'PNG', 50)
         else:
             globals_.app.clipboard().setImage(ss_img)
+
+        # Restore the grid type
+        globals_.GridType = gt
+        self.scene.update()
 
     @staticmethod
     def HandleDiagnostics():

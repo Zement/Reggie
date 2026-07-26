@@ -49,8 +49,6 @@ class ReggieTheme:
         self.style = None
         self.forceUiColor = False
         self.forceStyleSheet = False
-        self.useRoundedRectangles = True
-        self.overridesFile = os.path.join('reggiedata', 'overrides.png')
 
         # Don't create colors dict yet - do it lazily
         self._colors = None
@@ -89,6 +87,7 @@ class ReggieTheme:
             'overview_viewbox': _make_color(0, 0, 255),  # Overview background fill
             'overview_zone_fill': _make_color(47, 79, 79, 120),  # Overview zone fill
             'overview_zone_lines': _make_color(0, 255, 255),  # Overview zone lines
+            'overview_path': _make_color(6, 249, 20),  # Overview path fill
             'path_connector': _make_color(6, 249, 20),  # Path node connecting lines
             'path_fill': _make_color(6, 249, 20, 120),  # Unselected path node fill
             'path_fill_s': _make_color(6, 249, 20, 240),  # Selected path node fill
@@ -120,7 +119,12 @@ class ReggieTheme:
         """
         folder = os.path.join('reggiedata', 'themes', folder)
 
-        fileList = os.listdir(folder)
+        try:
+            fileList = os.listdir(folder)
+        except FileNotFoundError:
+            # Return if the theme cannot be found
+            # (default theme is already inited)
+            return
 
         # Create a XML ElementTree
         maintree = ElementTree.parse(os.path.join(folder, 'main.xml'))
@@ -168,30 +172,6 @@ class ReggieTheme:
                     ico = QtGui.QIcon(pix)
 
                     cache[iconname] = ico
-            elif node.tag.lower() == 'overrides':
-                fn = node.attrib['file']
-                if not fn.endswith('.png'):
-                    continue
-
-                filename = os.path.join(folder, fn)
-                if not os.path.isfile(filename):
-                    continue
-
-                self.overridesFile = filename
-                ##        # Add some overview colors if they weren't specified
-                ##        fallbacks = {
-                ##            'overview_entrance': 'entrance_fill',
-                ##            'overview_location_fill': 'location_fill',
-                ##            'overview_location_lines': 'location_lines',
-                ##            'overview_sprite': 'sprite_fill',
-                ##            'overview_zone_lines': 'zone_lines',
-                ##            }
-                ##        for index in fallbacks:
-                ##            if (index not in colors) and (fallbacks[index] in colors): colors[index] = colors[fallbacks[index]]
-                ##
-                ##        # Use the new colors dict to overwrite values in self.colors
-                ##        for index in colors:
-                ##            self.colors[index] = colors[index]
 
     def parseMainXMLHead(self, root):
         """
@@ -225,7 +205,6 @@ class ReggieTheme:
         self.style = root.get("style")
         self.forceUiColor = root.get("forceUiColor", "false") == "true"
         self.forceStyleSheet = root.get("forceStyleSheet", "false") == "true"
-        self.useRoundedRectangles = root.get("useRoundedRectangles", "true") == "true"
 
         try:
             self.version = float(root.get("version", "1.0"))
@@ -377,10 +356,26 @@ def SetAppStyle(styleKey='', skip_style_reset=False):
     # Append scaling stylesheet if it exists
     if hasattr(globals_.theme, '_scaling_qss') and globals_.theme._scaling_qss:
         final_qss = final_qss + "\n" + globals_.theme._scaling_qss if final_qss else globals_.theme._scaling_qss
-    
+
+    # Fix disabled menubar items being nearly unreadable in some cases
+    # (mainly in dark mode and/or when the UI color is overridden)
+    disabled_qss = "QMenu::item:disabled{color: #646464;}"
+    final_qss = final_qss + "\n" + disabled_qss if final_qss else disabled_qss
+
     # Apply the complete stylesheet
     if final_qss:
         globals_.app.setStyleSheet(final_qss)
+
+
+def SetColorScheme():
+    """
+    Toggle the application-wide native light/dark color scheme, independent
+    of the current theme.
+    """
+    if globals_.DarkMode:
+        globals_.app.styleHints().setColorScheme(QtCore.Qt.ColorScheme.Dark)
+    else:
+        globals_.app.styleHints().setColorScheme(QtCore.Qt.ColorScheme.Light)
 
 
 def GetIcon(name, big=False):
@@ -514,3 +509,58 @@ class ListWidgetWithToolTipSignal(QtWidgets.QListWidget):
                 self.toolTipAboutToShow.emit(item)
 
         return super().viewportEvent(e)
+
+
+# Key combinations that must never be rebound. OS-reserved combos would
+# shadow window management; the bare keys are claimed by the Quick Paint
+# Tool's raw key hook (see reggie/plugins/quickpaint/reggie_hook.py).
+OS_RESERVED_KEYBINDS = ('Alt+F4', 'Alt+Tab', 'Ctrl+Esc')
+QPT_RESERVED_KEYBINDS = ('Q', 'S', 'C', 'E', 'F', 'D', 'F1', 'F2', 'F3', 'Esc')
+
+
+class KeybindLineEdit(QtWidgets.QKeySequenceEdit):
+    """
+    A wrapper for QtWidgets.QKeySequenceEdit
+    """
+    def __init__(self, keySequence=None, name=str):
+        QtWidgets.QKeySequenceEdit.__init__(self, keySequence)
+        self.name = name
+
+        # Only record one sequence input
+        self.setMaximumSequenceLength(1)
+
+        self.setClearButtonEnabled(True)
+
+        # Set placeholder text on the QLineEdit
+        lineEdit = self.findChild(QtWidgets.QLineEdit, "qt_keysequenceedit_lineedit")
+        if lineEdit: lineEdit.setPlaceholderText(globals_.trans.string('PrefsDlg', 60)) # No keybind set
+
+        # Reject reserved combos as they are entered
+        self.keySequenceChanged.connect(self._validateSequence)
+
+    def _validateSequence(self, keySequence):
+        """
+        Clears the entered sequence if it is reserved by the OS or the
+        Quick Paint Tool, and tells the user why
+        """
+        seq_str = keySequence.toString()
+        if seq_str in OS_RESERVED_KEYBINDS:
+            message = globals_.trans.string('PrefsDlg', 69)
+        elif seq_str in QPT_RESERVED_KEYBINDS:
+            message = globals_.trans.string('PrefsDlg', 70)
+        else:
+            return
+
+        self.blockSignals(True)
+        self.clear()
+        self.blockSignals(False)
+        QtWidgets.QToolTip.showText(self.mapToGlobal(self.rect().center()), message, self)
+
+    def keyPressEvent(self, event):
+        """
+        Clears the current keybind if Delete or Backspace is pressed
+        """
+        QtWidgets.QKeySequenceEdit.keyPressEvent(self, event)
+
+        if event.key() == QtCore.Qt.Key.Key_Delete or event.key() == QtCore.Qt.Key.Key_Backspace:
+            self.clear()

@@ -63,7 +63,7 @@ class ReggieTranslation:
                 0: 'About Reggie Next',
                 1: '[i]Reggie Next[/i] Level Editor',
                 2: '[i]Reggie Next Level Editor[/i] is an open-source project, started by Treeki in 2010 and forked by RoadrunnerWMC in 2013, that aims to bring you the fun of designing original New Super Mario Bros. Wii[tm]-compatible levels.[br]',
-                3: 'Interested? Join the [a href="https://discord.gg/XnQJnwa"]Discord server[/a] to get in touch with the current developer(s).[br]',
+                3: 'Interested? Join the [a href="[link]"]Horizon Discord server[/a] to get in touch with the current developer(s).[br]',
             },
             'ErrorDlg': {
                 0: 'An unhandled exception occurred. Please report the problem in the Horizon Discord server.\nA log will be written to \"[log]\".\n\nError information:\n',
@@ -118,8 +118,8 @@ class ReggieTranslation:
                 ),
                 34: 'Credits',
                 35: '[b]Credits:[/b][br]Activates the game\'s Credits mode for this area',
-                36: 'Ambush',
-                37: '[b]Ambush:[/b][br]Activates the game\'s Ambush mode for this area',
+                36: 'Spawn Facing Left',
+                37: '[b]Spawn Facing Left:[/b][br]Spawns all players facing left instead of right. Enabled in all Ambush stages.',
                 38: 'Unknown Option 1',
                 39: '[b]Unknown Option 1:[/b] We haven\'t managed to figure out what this does, or if it does anything. This option is turned off in most levels.',
                 40: 'Unknown Option 2',
@@ -131,9 +131,10 @@ class ReggieTranslation:
                 46: 'Loaded Sprites',
                 47: 'Add Sprite',
                 48: 'Remove Selected Sprite',
-                49: 'Default',
-                50: 'Custom',
-                51: 'On the left is a list of sprites already present in the level. On the right, you can add more sprites you\'d like to load.',
+                49: 'Present:',
+                50: 'Custom:',
+                51: 'On the left is a list of sprites already present in the level (their resources will be loaded by default). On the right, you can add more sprites you\'d like to load.',
+                52: 'Type a Sprite ID...',
             },
             'AutoSaveDlg': {
                 0: 'Auto-saved backup found',
@@ -198,7 +199,7 @@ class ReggieTranslation:
                 0: 'Choose the Stage folder from [game]',
                 1: 'Error',
                 2: 'This folder doesn\'t have all of the files from the extracted New Super Mario Bros. Wii Stage folder.',
-                3: 'This folder doesn\'t seem to have the required files. In order to use Reggie Next in New Super Mario Bros Wii mode, you need the Stage folder from New Super Mario Bros. Wii, including the Texture folder and the level files contained within it.',
+                3: 'This folder doesn\'t seem to have the required files. In order to use the [game] game patch, you need the Stage folder, including the Texture folder and the level files contained within it.',
                 4: 'Choose the Texture folder from [game]',
             },
             'Comments': {
@@ -375,7 +376,7 @@ class ReggieTranslation:
                 17: 'Error',
                 18: 'An error occurred while attempting to load this game patch. It will now be unloaded. Here\'s the specific error:[br][error]',
                 19: 'Add a Reggie Patch Folder...',
-                20: 'Creates a symlink in the /reggiedata/patches folder using add_reggie_patch',
+                20: 'Registers an external Reggie patch folder (containing a main.xml) so it appears in the game-patch list',
             },
             'InfoDlg': {
                 0: 'Level Information',
@@ -417,6 +418,12 @@ class ReggieTranslation:
             'MainWindow': {
                 0: '[unsaved]',
                 1: 'You\'re trying to paste over 300 items at once.[br]This may take a while (depending on your computer speed), are you sure you want to continue?',
+                2: 'Entrance Limit Reached',
+                3: 'You cannot have more than 256 entrances in an area.',
+                4: 'Max Location ID Reached',
+                5: 'You cannot have a location with an ID greater than 255. You can have multiple locations with the same ID.',
+                6: 'Path Limit Reached',
+                7: 'You cannot have more than 256 paths in an area.',
             },
             'Menubar': {
                 0: '&File',
@@ -488,7 +495,7 @@ class ReggieTranslation:
                 57: 'Toggle viewing of sprite images',
                 58: 'Show Locations',
                 59: 'Toggle viewing of locations',
-                60: 'Switch\nGrid',
+                60: 'Switch Grid',
                 61: 'Cycle through available grid views',
                 62: 'Zoom to Maximum',
                 63: 'Zoom in all the way',
@@ -500,9 +507,9 @@ class ReggieTranslation:
                 69: 'Zoom out of the main level view',
                 70: 'Zoom to Minimum',
                 71: 'Zoom out all the way',
-                72: 'Area[br]Settings...',
+                72: 'Area Settings...',
                 73: 'Control tileset swapping, stage timer, entrance on load, and stage wrap',
-                74: 'Zone[br]Settings...',
+                74: 'Zone Settings...',
                 75: 'Zone creation, deletion, and preference editing',
                 76: 'Backgrounds...',
                 77: 'Apply backgrounds to individual zones in the current area',
@@ -578,9 +585,9 @@ class ReggieTranslation:
             },
             'Palette': {
                 0: 'Paint on Layer:',
-                1: '[b]Layer 0:[/b][br]This layer is mostly used for hidden caves, but can also be used to overlay tiles to create effects. The flashlight effect will occur if Mario walks behind a tile on layer 0 and the zone has it enabled.[br][b]Note:[/b] To switch objects on other layers to this layer, select them and then click this button while holding down the [i]Alt[/i] key.',
-                2: '[b]Layer 1:[/b][br]All or most of your normal level objects should be placed on this layer. This is the only layer where tile interactions (solids, slopes, etc) will work.[br][b]Note:[/b] To switch objects on other layers to this layer, select them and then click this button while holding down the [i]Alt[/i] key.',
-                3: '[b]Layer 2:[/b][br]Background/wall tiles (such as those in the hidden caves) should be placed on this layer. Tiles on layer 2 have no effect on collisions.[br][b]Note:[/b] To switch objects on other layers to this layer, select them and then click this button while holding down the [i]Alt[/i] key.',
+                1: '[b]Layer 0:[/b][br]This layer is mostly used for hidden caves, but can also be used to overlay tiles to create effects. The flashlight effect will occur if Mario walks behind a tile on layer 0 and the zone has it enabled.[br][br]',
+                2: '[b]Layer 1:[/b][br]All or most of your normal level objects should be placed on this layer. This is the only layer where tile interactions (solids, slopes, etc) will work.[br][br]',
+                3: '[b]Layer 2:[/b][br]Background/wall tiles (such as those in the hidden caves) should be placed on this layer. Tiles on layer 2 have no effect on collisions.[br][br]',
                 4: 'View:',
                 5: 'Search:',
                 6: 'Set Default Properties',
@@ -613,7 +620,8 @@ class ReggieTranslation:
                 33: 'Comments',
                 34: 'Comments currently in this area:[br](Double-click one to jump to it instantly)',
                 35: 'Name:',
-                36: 'Change Layer'
+                36: 'Change Layer',
+                38: '[b]Note:[/b] To switch objects on other layers to this layer, select them and then click this button while holding down the [i]Alt[/i] key.',
             },
             'PathDataEditor': {
                 0: 'Loops:',
@@ -637,10 +645,10 @@ class ReggieTranslation:
                 0: 'Reggie Next Preferences',
                 1: 'General',
                 2: 'Toolbar',
-                3: 'Themes',
+                3: 'Appearance',
                 4: '[b]Reggie Preferences[/b][br]Customize Reggie Next by changing these settings.[br]Use the tabs below to view even more settings.[br]Reggie Next must be restarted before certain changes can take effect.',
                 5: '[b]Toolbar Preferences[/b][br]Choose menu items you would like to appear on the toolbar.[br]Reggie Next must be restarted before the toolbar can be updated.[br]',
-                6: '[b]Reggie Themes[/b][br]Pick a theme below to change application colors and icons.[br]Reggie Next must be restarted before the theme can be changed.',
+                6: '[b]Reggie Appearance[/b][br]Customize the appearance of Reggie Next by changing these settings.[br]Reggie Next must be restarted before the theme can be changed.',
                 7: None,  # REMOVED: 'Show the splash screen:'
                 8: None,  # REMOVED: 'If TPLLib cannot use a fast backend (recommended)'
                 9: None,  # REMOVED: 'Always'
@@ -659,8 +667,8 @@ class ReggieTranslation:
                 22: 'Preview',
                 23: None,
                 24: '[b]Window Style[/b][br]This changes what style Reggie\'s UI uses. Note that this may cause issues with certain themes.',
-                25: 'Window Style',
-                26: '[b][name][/b][br]By [creator][br][description]',
+                25: 'Window Style:',
+                26: '[b][name][/b] - Version [version][br]By [creator][br][description]',
                 27: None,  # REMOVED: 'Tilesets:',
                 28: None,  # REMOVED: 'Use Default Tileset Picker (recommended)',
                 29: None,  # REMOVED: 'Use Old Tileset Picker',
@@ -670,23 +678,49 @@ class ReggieTranslation:
                 33: 'Reset sprite data when hiding sprite fields',
                 34: 'Hide Reset Spritedata button',
                 35: 'Pad level with null bytes',
-                36: 'Fixed level size (bytes)',
+                36: 'Fixed level size (bytes):',
                 37: 'Place objects at their full size',
                 38: 'Display rectangles indicating the zone bounds',
                 39: 'Insert new path node after selected node',
-                40: 'Themes',
+                40: 'Style',
                 41: 'Theme:',
                 42: 'Interface',
+                45: 'Use Rounded Rectangles',
+                46: '[b]Use Rounded Rectangles[/b][br]This makes the corners of sprites, entrances, and path nodes appear rounded instead of sharp.',
+                47: 'Dark Mode',
+                48: '[b]Dark Mode[/b][br]This determines the overall color style Reggie uses, independent from the current theme.[br][br]Note that this may cause issues with certain themes.',
+                49: 'Display full filepath of opened level',
+                56: 'Keybinds',
+                57: '[b]Configure Keybinds[/b][br]Customize the keybinds used for drop-down actions.[br]Press Backspace/Delete to clear a keybind, or hit the X button.[br]',
+                58: 'Reset All Keybinds',
+                59: 'Check for Conflicts',
+                60: 'No keybind set',
+                61: 'Reset Keybinds',
+                62: 'Are you sure you want to reset all keybinds to their default values?[br]This cannot be undone.',
+                63: 'Conflicts Found',
+                64: 'The following options were found to have conflicting keybinds:[br][conflicts][br]Reusing keybinds can cause issues, so ensure all keybinds are unique!',
+                65: 'No conflicts found.',
+                66: 'Hotbar',
+                67: 'Hotbar Slot [slot]',
+                68: 'Numpad Slot [slot]',
+                69: 'This key combination is reserved by the operating system and cannot be used.',
+                70: 'This key is reserved by the Quick Paint Tool and cannot be used.',
             },
             'ScrShtDlg': {
-                0: 'Choose a Screenshot source',
+                0: 'Level Screenshot',
                 1: 'Current Screen',
                 2: 'All Zones',
                 3: 'Zone [zone]',
-                4: 'Target',
-                5: 'Hide background',
-                6: 'Save image to file',
-                7: 'Copy image',
+                4: 'Target:',
+                5: 'Hide Background:',
+                6: 'Save Image to File:',
+                7: 'Copy Image:',
+                8: 'Grid Type:',
+                9: (
+                    'None',
+                    'Standard',
+                    'Checker',
+                ),
             },
             'ShftItmDlg': {
                 0: 'Shift Items',
@@ -699,17 +733,21 @@ class ReggieTranslation:
             },
             'SwapObjTilesDlg': {
                 0: 'Swap Objects\' Tilesets',
-                1: 'From Tileset:',
-                2: 'To Tileset:',
+                1: 'From Tileset Slot:',
+                2: 'To Tileset Slot:',
                 3: 'Exchange (perform 2-way conversion)',
+                4: 'Swap',
+                5: 'Close',
             },
             'SwapObjDlg': {
                 0: 'Swap Objects',
-                1: 'From Object:',
-                2: 'From Tileset:',
+                1: 'Object:',
+                2: 'From Tileset Slot:',
                 3: 'To Object:',
-                4: 'To Tileset:',
+                4: 'In Tileset Slot:',
                 5: 'Exchange (perform 2-way conversion)',
+                6: 'Swap',
+                7: 'Close',
             },
             'SpriteDataEditor': {
                 0: 'Modify Selected Sprite Properties',
@@ -741,6 +779,9 @@ class ReggieTranslation:
                 26: 'Add Sprite',
                 27: 'Resize',
                 28: 'NO TITLE GIVEN!',
+                29: 'Next Free',
+                30: 'Sprite [id]: required resource',
+                31: 'Add to Loaded Sprites',
             },
             'Sprites': {
                 0: '[b]Sprite [type]:[/b][br][name]',
@@ -1000,6 +1041,7 @@ class ReggieTranslation:
                 104: '[b]Multiplayer Upper Bounds Adjust:[/b][br]Added to the upper bounds value (regular or Lakitu) during multiplayer mode, and during the transition back to normal camera behavior after an Auto-Scrolling Controller reaches the end of its path.',
                 105: 'Multiplayer Lower Bounds Adjust:',
                 106: '[b]Multiplayer Lower Bounds Adjust:[/b][br]Added to the lower bounds value (regular or Lakitu) during multiplayer mode, and during the transition back to normal camera behavior after an Auto-Scrolling Controller reaches the end of its path.',
+                107: 'Duplicate',
             },
             'Zones': {
                 0: 'Zone [num]',
@@ -1015,23 +1057,38 @@ class ReggieTranslation:
                 7: 'Camera Profile on Event [id]',
             },
             'ResizeChoiceDlg': {
-                0: 'Let\'s resize your sprite. In order to do this, choose one of the two slots, based on the below information. Note that some choices can overlap with other settings, leading to undesired effects.',
-                1: 'Click the button below to create a Special Event sprite with the selected slot.',
+                0: 'Let\'s resize your sprite. In order to do this, choose one of the two modes, based on the below information. Note that some choices can overlap with other settings, leading to undesired effects.',
+                1: None,  # REMOVED: 'Click the button below to create a Special Event sprite with the selected slot.',
                 2: 'Please note that there already is a resizer sprite that affects this sprite. All changes made here will apply to the entire zone/area so be careful.',
-                3: 'Slots',
-                4: 'Create',
-                5: 'Edit',
-                6: 'Nothing.',
-                7: 'A',
-                8: 'B',
+                3: 'Choose from either the Selective or Global Resizer modes:',
+                4: 'Create Resizer',
+                5: 'Update Resizer',
+                6: None,  # REMOVED: 'Nothing.',
+                7: 'Nybble 5',
+                8: 'Nybble 7',
                 9: 'Global',
-                10: 'None',
+                10: None,  # REMOVED: 'None',
                 11: 'Sprite Resizer',
+                12: 'This feature is not available for the current game patch.',
+                13: 'The Selective Resizer will resize individual sprites based on its Nybble 5 or 7 value, allowing control over which sprites are resized,[br]as well as the scale of each sprite. Choose whichever nybble is not occupied by an existing setting on this sprite.',
+                14: 'The Global Resizer will change the size of [i]every[/i] sprite that supports this feature.[br]',
+                15: 'Selective Resizer',
+                16: 'Global Resizer',
+                17: 'Global Resizer Scale:',
+                18: 'Warning: This sprite has one or more settings that overlap Nybble [id].',
+                19: 'Warning: This sprite has one or more settings that overlap both Nybbles 5 and 7.',
             },
             'SpriteUpgradeDlg': {
                 0: 'Sprite Upgrader',
                 1: 'Reggie Next has detected that the game patch\'s sprites.py file is outdated, and must be upgraded to PyQt6 in order to work correctly.[br][br]Would you like to upgrade?[br]A copy of the old file will remain in the game patch folder.',
-            }
+            },
+            'ExternalOptionDlg': {
+                0: 'Actors',
+                1: 'Models',
+                2: 'Sound Effects',
+                3: 'Graphical Effects',
+                4: 'Search:',
+            },
         }
 
     def InitFromXML(self, name):
@@ -1040,7 +1097,6 @@ class ReggieTranslation:
         """
         if name in ('', None, 'None'): return
         name = str(name)
-        MaxVer = 1.0
 
         # Parse the file
         path = os.path.join('reggiedata', 'translations', name, 'main.xml')
@@ -1059,7 +1115,6 @@ class ReggieTranslation:
         # Version
         if 'version' not in root.attrib: return False
         self.version = float(root.attrib['version'])
-        if self.version > MaxVer: return False
         # Translator
         if 'translator' not in root.attrib: return False
         self.translator = root.attrib['translator']

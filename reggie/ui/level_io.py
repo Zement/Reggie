@@ -133,7 +133,10 @@ class LevelIO:
             globals_.Dirty = False
 
             self.win.fileSavePath = fn
-            self.win.fileTitle = os.path.basename(fn)
+            if globals_.UseFullFilepath:
+                self.win.fileTitle = fn
+            else:
+                self.win.fileTitle = os.path.basename(fn)
 
         data = globals_.Level.save()
 
@@ -229,7 +232,10 @@ class LevelIO:
 
                 # Set the filepath variables
                 self.win.fileSavePath = name
-                self.win.fileTitle = os.path.basename(self.win.fileSavePath)
+                if globals_.UseFullFilepath:
+                    self.win.fileTitle = self.win.fileSavePath
+                else:
+                    self.win.fileTitle = os.path.basename(self.win.fileSavePath)
 
                 # Open the file
                 with open(self.win.fileSavePath, 'rb') as fileobj:
@@ -259,7 +265,10 @@ class LevelIO:
                     self.win.fileTitle = globals_.trans.string('WindowTitle', 0)
                 else:
                     self.win.fileSavePath = globals_.AutoSavePath
-                    self.win.fileTitle = os.path.basename(name)
+                    if globals_.UseFullFilepath:
+                        self.win.fileTitle = self.win.fileSavePath
+                    else:
+                        self.win.fileTitle = os.path.basename(name)
 
                 # Get the level data
                 levelData = globals_.AutoSaveData
@@ -402,6 +411,9 @@ class LevelIO:
         self.win.objAllTab.setTabEnabled(1, False)
         self.win.objAllTab.setTabEnabled(2, False)
         self.win.objAllTab.setTabEnabled(3, False)
+
+        self.win.actions['swapobjectstypes'].setEnabled(True)
+        self.win.actions['swapobjectstilesets'].setEnabled(True)
 
         # Reset Quick Paint Tool for new level
         if hasattr(self.win, 'qpt_palette') and self.win.qpt_palette is not None:

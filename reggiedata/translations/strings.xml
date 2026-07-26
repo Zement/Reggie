@@ -14,7 +14,7 @@
 		<string id="0">About Reggie Next</string>
 		<string id="1">[i]Reggie Next[/i] Level Editor</string>
 		<string id="2">[i]Reggie Next Level Editor[/i] is an open-source project, started by Treeki in 2010 and forked by RoadrunnerWMC in 2013, that aims to bring you the fun of designing original New Super Mario Bros. Wii[tm]-compatible levels.[br]</string>
-		<string id="3">Interested? Join the [a href="https://discord.gg/XnQJnwa"]Discord server[/a] to get in touch with the current developer(s).[br]</string>
+		<string id="3">Interested? Join the [a href="[link]"]Horizon Discord server[/a] to get in touch with the current developer(s).[br]</string>
 	</section>
 	<section id="ErrorDlg">
 		<string id="0">An unhandled exception occurred. Please report the problem in the Horizon Discord server.[br]A log will be written to "[log]"[br][br]Error information:[br]</string>
@@ -69,8 +69,8 @@
 		</stringlist>
 		<string id="34">Credits</string>
 		<string id="35">[b]Credits:[/b][br]Activates the game's Credits mode for this area</string>
-		<string id="36">Ambush</string>
-		<string id="37">[b]Ambush:[/b][br]Activates the game's Ambush mode for this area</string>
+		<string id="36">Spawn Facing Left</string>
+		<string id="37">[b]Spawn Facing Left:[/b][br]Spawns all players facing left instead of right. Enabled in all Ambush stages.</string>
 		<string id="38">Unknown Option 1</string>
 		<string id="39">[b]Unknown Option 1:[/b] We haven't managed to figure out what this does, or if it does anything. This option is turned off in most levels.</string>
 		<string id="40">Unknown Option 2</string>
@@ -82,9 +82,10 @@
 		<string id="46">Loaded Sprites</string>
 		<string id="47">Add Sprite</string>
 		<string id="48">Remove Selected Sprite</string>
-		<string id="49">Default</string>
-		<string id="50">Custom</string>
-		<string id="51">On the left is a list of sprites already present in the level. On the right, you can add more sprites you'd like to load.</string>
+		<string id="49">Present:</string>
+		<string id="50">Custom:</string>
+		<string id="51">On the left is a list of sprites already present in the level (their resources will be loaded by default). On the right, you can add more sprites you'd like to load.</string>
+		<string id="52">Type a Sprite ID...</string>
 	</section>
 	<section id="AutoSaveDlg">
 		<string id="0">Auto-saved backup found</string>
@@ -150,7 +151,7 @@
 		<string id="0">Choose the Stage folder from [game]</string>
 		<string id="1">Error</string>
 		<string id="2">This folder doesn't have all of the files from the extracted New Super Mario Bros. Wii Stage folder.</string>
-		<string id="3">This folder doesn't seem to have the required files. In order to use Reggie Next in New Super Mario Bros Wii mode, you need the Stage folder from New Super Mario Bros. Wii, including the Texture folder and the level files contained within it.</string>
+		<string id="3">This folder doesn't seem to have the required files. In order to use the [game] game patch, you need the Stage folder, including the Texture folder and the level files contained within it.</string>
 		<string id="4">Choose the Texture folder from [game]</string>
 	</section>
 	<section id="Comments">
@@ -323,7 +324,7 @@
 		<string id="17">Error</string>
 		<string id="18">An error occurred while attempting to load this game patch. It will now be unloaded. Here's the specific error:[br][error]</string>
 		<string id="19">Add a Reggie Patch Folder...</string>
-		<string id="20">Creates a symlink in the /reggiedata/patches folder using add_reggie_patch</string>
+		<string id="20">Registers an external Reggie patch folder (containing a main.xml) so it appears in the game-patch list</string>
 	</section>
 	<section id="InfoDlg">
 		<string id="0">Level Information</string>
@@ -365,6 +366,12 @@
 	<section id="MainWindow">
 		<string id="0">[unsaved]</string>
 		<string id="1">You're trying to paste over 300 items at once.[br]This may take a while (depending on your computer speed), are you sure you want to continue?</string>
+		<string id="2">Entrance Limit Reached</string>
+		<string id="3">You cannot have more than 256 entrances in an area.</string>
+		<string id="4">Max Location ID Reached</string>
+		<string id="5">You cannot have a location with an ID greater than 255. You can have multiple locations with the same ID.</string>
+		<string id="6">Path Limit Reached</string>
+		<string id="7">You cannot have more than 256 paths in an area.</string>
 	</section>
 	<section id="Menubar">
 		<string id="0">&amp;File</string>
@@ -447,9 +454,9 @@
 		<string id="69">Zoom out of the main level view</string>
 		<string id="70">Zoom to Minimum</string>
 		<string id="71">Zoom out all the way</string>
-		<string id="72">Area[br]Settings...</string>
+		<string id="72">Area Settings...</string>
 		<string id="73">Control tileset swapping, stage timer, entrance on load, and stage wrap</string>
-		<string id="74">Zone[br]Settings...</string>
+		<string id="74">Zone Settings...</string>
 		<string id="75">Zone creation, deletion, and preference editing</string>
 		<string id="76">Backgrounds...</string>
 		<string id="77">Apply backgrounds to individual zones in the current area</string>
@@ -524,9 +531,9 @@
 	</section>
 	<section id="Palette">
 		<string id="0">Paint on Layer:</string>
-		<string id="1">[b]Layer 0:[/b][br]This layer is mostly used for hidden caves, but can also be used to overlay tiles to create effects. The flashlight effect will occur if Mario walks behind a tile on layer 0 and the zone has it enabled.[br][b]Note:[/b] To switch objects on other layers to this layer, select them and then click this button while holding down the [i]Alt[/i] key.</string>
-		<string id="2">[b]Layer 1:[/b][br]All or most of your normal level objects should be placed on this layer. This is the only layer where tile interactions (solids, slopes, etc) will work.[br][b]Note:[/b] To switch objects on other layers to this layer, select them and then click this button while holding down the [i]Alt[/i] key.</string>
-		<string id="3">[b]Layer 2:[/b][br]Background/wall tiles (such as those in the hidden caves) should be placed on this layer. Tiles on layer 2 have no effect on collisions.[br][b]Note:[/b] To switch objects on other layers to this layer, select them and then click this button while holding down the [i]Alt[/i] key.</string>
+		<string id="1">[b]Layer 0:[/b][br]This layer is mostly used for hidden caves, but can also be used to overlay tiles to create effects. The flashlight effect will occur if Mario walks behind a tile on layer 0 and the zone has it enabled.[br][br]</string>
+		<string id="2">[b]Layer 1:[/b][br]All or most of your normal level objects should be placed on this layer. This is the only layer where tile interactions (solids, slopes, etc) will work.[br][br]</string>
+		<string id="3">[b]Layer 2:[/b][br]Background/wall tiles (such as those in the hidden caves) should be placed on this layer. Tiles on layer 2 have no effect on collisions.[br][br]</string>
 		<string id="4">View:</string>
 		<string id="5">Search:</string>
 		<string id="6">Set Default Properties</string>
@@ -560,6 +567,7 @@
 		<string id="34">Comments currently in this area:[br](Double-click one to jump to it instantly)</string>
 		<string id="35">Name:</string>
 		<string id="36">Change Layer</string>
+		<string id="38">[b]Note:[/b] To switch objects on other layers to this layer, select them and then click this button while holding down the [i]Alt[/i] key.</string>
 	</section>
 	<section id="PathDataEditor">
 		<string id="0">Loops:</string>
@@ -583,10 +591,10 @@
 		<string id="0">Reggie Next Preferences</string>
 		<string id="1">General</string>
 		<string id="2">Toolbar</string>
-		<string id="3">Themes</string>
+		<string id="3">Appearance</string>
 		<string id="4">[b]Reggie Preferences[/b][br]Customize Reggie Next by changing these settings.[br]Use the tabs below to view even more settings.[br]Reggie Next must be restarted before certain changes can take effect.</string>
 		<string id="5">[b]Toolbar Preferences[/b][br]Choose menu items you would like to appear on the toolbar.[br]Reggie Next must be restarted before the toolbar can be updated.[br]</string>
-		<string id="6">[b]Reggie Themes[/b][br]Pick a theme below to change application colors and icons.[br]Reggie Next must be restarted before the theme can be changed.</string>
+		<string id="6">[b]Reggie Appearance[/b][br]Customize the appearance of Reggie Next by changing these settings.[br]Reggie Next must be restarted before the theme can be changed.</string>
 		<string id="7" />
 		<string id="8" />
 		<string id="9" />
@@ -605,8 +613,8 @@
 		<string id="22">Preview</string>
 		<string id="23" />
 		<string id="24">[b]Window Style[/b][br]This changes what style Reggie's UI uses. Note that this may cause issues with certain themes.</string>
-		<string id="25">Options</string>
-		<string id="26">[b][name][/b][br]By [creator][br][description]</string>
+		<string id="25">Window Style:</string>
+		<string id="26">[b][name][/b] - Version [version][br]By [creator][br][description]</string>
 		<string id="27" />
 		<string id="28" />
 		<string id="29" />
@@ -616,22 +624,49 @@
 		<string id="33">Reset sprite data when hiding sprite fields</string>
 		<string id="34">Hide Reset Spritedata button</string>
 		<string id="35">Pad level with null bytes</string>
-		<string id="36">Fixed level size (bytes)</string>
+		<string id="36">Fixed level size (bytes):</string>
 		<string id="37">Place objects at their full size</string>
 		<string id="38">Display rectangles indicating the zone bounds</string>
 		<string id="39">Insert new path node after selected node</string>
-		<string id="40">Themes</string>
+		<string id="40">Style</string>
 		<string id="41">Theme:</string>
+		<string id="42">Interface</string>
+		<string id="45">Use Rounded Rectangles</string>
+		<string id="46">[b]Use Rounded Rectangles[/b][br]This makes the corners of sprites, entrances, and path nodes appear rounded instead of sharp.</string>
+		<string id="47">Dark Mode</string>
+		<string id="48">[b]Dark Mode[/b][br]This determines the overall color style Reggie uses, independent from the current theme.[br][br]Note that this may cause issues with certain themes.</string>
+		<string id="49">Display full filepath of opened level</string>
+		<string id="56">Keybinds</string>
+		<string id="57">[b]Configure Keybinds[/b][br]Customize the keybinds used for drop-down actions.[br]Press Backspace/Delete to clear a keybind, or hit the X button.[br]</string>
+		<string id="58">Reset All Keybinds</string>
+		<string id="59">Check for Conflicts</string>
+		<string id="60">No keybind set</string>
+		<string id="61">Reset Keybinds</string>
+		<string id="62">Are you sure you want to reset all keybinds to their default values?[br]This cannot be undone.</string>
+		<string id="63">Conflicts Found</string>
+		<string id="64">The following options were found to have conflicting keybinds:[br][conflicts][br]Reusing keybinds can cause issues, so ensure all keybinds are unique!</string>
+		<string id="65">No conflicts found.</string>
+		<string id="66">Hotbar</string>
+		<string id="67">Hotbar Slot [slot]</string>
+		<string id="68">Numpad Slot [slot]</string>
+		<string id="69">This key combination is reserved by the operating system and cannot be used.</string>
+		<string id="70">This key is reserved by the Quick Paint Tool and cannot be used.</string>
 	</section>
 	<section id="ScrShtDlg">
-		<string id="0">Choose a Screenshot source</string>
+		<string id="0">Level Screenshot</string>
 		<string id="1">Current Screen</string>
 		<string id="2">All Zones</string>
 		<string id="3">Zone [zone]</string>
-		<string id="4">Target</string>
-		<string id="5">Hide background</string>
-		<string id="6">Save image to file</string>
-		<string id="7">Copy image</string>
+		<string id="4">Target:</string>
+		<string id="5">Hide Background:</string>
+		<string id="6">Save Image to File:</string>
+		<string id="7">Copy Image:</string>
+		<string id="8">Grid Type:</string>
+		<stringlist id="9">
+			<entry>None</entry>
+			<entry>Standard</entry>
+			<entry>Checker</entry>
+		</stringlist>
 	</section>
 	<section id="ShftItmDlg">
 		<string id="0">Shift Items</string>
@@ -644,17 +679,21 @@
 	</section>
 	<section id="SwapObjTilesDlg">
 		<string id="0">Swap Objects' Tilesets</string>
-		<string id="1">From Tileset:</string>
-		<string id="2">To Tileset:</string>
+		<string id="1">From Tileset Slot:</string>
+		<string id="2">To Tileset Slot:</string>
 		<string id="3">Exchange (perform 2-way conversion)</string>
+		<string id="4">Swap</string>
+		<string id="5">Close</string>
 	</section>
 	<section id="SwapObjDlg">
 		<string id="0">Swap Objects</string>
-		<string id="1">From Object:</string>
-		<string id="2">From Tileset:</string>
+		<string id="1">Object:</string>
+		<string id="2">From Tileset Slot:</string>
 		<string id="3">To Object:</string>
-		<string id="4">To Tileset:</string>
+		<string id="4">In Tileset Slot:</string>
 		<string id="5">Exchange (perform 2-way conversion)</string>
+		<string id="6">Swap</string>
+		<string id="7">Close</string>
 	</section>
 	<section id="SpriteDataEditor">
 		<string id="0">Modify Selected Sprite Properties</string>
@@ -683,6 +722,9 @@
 		<string id="23">Sprite [id]: suggested in zone</string>
 		<string id="24" />
 		<string id="25">This sprite has the following dependencies:</string>
+		<string id="29">Next Free</string>
+		<string id="30">Sprite [id]: required resource</string>
+		<string id="31">Add to Loaded Sprites</string>
 	</section>
 	<section id="Sprites">
 		<string id="0">[b]Sprite [type]:[/b][br][name]</string>
@@ -928,6 +970,7 @@
 		<string id="104">[b]Multiplayer Upper Bounds Adjust:[/b][br]Added to the upper bounds value (regular or Lakitu) during multiplayer mode, and during the transition back to normal camera behavior after an Auto-Scrolling Controller reaches the end of its path.</string>
 		<string id="105">Multiplayer Lower Bounds Adjust:</string>
 		<string id="106">[b]Multiplayer Lower Bounds Adjust:[/b][br]Added to the lower bounds value (regular or Lakitu) during multiplayer mode, and during the transition back to normal camera behavior after an Auto-Scrolling Controller reaches the end of its path.</string>
+		<string id="107">Duplicate</string>
 	</section>
 	<section id="Zones">
 		<string id="0">Zone [num]</string>
@@ -941,5 +984,12 @@
 		<string id="5">Triggering Event ID:</string>
 		<string id="6">[b]Triggering Event ID:[/b][br]Sets the event ID that will trigger the camera profile. If switching away from a different profile, the previous profile\'s event ID will be automatically deactivated (so the game doesn\'t instantly switch back to it).</string>
 		<string id="7">Camera Profile on Event [id]</string>
+	</section>
+	<section id="ExternalOptionDlg">
+		<string id="0">Actors</string>
+		<string id="1">Models</string>
+		<string id="2">Sound Effects</string>
+		<string id="3">Graphical Effects</string>
+		<string id="4">Search:</string>
 	</section>
 </strings>

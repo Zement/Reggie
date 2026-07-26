@@ -111,18 +111,25 @@ class IntSpinBox(QtWidgets.QAbstractSpinBox):
     _value: int
     _minimum: int
     _maximum: int
+    _start: int
+    _increment: int
+    # Formatted like: ((raw value, num to display), ...)
+    _overrides: list
 
     valueChanged = QtCore.pyqtSignal('int')
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, start=0, increment=1, overrides=None):
         QtWidgets.QAbstractSpinBox.__init__(self, parent)
         self.editingFinished.connect(self.interpretText)
 
         self._value = None
         self._minimum = 0
         self._maximum = 1 << 32
+        self._start = start
+        self._increment = increment
+        self._overrides = overrides if overrides is not None else []
 
-        self.setValue(0)
+        self.setValue(self._start)
 
     def interpretText(self):
         """
@@ -132,7 +139,7 @@ class IntSpinBox(QtWidgets.QAbstractSpinBox):
         # empty string
         text = self.lineEdit().text()
         if not text:
-            text = "0"
+            text = str(self._start)
 
         self.setValue(self.valueFromText(text))
 
@@ -152,7 +159,7 @@ class IntSpinBox(QtWidgets.QAbstractSpinBox):
         # This implementation really only works well if all prefixes of numbers
         # between the minimum and maximum are themselves numbers between the
         # minimum and maximum...
-        if not self._minimum <= val <= self._maximum:
+        if not self._minimum <= val <= self._maximum and not self._start <= val <= ((self._maximum * self._increment) + self._start):
             return (QtGui.QValidator.State.Invalid, text, pos)
 
         return (QtGui.QValidator.State.Acceptable, text, pos)
@@ -163,10 +170,11 @@ class IntSpinBox(QtWidgets.QAbstractSpinBox):
         """
         flag = QtWidgets.QAbstractSpinBox.StepEnabledFlag.StepNone
 
-        if self._value < self._maximum:
-            flag |= QtWidgets.QAbstractSpinBox.StepEnabledFlag.StepUpEnabled
-        if self._minimum < self._value:
-            flag |= QtWidgets.QAbstractSpinBox.StepEnabledFlag.StepDownEnabled
+        if self._value is not None:
+            if self._value < self._maximum:
+                flag |= QtWidgets.QAbstractSpinBox.StepEnabledFlag.StepUpEnabled
+            if self._minimum < self._value:
+                flag |= QtWidgets.QAbstractSpinBox.StepEnabledFlag.StepDownEnabled
 
         return flag
 
@@ -196,7 +204,7 @@ class IntSpinBox(QtWidgets.QAbstractSpinBox):
         )
 
     def valueFromText(self, text: str) -> int:
-        return int(text)
+        return (int(text) - self._start) // self._increment
 
     def textFromValue(self, val: int) -> str:
         return str(val)
@@ -206,12 +214,27 @@ class IntSpinBox(QtWidgets.QAbstractSpinBox):
         Updates the value shown by the line edit and emits a signal when the
         value represented by the text of the line edit has changed.
         """
+        if val is None and val != 0:
+            val = self._maximum
+
         if self._value == val:
             if val == 0:
-                self.lineEdit().setText("0")
+                self.lineEdit().setText(self.textFromValue(self._start))
+
+                # Fixes a bug when reloading spritedata
+                for rawVal, dispNum in self._overrides:
+                    if val == rawVal:
+                        self.lineEdit().setText(self.textFromValue(dispNum))
             return
 
-        self.lineEdit().setText(self.textFromValue(val))
+        textVal = (val * self._increment) + self._start
+
+        # Check for any value overrides
+        for rawVal, dispNum in self._overrides:
+            if val == rawVal:
+                textVal = dispNum
+
+        self.lineEdit().setText(self.textFromValue(textVal))
         self._value = val
         self.valueChanged.emit(val)
 
@@ -679,7 +702,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
             layout.addWidget(label, row, 0, QtCore.Qt.AlignmentFlag.AlignRight)
 
             if idtype is not None:
-                next_free_button = QtWidgets.QPushButton("Next Free")
+                next_free_button = QtWidgets.QPushButton(globals_.trans.string('SpriteDataEditor', 29))
                 next_free_button.clicked.connect(self.handle_next_free)
 
                 layout.addWidget(self.widget, row, 1)
@@ -793,13 +816,13 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         Class that decodes/encodes sprite data to/from a spinbox
         """
 
-        def __init__(self, title, bit, max_, comment, required, _, comment2, commentAdv, idtype, layout, row, parent, block: int = 0):
+        def __init__(self, title, bit, max_, comment, required, _, comment2, commentAdv, start, increment, overrides, idtype, layout, row, parent, block: int = 0):
             """
             Creates the widget
             """
             super().__init__()
 
-            self.widget = IntSpinBox()
+            self.widget = IntSpinBox(None, start, increment, overrides)
             self.widget.setRange(0, max_ - 1)
             self.widget.valueChanged.connect(self.HandleValueChanged)
 
@@ -810,6 +833,8 @@ class SpriteEditorWidget(QtWidgets.QWidget):
             self.comment = comment
             self.comment2 = comment2
             self.commentAdv = commentAdv
+            self.start = start
+            self.increment = increment
             self.idtype = idtype
             self.layout = layout
             self.row = row
@@ -821,7 +846,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
             layout.addWidget(label, row, 0, QtCore.Qt.AlignmentFlag.AlignRight)
 
             if idtype is not None:
-                next_free_button = QtWidgets.QPushButton("Next Free")
+                next_free_button = QtWidgets.QPushButton(globals_.trans.string('SpriteDataEditor', 29))
                 next_free_button.clicked.connect(self.handle_next_free)
 
                 layout.addWidget(self.widget, row, 1)
@@ -1971,6 +1996,136 @@ class SpriteEditorWidget(QtWidgets.QWidget):
 
             return data
 
+    class SpriteTexPropertyDecoder(PropertyDecoder):
+        """
+        Class that decodes/encodes sprite data to/from a SpriteTex element
+        (a value spinbox paired with a list combobox). Ported from upstream
+        NSMBW-Community (field-type id 8 there); remapped to id 11 in this fork
+        to avoid colliding with the extended-spritedata field types.
+        """
+
+        def __init__(self, title, bit, model, max_, comment, required, _, comment2, commentAdv, layout, row, parent, block: int = 0):
+            """
+            Creates the widgets
+            """
+            super().__init__()
+
+            self.spinBox = IntSpinBox()
+            self.spinBox.setRange(0, max_ - 1)
+            self.spinBox.valueChanged.connect(self.HandleValueChanged)
+
+            self.comboBox = QtWidgets.QComboBox()
+            self.comboBox.setModel(model)
+            self.comboBox.currentIndexChanged.connect(self.HandleIndexChanged)
+
+            self.model = model
+
+            self.bit = bit
+            self.block = block
+            self.required = required
+            self.parent = parent
+            self.comment = comment
+            self.comment2 = comment2
+            self.commentAdv = commentAdv
+            self.layout = layout
+            self.row = row
+            self.prev_value = None
+            self.editWidget = 0  # 0 = spin box, 1 = combo box
+
+            label = QtWidgets.QLabel(title + ':')
+
+            layout.addWidget(label, row, 0, QtCore.Qt.AlignmentFlag.AlignRight)
+            layout.addWidget(self.comboBox, row, 1, 1, 1)
+            layout.addWidget(self.spinBox,  row, 2, 1, 1)
+
+            col = 3
+            if comment is not None:
+                button_com = QtWidgets.QToolButton()
+                button_com.setIcon(GetIcon('setting-comment'))
+                button_com.setStyleSheet("border-radius: 50%")
+                button_com.clicked.connect(self.ShowComment)
+                button_com.setAutoRaise(True)
+
+                layout.addWidget(button_com, row, col)
+                col += 1
+
+            if comment2 is not None:
+                button_com2 = QtWidgets.QToolButton()
+                button_com2.setIcon(GetIcon('setting-comment2'))
+                button_com2.setStyleSheet("border-radius: 50%")
+                button_com2.clicked.connect(self.ShowComment2)
+                button_com2.setAutoRaise(True)
+
+                layout.addWidget(button_com2, row, col)
+                col += 1
+
+            if commentAdv is not None:
+                button_adv = QtWidgets.QToolButton()
+                button_adv.setIcon(GetIcon('setting-comment-adv'))
+                button_adv.setStyleSheet("border-radius: 50%")
+                button_adv.clicked.connect(self.ShowAdvancedComment)
+                button_adv.setAutoRaise(True)
+
+                layout.addWidget(button_adv, row, col)
+
+        def update(self, data, first=False):
+            """
+            Updates the value shown by the widgets
+            """
+            # check if requirements are met
+            self.checkReq(data, first)
+
+            value = self.retrieve(data)
+            self.spinBox.setValue(value)
+
+            for i, x in enumerate(self.model.entries):
+                if x[0] == value:
+                    self.comboBox.setCurrentIndex(i)
+                    break
+            else:
+                self.comboBox.setCurrentIndex(-1)
+
+        def assign(self, data):
+            """
+            Assigns the selected value to the data
+            """
+            if self.editWidget == 0:
+                return self.insertvalue(data, self.spinBox.value())
+            else:
+                return self.insertvalue(data, self.model.entries[self.comboBox.currentIndex()][0])
+
+        def HandleDataChanged(self, value):
+            """
+            Handle the data changing in either widget
+            """
+            self.updateData.emit(self)
+            self.spinBox.setValue(value)
+
+            for i, x in enumerate(self.model.entries):
+                if x[0] == value:
+                    self.comboBox.setCurrentIndex(i)
+                    break
+            else:
+                self.comboBox.setPlaceholderText(str(value) + ': Undefined Entry')
+                self.comboBox.setCurrentIndex(-1)
+
+        def HandleValueChanged(self, value):
+            """
+            Handle the value changing in the spinbox
+            """
+            self.editWidget = 0
+            self.HandleDataChanged(value)
+
+        def HandleIndexChanged(self, index):
+            """
+            Handle the current index changing in the combobox
+            """
+            if index < 0:
+                return
+
+            self.editWidget = 1
+            self.HandleDataChanged(self.model.entries[index][0])
+
 
 
 
@@ -2047,8 +2202,8 @@ class SpriteEditorWidget(QtWidgets.QWidget):
 
         self.spriteLabel.setText(globals_.trans.string('SpriteDataEditor', 6, '[id]', type_, '[name]', sprite.name))
 
+        self.noteButton.setVisible(sprite.notes is not None)
         if sprite.notes is not None:
-            self.noteButton.setVisible(True)
             self.com_main.setText(sprite.notes)
             self.com_main.setVisible(True)
             self.com_more.setVisible(False)
@@ -2062,7 +2217,13 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         self.advNotes = sprite.advNotes
 
         self.relatedObjFilesButton.setVisible(sprite.relatedObjFiles is not None)
-        self.relatedObjFiles = sprite.relatedObjFiles
+        if sprite.relatedObjFiles is not None:
+            self.relatedObjFiles = sprite.relatedObjFiles
+
+            if sprite.notes is None:
+                self.com_more.setVisible(False)
+                self.com_extra.setVisible(False)
+                self.ShowRelatedObjFilesTooltip()
 
         self.asm.setVisible(sprite.asm is True)
 
@@ -2073,12 +2234,17 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         rownum = 0
 
         # (sprite id, importance level)
-        # importance level is 0 for 'required', 1 for 'suggested'
-        missing = [[], []]
+        # importance level is 0 for 'required', 1 for 'suggested', 2 for 'resource',
+        # 3 for 'suggestedresource'
+        missing = [[], [], [], []]
         cur_sprites = [s.type for s in globals_.Area.sprites]
         for dependency, importance in sprite.dependencies:
             if dependency not in cur_sprites:
-                missing[importance].append(dependency)
+                if importance == 2:
+                    if dependency not in globals_.Area.force_loaded_sprites:
+                        missing[importance].append(dependency)
+                else:
+                    missing[importance].append(dependency)
 
         # if there are missing things
         for missingSprite in missing[0]:
@@ -2108,6 +2274,33 @@ class SpriteEditorWidget(QtWidgets.QWidget):
             self.com_deplist.addWidget(addButton, rownum, 1)
             rownum += 1
 
+        for missingSprite in missing[2]:
+            name = globals_.trans.string('SpriteDataEditor', 30, '[id]', missingSprite)
+            action = globals_.trans.string('SpriteDataEditor', 31)
+            addButton = QtWidgets.QPushButton(action)
+
+            message = self.addMessage(name, level = 3, close = action)
+            callback = self.closeMessageCallback(message, self.HandleAppendToLoadList(missingSprite, addButton))
+            self.addCallbackToMessage(message, callback)
+
+            addButton.clicked.connect(callback)
+
+            self.com_deplist.addWidget(QtWidgets.QLabel(name), rownum, 0)
+            self.com_deplist.addWidget(addButton, rownum, 1)
+
+            rownum += 1
+
+        for missingSprite in missing[3]:
+            name = globals_.trans.string('SpriteDataEditor', 30, '[id]', missingSprite)
+            action = globals_.trans.string('SpriteDataEditor', 31)
+
+            addButton = QtWidgets.QPushButton(action)
+            addButton.clicked.connect(self.HandleAppendToLoadList(missingSprite, addButton))
+
+            self.com_deplist.addWidget(QtWidgets.QLabel(name), rownum, 0)
+            self.com_deplist.addWidget(addButton, rownum, 1)
+            rownum += 1
+
         # dependency notes
         self.depButton.setVisible(sprite.dependencynotes is not None)
         self.com_deplist_w.setVisible(False)
@@ -2115,6 +2308,11 @@ class SpriteEditorWidget(QtWidgets.QWidget):
 
         if sprite.dependencynotes is not None:
             self.dependencyNotes = sprite.dependencynotes
+
+            if sprite.notes is None:
+                self.com_more.setVisible(False)
+                self.com_extra.setVisible(False)
+                self.ShowDependencies()
 
         # yoshi info
         if sprite.noyoshi is True:
@@ -2154,7 +2352,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
                 nf = SpriteEditorWidget.ListPropertyDecoder(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], layout, row, self, f[-1])
 
             elif f[0] == 2:
-                nf = SpriteEditorWidget.ValuePropertyDecoder(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], layout, row, self, f[-1])
+                nf = SpriteEditorWidget.ValuePropertyDecoder(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], layout, row, self, f[-1])
 
             elif f[0] == 3:
                 nf = SpriteEditorWidget.BitfieldPropertyDecoder(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], layout, row, self, f[-1])
@@ -2185,6 +2383,9 @@ class SpriteEditorWidget(QtWidgets.QWidget):
                 if initial_data is not None:
                     block_count += len(initial_data.blocks) - f[-1]
                 nf = SpriteEditorWidget.DynamicStringPropertyDecoder(f[1], f[2], f[3], f[4], f[5], f[6], layout, row, self, f[-1], block_count = block_count)
+
+            elif f[0] == 11:
+                nf = SpriteEditorWidget.SpriteTexPropertyDecoder(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], layout, row, self, f[-1])
 
 
             nf.updateData.connect(self.HandleFieldUpdate)
@@ -2385,6 +2586,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         self.com_deplist_w.setVisible(False)
         self.com_dep.setText(globals_.trans.string('SpriteDataEditor', 18))
         self.com_dep.setVisible(self.com_deplist.count() > 0)
+        self.com_box.setVisible(True)
 
     def DependencyToggle(self):
         """
@@ -2489,6 +2691,28 @@ class SpriteEditorWidget(QtWidgets.QWidget):
 
         return placeSprite
 
+    def HandleAppendToLoadList(self, id_, button_):
+        def addToLoadList():
+            globals_.Area.force_loaded_sprites.add(id_)
+            SetDirty()
+
+            # remove this dependency, because it is now fulfilled.
+            # get row of button
+            idx = self.com_deplist.indexOf(button_)
+            row, *_ = self.com_deplist.getItemPosition(idx)
+
+            # remove this row
+            l = self.com_deplist
+            for column in range(l.columnCount()):
+                w = l.itemAtPosition(row, column)
+                if w is not None:
+                    widget = w.widget()
+                    l.removeWidget(widget)
+                    widget.setParent(None)
+
+
+        return addToLoadList
+
     def HandleSizeButtonClicked(self, e):
         """
         Handles the 'resize' button being clicked
@@ -2545,6 +2769,12 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
         # each of these functions should assign the editing thing to self.widget
         self.type = type
 
+        # Set appropriate window title
+        types = ['actors', 'models', 'sfx', 'gfx']
+        for idx, extType in enumerate(types):
+            if extType == self.type:
+                self.setWindowTitle(globals_.trans.string('ExternalOptionDlg', idx))
+
         items, order = self.loadItemsFromXML()
         self.fillWidgetFromItems(items, order)
 
@@ -2576,7 +2806,7 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
         searchbar.textEdited.connect(self.search)
 
         L = QtWidgets.QHBoxLayout()
-        L.addWidget(QtWidgets.QLabel("Search:"))
+        L.addWidget(QtWidgets.QLabel(globals_.trans.string('ExternalOptionDlg', 4)))
         L.addWidget(searchbar)
 
         search = QtWidgets.QWidget()
@@ -2839,116 +3069,162 @@ class ResizeChoiceDialog(QtWidgets.QDialog):
     """
     Dialog for the resize option.
     """
-    # TODO: Think critically about the design/behaviour/goal of this dialog
-    # TODO: Add size selector to the sprite editor
-    # TODO: Make this translatable
-
     def __init__(self, spriteid):
         """
         Initialise the dialog
         """
         QtWidgets.QDialog.__init__(self)
+        self.setWindowTitle(globals_.trans.string('ResizeChoiceDlg', 11))
+        self.setWindowIcon(GetIcon('resize'))
+
+        # Scale levels used by both Resizer modes
+        self.scaleLevels =  [1.0, 0.25, 0.5, 0.75, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0]
 
         if 0 <= spriteid < globals_.NumSprites:
             self.sprite = globals_.Sprites[spriteid]
         else:
             self.sprite = None
 
-        text = "Let's resize your sprite. In order to do this, choose one of " \
-               "the two slots, based on the below information. Note that some " \
-               "choices can overlap with other settings, leading to undesired " \
-               "effects."
-
-        text2 = "Click the button below to create a Special Event sprite with " \
-                "the selected slot."
-
-        text3 = "Please note that there already is a resizer sprite that affects " \
-                "this sprite. All changes made here will apply to the entire zone/area " \
-                "so be careful."
-
-        text4 = "More than 1 resizer is a <b>very</b> bad idea. Please don't do " \
-                "this and remove the extra resizers."
-
         ## Slots
         used = self.getNyb5And7Availability()
-        self.present = self.getSpecialEventAvailability()
+        self.present = self.checkSpecialEvent()
 
-        rows = max(len(used[5]), len(used[7]), 1)
-
+        # Setup buttons
         self.buttongroup = QtWidgets.QButtonGroup()
         self.radio1 = QtWidgets.QRadioButton()
         self.buttongroup.addButton(self.radio1, 0)
         self.radio2 = QtWidgets.QRadioButton()
         self.buttongroup.addButton(self.radio2, 1)
         self.radio3 = QtWidgets.QRadioButton()
-        self.buttongroup.addButton(self.radio3, -1)
+        self.buttongroup.addButton(self.radio3, 2)
+        self.buttongroup.buttonClicked.connect(self.toggleGlbResizerScale)
 
-        header = QtWidgets.QLabel("Slots")
-        footer = QtWidgets.QLabel(text2)
+        a_label = QtWidgets.QLabel(globals_.trans.string('ResizeChoiceDlg', 7))
+        b_label = QtWidgets.QLabel(globals_.trans.string('ResizeChoiceDlg', 8))
+        g_label = QtWidgets.QLabel(globals_.trans.string('ResizeChoiceDlg', 9))
 
-        if not self.present:
-            label = "Create"
-        elif len(self.present) == 1:
-            label = "Edit"
-        else:
-            label = "Nothing."
+        selDesc = QtWidgets.QLabel(globals_.trans.string('ResizeChoiceDlg', 13))
+        glbDesc = QtWidgets.QLabel(globals_.trans.string('ResizeChoiceDlg', 14))
 
-        createButton = QtWidgets.QPushButton(label)
-        createButton.clicked.connect(self.doAThing)
+        # Display a warning if this sprite has settings on Nybbles 5 or 7
+        isDispWarning = True
+        warnLabel = QtWidgets.QLabel('')
+        warnLabel.setStyleSheet("color: orange;")
 
-        a_label = QtWidgets.QLabel("A")
-        b_label = QtWidgets.QLabel("B")
-        g_label = QtWidgets.QLabel("Global")
+        # Check if there are conflicts
+        if len(used[5]) != 0 and len(used[7]) != 0: # Both are occupied
+            warnLabel.setText(globals_.trans.string('ResizeChoiceDlg', 19))
+            warnLabel.setStyleSheet("color: red;")
+        elif len(used[5]) != 0: # Only 5
+            warnLabel.setText(globals_.trans.string('ResizeChoiceDlg', 18, '[id]', 5))
+        elif len(used[7]) != 0: # Only 7
+            warnLabel.setText(globals_.trans.string('ResizeChoiceDlg', 18, '[id]', 7))
+        else: # Both are available
+            isDispWarning = False
+
+        selectiveBox = QtWidgets.QGroupBox(globals_.trans.string('ResizeChoiceDlg', 15))
+        selLyt = QtWidgets.QGridLayout()
+        selLyt.addWidget(selDesc,     0, 0, 1, 2, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        selLyt.addWidget(a_label,     1, 0, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        selLyt.addWidget(self.radio1, 2, 0, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        selLyt.addWidget(b_label,     1, 1, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        selLyt.addWidget(self.radio2, 2, 1, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        if isDispWarning:
+            selLyt.addWidget(warnLabel, 3, 0, 1, 2, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        selectiveBox.setLayout(selLyt)
+
+        globalBox = QtWidgets.QGroupBox(globals_.trans.string('ResizeChoiceDlg', 16))
+        glbLyt = QtWidgets.QGridLayout()
+        glbLyt.addWidget(glbDesc,     0, 0, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        glbLyt.addWidget(g_label,     1, 0, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        glbLyt.addWidget(self.radio3, 2, 0, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        if isDispWarning: # Alignment so this looks better
+            glbLyt.addWidget(QtWidgets.QLabel(''), 3, 0, 1, 2, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        globalBox.setLayout(glbLyt)
+
+        # Global Resizer scale
+        sliderLabel = QtWidgets.QLabel(globals_.trans.string('ResizeChoiceDlg', 17))
+        self.sliderVal = QtWidgets.QLabel('x' + str(self.scaleLevels[0]))
+
+        self.slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.slider.setMaximumHeight(20)
+        self.slider.setMinimum(0)
+        self.slider.setMaximum(len(self.scaleLevels) - 1)
+        self.slider.setTickInterval(2)
+        self.slider.setTickPosition(self.slider.TickPosition.TicksAbove)
+        self.slider.setPageStep(1)
+        self.slider.setTracking(True)
+        self.slider.setSliderPosition(0)
+        self.slider.valueChanged.connect(self.sliderMoved)
+        if self.present:
+            self.slider.setValue(self.getGlobalScale())
+
+        glbSclLyt = QtWidgets.QHBoxLayout()
+        glbSclLyt.addWidget(sliderLabel)
+        glbSclLyt.addWidget(self.slider)
+        glbSclLyt.addWidget(self.sliderVal)
+
+        # This allows us to toggle the entire thing
+        self.glbScaleWidget = QtWidgets.QWidget()
+        self.glbScaleWidget.setLayout(glbSclLyt)
+        self.glbScaleWidget.setEnabled(False)
 
         slotsLayout = QtWidgets.QGridLayout()
         slotsLayout.setContentsMargins(0, 0, 0, 0)
-        slotsLayout.addWidget(header,      0, 0, 1, 3, QtCore.Qt.AlignmentFlag.AlignHCenter)
-        slotsLayout.addWidget(a_label,     1, 0, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
-        slotsLayout.addWidget(self.radio1, 2, 0, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
-        slotsLayout.addWidget(b_label,     1, 1, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
-        slotsLayout.addWidget(self.radio2, 2, 1, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
-        slotsLayout.addWidget(g_label,     1, 2, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
-        slotsLayout.addWidget(self.radio3, 2, 2, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        slotsLayout.addWidget(selectiveBox,        0, 0, 1, 2, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        slotsLayout.addWidget(globalBox,           0, 2, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        slotsLayout.addWidget(self.glbScaleWidget, 1, 0, 1, 3)
 
-        if len(used[5]) == 0:
-            slotsLayout.addWidget(QtWidgets.QLabel("None"), 3, 0, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
-        else:
-            for offset, conflict in enumerate(used[5]):
-                slotsLayout.addWidget(QtWidgets.QLabel(conflict[1]), 3 + offset, 0, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        # Auto-select the relevant button
+        if self.present:
+            # Select our current resizer type
 
-        if len(used[7]) == 0:
-            slotsLayout.addWidget(QtWidgets.QLabel("None"), 3, 1, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
-        else:
-            for offset, conflict in enumerate(used[7]):
-                slotsLayout.addWidget(QtWidgets.QLabel(conflict[1]), 3 + offset, 1, 1, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
-
-        slotsLayout.addWidget(footer,       4 + rows, 0, 1, 3)
-        slotsLayout.addWidget(createButton, 5 + rows, 0, 1, 3, QtCore.Qt.AlignmentFlag.AlignHCenter)
-
-        # Proposing the best option
-        # Maybe change this to set the option that is already applied?
-        if len(used[5]) <= len(used[7]):
+            # Just in case we can't find it for whatever reason
             self.radio1.setChecked(True)
+
+            for type, sprite in self.present:
+                if sprite.type != self._getSpecialEventID():
+                    continue
+
+                type = sprite.spritedata[5] & 0xF
+                if type == 5:
+                    self.radio3.setChecked(True)
+                    self.glbScaleWidget.setEnabled(True)
+                elif type == 6:
+                    if (sprite.spritedata[5] >> 4) != 0:
+                        self.radio2.setChecked(True)
+                    else:
+                        self.radio1.setChecked(True)
         else:
-            self.radio2.setChecked(True)
+            # Offer the user the 'best' option in this case
+            if len(used[5]) != 0 and len(used[7]) != 0:
+                self.radio3.setChecked(True)
+                self.glbScaleWidget.setEnabled(True)
+            elif len(used[5]) <= len(used[7]):
+                self.radio1.setChecked(True)
+            else:
+                self.radio2.setChecked(True)
+        
+        # Action button (does the create/update behavior)
+        if not self.present:
+            btnText = globals_.trans.string('ResizeChoiceDlg', 4)
+        else:
+            btnText = globals_.trans.string('ResizeChoiceDlg', 5)
 
-        # create layout
-        buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        spriteButton = QtWidgets.QPushButton(btnText)
+        spriteButton.clicked.connect(self.handleResizer)
 
-        buttonBox.accepted.connect(self.accept)
+        # Create layout
+        buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
         buttonBox.rejected.connect(self.reject)
+        buttonBox.addButton(spriteButton, QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole)
 
         mainLayout = QtWidgets.QVBoxLayout()
-        mainLayout.addWidget(QtWidgets.QLabel(text))
+        mainLayout.addWidget(QtWidgets.QLabel(globals_.trans.string('ResizeChoiceDlg', 0)))
 
+        # Warn the user if a Special Event exists
         if self.present:
-            mainLayout.addWidget(QtWidgets.QLabel(text3))
-            # Display sprite information properly
-            sprite_info = []
-            for type_val, sprite in self.present:
-                sprite_type_name = "Global" if type_val == 2 else f"Slot {type_val}"
-                sprite_info.append(f"Sprite {sprite.type} ({sprite_type_name})")
-            mainLayout.addWidget(QtWidgets.QLabel(", ".join(sprite_info)))
+            mainLayout.addWidget(QtWidgets.QLabel(globals_.trans.string('ResizeChoiceDlg', 2)))
 
         mainLayout.addLayout(slotsLayout)
         mainLayout.addWidget(buttonBox, 0, QtCore.Qt.AlignmentFlag.AlignBottom)
@@ -2957,7 +3233,7 @@ class ResizeChoiceDialog(QtWidgets.QDialog):
 
     def getNyb5And7Availability(self):
         """
-        Gets whether nybble 5 or 7 or both or none is free.
+        Gets whether nybbles 5 or 7 (or both/none) are occupied by spritedata or not
         """
         nyb5 = (17, 21) # excludes end
         nyb7 = (25, 29)
@@ -2998,30 +3274,20 @@ class ResizeChoiceDialog(QtWidgets.QDialog):
 
         return found
 
-    def getSpecialEventAvailability(self):
+    def checkSpecialEvent(self):
         """
-        Find Special Event [246] and then check if it has resize set.
+        Find Special Event and then check if it has resize set.
         Returns a list of (slot, sprite) pairs, where slot = 2 means it is a global
         resize.
         """
-        # Get special event sprite ID from plugin or use default
-        special_event_id = 246
-        if is_enabled(SPECIAL_EVENT_SPRITE):
-            # Search for sprite with name "Special Event"
-            for sprite_id, sprite_data in enumerate(globals_.Sprites):
-                if sprite_data is not None and sprite_data.name == "Special Event":
-                    special_event_id = sprite_id
-                    break
-        
         slots = []
         for sprite in globals_.Area.sprites:
-            if sprite.type != special_event_id:
+            if sprite.type != self._getSpecialEventID():
                 continue
 
             type = sprite.spritedata[5] & 0xF
-
             if type == 5:
-                # Resizer
+                # Global resizer
                 slots.append((2, sprite))
             elif type == 6:
                 # Selective resizer
@@ -3030,65 +3296,93 @@ class ResizeChoiceDialog(QtWidgets.QDialog):
 
         return slots
 
-    def doAThing(self):
+    def handleResizer(self):
         """
         Either places a new special event or changes the old one.
         """
-        slot = self.buttongroup.checkedId()
-
-        thing = []
-        for type, sprite in self.present:
-            if slot == -1 and type == 2:
-                thing.append(sprite)
-
-            elif not (slot == -1 or type == 2):
-                thing.append(sprite)
-
-        if not thing:
-            self.placeSpecialResizeEvent()
-        elif len(thing) == 1:
-            self.editSpecialResizeEvent(thing[0])
+        if not self.present:
+            self.createResizer()
         else:
-            # TODO: figure out what to do here
-            ...
+            for type, sprite in self.present:
+                if sprite.type == self._getSpecialEventID():
+                    self.editResizer(sprite)
+                    break
 
         return self.accept()
 
-    def editSpecialResizeEvent(self, sprite):
+    def editResizer(self, sprite):
+        """
+        Updates the existing Special Event
+        """
         data = list(sprite.spritedata)
 
         slot = self.buttongroup.checkedId()
-        if slot == -1:
-            # global
-            data[5] = (data[5] & 0xF0) | 5
-        else:
-            # only slot
+        if slot == 2: # global
+            data[5] = (self.slider.value() << 4) | 5
+        else: # only slot
             data[5] = (slot << 4) | 6
 
         sprite.spritedata = bytes(data)
 
-    def placeSpecialResizeEvent(self):
+    def createResizer(self):
         """
-        Places a Special Event [246] and sets the settings so the correct slot.
+        Places a Special Event and sets the settings so the correct slot.
         """
         slot = self.buttongroup.checkedId()
+        size = self.slider.value()
         data = bytearray(8)
-        if slot == -1:
-            data[5] = 5
-        else:
-            data[5] = (slot << 4) | 6
+
+        if slot == 2: # Global
+            data[5] = (size << 4) | 5
+        else: # Selective
+            data[5] = (slot << 4) | 6 
 
         x = globals_.mainWindow.selObj.objx + 16
         y = globals_.mainWindow.selObj.objy
-        
-        # Get special event sprite ID from plugin or use default
+        special_event_id = self._getSpecialEventID()
+
+        if globals_.mainWindow.CreateSprite(x, y, special_event_id, RawData(bytes(data), format = RawData.Format.Vanilla)) is not None:
+            globals_.mainWindow.scene.update()
+
+    def _getSpecialEventID(self):
+        """
+        Returns the Special Event sprite ID. When the special-event patch plugin is
+        enabled it is looked up by the "Special Event" sprite name; otherwise it
+        falls back to the retail ID (246).
+        """
         special_event_id = 246
         if is_enabled(SPECIAL_EVENT_SPRITE):
-            # Search for sprite with name "Special Event"
             for sprite_id, sprite_data in enumerate(globals_.Sprites):
                 if sprite_data is not None and sprite_data.name == "Special Event":
                     special_event_id = sprite_id
                     break
+        return special_event_id
 
-        if globals_.mainWindow.CreateSprite(x, y, special_event_id, RawData(data, format = RawData.Format.Vanilla)) is not None:
-            globals_.mainWindow.scene.update()
+    def getGlobalScale(self):
+        """
+        Get the scale for the Global Resizer
+        """
+        for sprite in globals_.Area.sprites:
+            if sprite.type != self._getSpecialEventID():
+                continue
+
+            type = sprite.spritedata[5] & 0xF
+            if type == 5:
+                return (sprite.spritedata[5] >> 4)
+            else:
+                return 0
+
+    def sliderMoved(self):
+        """
+        Handle the slider being moved
+        """
+        self.sliderVal.setText('x' + str(self.scaleLevels[self.slider.value()]))
+
+    def toggleGlbResizerScale(self, button):
+        """
+        Toggles the global resizer scale
+        """
+        if not button.isEnabled():
+            return
+
+        self.glbScaleWidget.setEnabled(self.buttongroup.id(button) == 2)

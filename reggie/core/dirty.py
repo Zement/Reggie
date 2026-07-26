@@ -42,6 +42,9 @@ def _get_group_for_setting(name):
     # Check for dynamic patterns
     if name.startswith(('StageGamePath_', 'TextureGamePath_', 'LastLevel_', 'PatchPath_')):
         return 'GamePaths'
+
+    if name.startswith('Keybind_'):
+        return 'Keybinds'
     
     # Default to Main (not General to avoid %General encoding)
     return 'Main'
@@ -155,6 +158,21 @@ def setSetting(name, value):
     else:
         full_key = f"{group}/{name}"
         globals_.settings.setValue(full_key, value)
+
+
+def delSetting(name):
+    """
+    Thin wrapper around QSettings, removes a setting from its group
+    """
+    assert isinstance(name, str)
+
+    group = _get_group_for_setting(name)
+    if group is None:
+        globals_.settings.remove(name)
+    else:
+        globals_.settings.remove(f"{group}/{name}")
+        # Also remove any stale ungrouped copy (backwards compatibility)
+        globals_.settings.remove(name)
 
 
 def ensureSettingsVisible():

@@ -21,7 +21,7 @@ from PyQt6 import QtCore, QtWidgets
 
 from reggie.core import globals_
 from reggie.core.dirty import SetDirty
-from reggie.core.levelitems import ObjectItem, SpriteItem
+from reggie.core.levelitems import ObjectItem, SpriteItem, EntranceItem, LocationItem, PathItem, Path
 from reggie.core.raw_data import RawData
 
 
@@ -48,35 +48,48 @@ class ClipboardController:
                 self.win.clipboard = None
                 self.win.actions['paste'].setEnabled(False)
 
-    def Cut(self):
+    def CopyOrCut(self, cutAction):
         """
-        Cuts the selected items
+        Copies or cuts the selected items (objects, sprites, entrances,
+        locations and path nodes)
         """
-        self.win.SelectionUpdateFlag = True
         selitems = self.win.scene.selectedItems()
-        self.win.scene.clearSelection()
+        if cutAction:
+            self.win.SelectionUpdateFlag = True
+            self.win.scene.clearSelection()
 
         if selitems:
             clipboard_o = []
             clipboard_s = []
+            clipboard_e = []
+            clipboard_l = []
+            clipboard_p = []
             ii = isinstance
-            type_obj = ObjectItem
-            type_spr = SpriteItem
 
             to_be_deleted = []
             for obj in selitems:
-                if ii(obj, type_obj):
-                    to_be_deleted.append(obj)
+                if ii(obj, ObjectItem):
                     clipboard_o.append(obj)
-                elif ii(obj, type_spr):
-                    to_be_deleted.append(obj)
+                elif ii(obj, SpriteItem):
                     clipboard_s.append(obj)
+                elif ii(obj, EntranceItem):
+                    clipboard_e.append(obj)
+                elif ii(obj, LocationItem):
+                    clipboard_l.append(obj)
+                elif ii(obj, PathItem):
+                    clipboard_p.append(obj)
+                else:
+                    continue
 
-            if clipboard_o or clipboard_s:
-                SetDirty()
-                self.win.actions['cut'].setEnabled(False)
+                if cutAction:
+                    to_be_deleted.append(obj)
+
+            if clipboard_o or clipboard_s or clipboard_e or clipboard_l or clipboard_p:
+                if cutAction:
+                    SetDirty()
+                    self.win.actions['cut'].setEnabled(False)
                 self.win.actions['paste'].setEnabled(True)
-                self.win.clipboard = self.encodeObjects(clipboard_o, clipboard_s)
+                self.win.clipboard = self.encodeObjects(clipboard_o, clipboard_s, clipboard_e, clipboard_l, clipboard_p)
                 self.win.systemClipboard.setText(self.win.clipboard)
 
             for obj in to_be_deleted:
@@ -84,32 +97,22 @@ class ClipboardController:
                 obj.setSelected(False)
                 self.win.scene.removeItem(obj)
 
-        self.win.levelOverview.update()
-        self.win.SelectionUpdateFlag = False
-        self.win.ChangeSelectionHandler()
+        if cutAction:
+            self.win.levelOverview.update()
+            self.win.SelectionUpdateFlag = False
+            self.win.ChangeSelectionHandler()
+
+    def Cut(self):
+        """
+        Cuts the selected items
+        """
+        self.CopyOrCut(True)
 
     def Copy(self):
         """
         Copies the selected items
         """
-        selitems = self.win.scene.selectedItems()
-        if selitems:
-            clipboard_o = []
-            clipboard_s = []
-            ii = isinstance
-            type_obj = ObjectItem
-            type_spr = SpriteItem
-
-            for obj in selitems:
-                if ii(obj, type_obj):
-                    clipboard_o.append(obj)
-                elif ii(obj, type_spr):
-                    clipboard_s.append(obj)
-
-            if clipboard_o or clipboard_s:
-                self.win.actions['paste'].setEnabled(True)
-                self.win.clipboard = self.encodeObjects(clipboard_o, clipboard_s)
-                self.win.systemClipboard.setText(self.win.clipboard)
+        self.CopyOrCut(False)
 
     def Paste(self):
         """
@@ -118,9 +121,9 @@ class ClipboardController:
         if self.win.clipboard is not None:
             self.placeEncodedObjects(self.win.clipboard)
 
-    def encodeObjects(self, clipboard_o, clipboard_s):
+    def encodeObjects(self, clipboard_o, clipboard_s, clipboard_e=None, clipboard_l=None, clipboard_p=None):
         """
-        Encode a set of objects and sprites into a string
+        Encode a set of level items into a string
         """
         convclip = ['ReggieClip']
 
@@ -153,6 +156,42 @@ class ClipboardController:
             clip_string = '1:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d' % (item.type, item.objx, item.objy, data[0], data[1], data[2], data[3], data[4], data[5], data[7])
             convclip.append(clip_string + extended_string)
 
+        # Entrances
+        if clipboard_e is not None:
+            for item in clipboard_e:
+                convclip.append('2:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d' % (
+                item.objx, item.objy, item.entid, item.destarea, item.destentrance, item.enttype, item.entzone,
+                item.entsettings, item.entlayer, item.entpath, item.leave_level, item.cpdirection))
+
+        # Locations
+        if clipboard_l is not None:
+            for item in clipboard_l:
+                convclip.append('3:%d:%d:%d:%d:%d' % (
+                item.id, item.objx, item.objy, item.width, item.height))
+
+        # Path Nodes
+        if clipboard_p is not None:
+            clipboard_p.sort(key=lambda x: (x.pathid, x.nodeid))
+
+            currPathID = None
+            for item in clipboard_p:
+                # Get parent path
+                path = None
+                for p in globals_.Area.paths:
+                    if item.pathid == p._id:
+                        path = p
+                        break
+
+                # Append a path object when the path changes
+                if currPathID != item.pathid and path is not None:
+                    convclip.append('4:%d:%d' % (path._id, path._loops))
+                    currPathID = item.pathid
+
+                if path is not None:
+                    x, y, speed, accel, delay = path.get_node_data(item.nodeid)
+                    convclip.append('5:%d:%d:%d:%d:%f:%f:%d' % (
+                    item.pathid, item.nodeid, x, y, speed, accel, delay))
+
         convclip.append('%')
         return '|'.join(convclip)
 
@@ -182,7 +221,7 @@ class ClipboardController:
 
         globals_.OverrideSnapping = True
 
-        layers, sprites = self.getEncodedObjects(encoded)
+        layers, sprites, entrances, locations, paths, path_nodes = self.getEncodedObjects(encoded)
 
         # Find the bounding box of all created objects
         bounding = QtCore.QRectF()
@@ -193,6 +232,15 @@ class ClipboardController:
         for layer in layers:
             for obj in layer:
                 bounding |= obj.LevelRect
+
+        for ent in entrances:
+            bounding |= ent.LevelRect
+
+        for loc in locations:
+            bounding |= loc.LevelRect
+
+        for node in path_nodes:
+            bounding |= node.LevelRect
 
         x1, y1, width, height = bounding.getRect()
 
@@ -229,6 +277,20 @@ class ClipboardController:
                 item.UpdateRects()
                 if select: item.setSelected(True)
 
+        for item in entrances:
+            item.setPos((item.objx + xpixeloffset) * 1.5, (item.objy + ypixeloffset) * 1.5)
+            item.UpdateRects()
+            if select: item.setSelected(True)
+
+        for item in locations:
+            item.setPos((item.objx + xpixeloffset) * 1.5, (item.objy + ypixeloffset) * 1.5)
+            item.UpdateRects()
+            if select: item.setSelected(True)
+
+        for item in path_nodes:
+            item.setPos((item.objx + xpixeloffset) * 1.5, (item.objy + ypixeloffset) * 1.5)
+            if select: item.setSelected(True)
+
         globals_.OverrideSnapping = False
 
         self.win.levelOverview.update()
@@ -236,8 +298,8 @@ class ClipboardController:
         self.win.SelectionUpdateFlag = False
         self.win.ChangeSelectionHandler()
 
-        # Combine the sprites and layers
-        added = sprites
+        # Combine everything that was added
+        added = sprites + entrances + locations + paths + path_nodes
         for layer in layers:
             added += layer
 
@@ -250,9 +312,13 @@ class ClipboardController:
 
         layers = ([], [], [])
         sprites = []
+        entrances = []
+        locations = []
+        paths = []
+        path_nodes = []
 
         if not (encoded.startswith('ReggieClip|') and encoded.endswith('|%')):
-            return layers, sprites
+            return layers, sprites, entrances, locations, paths, path_nodes
 
         clip = encoded[11:-2].split('|')
 
@@ -310,10 +376,104 @@ class ClipboardController:
                         )
                         sprites.append(newitem)
 
+                elif split[0] == '2':
+                    # entrance
+                    if len(split) != 13: continue
+
+                    objx = int(split[1])
+                    objy = int(split[2])
+                    entID = int(split[3])
+                    destArea = int(split[4])
+                    destEnt = int(split[5])
+                    entType = int(split[6])
+                    zone = int(split[7])
+                    settings = int(split[8])
+                    layer = int(split[9])
+                    path = int(split[10])
+                    exitLvl = int(split[11])
+                    cPipeDir = int(split[12])
+
+                    # Sanity check data
+                    if destArea < 0 or destArea > 4: continue
+                    if destEnt < 0 or destEnt > 255: continue
+                    if entType < 0 or entType >= len(globals_.EntranceTypeNames): continue
+                    if layer < 0 or layer > 2: continue
+                    if path < 0 or path > 255: continue
+                    if cPipeDir < 0 or cPipeDir > 3: continue
+
+                    newitem = self.win.CreateEntrance(objx, objy, entID, allow_dupe_id=True)
+                    if newitem is None: continue
+
+                    # Set entrance data
+                    newitem.destarea = destArea
+                    newitem.destentrance = destEnt
+                    newitem.enttype = entType
+                    newitem.entzone = zone
+                    newitem.entsettings = settings
+                    newitem.entlayer = layer
+                    newitem.entpath = path
+                    newitem.leave_level = exitLvl != 0
+                    newitem.cpdirection = cPipeDir
+
+                    # Update it
+                    newitem.TypeChange()
+                    newitem.UpdateTooltip()
+                    newitem.UpdateListItem(True)
+
+                    entrances.append(newitem)
+
+                elif split[0] == '3':
+                    # location
+                    if len(split) != 6: continue
+
+                    locID = int(split[1])
+                    objx = int(split[2])
+                    objy = int(split[3])
+                    width = int(split[4])
+                    height = int(split[5])
+
+                    newitem = self.win.CreateLocation(objx, objy, width, height, locID)
+                    if newitem is None: continue
+                    locations.append(newitem)
+
+                elif split[0] == '4':
+                    # path
+                    if len(split) != 3: continue
+
+                    pathID = int(split[1])
+                    loops = int(split[2])
+
+                    path = Path(pathID, globals_.mainWindow.scene, loops)
+                    globals_.Area.paths.append(path)
+                    paths.append(path)
+
+                elif split[0] == '5':
+                    # path node
+                    if len(split) != 8: continue
+
+                    pathID = int(split[1])
+                    nodeID = int(split[2])
+                    objx = int(split[3])
+                    objy = int(split[4])
+                    speed = float(split[5])
+                    accel = float(split[6])
+                    delay = int(split[7])
+
+                    # Make sure the clip has the parent path
+                    if paths:
+                        path = paths[0]
+                        for p in paths:
+                            if pathID == p._id:
+                                path = p
+                                break
+
+                        node = path.add_node(objx, objy, speed, accel, delay, nodeID)
+                        path_nodes.append(node)
+
             except ValueError:
                 # an int() probably failed somewhere
                 pass
 
         self.win.spriteList.endBatchAdd()
 
-        return layers, sprites
+        return layers, sprites, entrances, locations, paths, path_nodes
