@@ -1303,6 +1303,7 @@ class RecentFilesMenu(QtWidgets.QMenu):
         """
         QtWidgets.QMenu.__init__(self)
         self.setMinimumWidth(192)
+        self.setToolTipsVisible(True)
 
         # Here's how this works:
         # - Upon startup, RecentFiles is obtained from QSettings and put into self.FileList

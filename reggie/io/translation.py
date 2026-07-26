@@ -687,14 +687,20 @@ class ReggieTranslation:
                 42: 'Interface',
             },
             'ScrShtDlg': {
-                0: 'Choose a Screenshot source',
+                0: 'Level Screenshot',
                 1: 'Current Screen',
                 2: 'All Zones',
                 3: 'Zone [zone]',
-                4: 'Target',
-                5: 'Hide background',
-                6: 'Save image to file',
-                7: 'Copy image',
+                4: 'Target:',
+                5: 'Hide Background:',
+                6: 'Save Image to File:',
+                7: 'Copy Image:',
+                8: 'Grid Type:',
+                9: (
+                    'None',
+                    'Standard',
+                    'Checker',
+                ),
             },
             'ShftItmDlg': {
                 0: 'Shift Items',
@@ -1059,7 +1065,6 @@ class ReggieTranslation:
         """
         if name in ('', None, 'None'): return
         name = str(name)
-        MaxVer = 1.0
 
         # Parse the file
         path = os.path.join('reggiedata', 'translations', name, 'main.xml')
@@ -1078,7 +1083,6 @@ class ReggieTranslation:
         # Version
         if 'version' not in root.attrib: return False
         self.version = float(root.attrib['version'])
-        if self.version > MaxVer: return False
         # Translator
         if 'translator' not in root.attrib: return False
         self.translator = root.attrib['translator']

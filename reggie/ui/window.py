@@ -2820,8 +2820,14 @@ class ReggieWindow(QtWidgets.QMainWindow):
             return
 
         screenshot_type = dlg.zoneCombo.currentIndex()
+        grid_type = dlg.gridCombo.currentIndex()
         hide_background = dlg.hide_background.isChecked()
         do_save = dlg.save_img.isChecked()
+
+        grid_type_list = [None, 'grid', 'checker']
+        gt = globals_.GridType
+        globals_.GridType = grid_type_list[grid_type]
+        self.scene.update()
 
         if do_save:
             fn = QtWidgets.QFileDialog.getSaveFileName(self,
@@ -2883,6 +2889,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
             ss_img.save(fn, 'PNG', 50)
         else:
             globals_.app.clipboard().setImage(ss_img)
+
+        # Restore the grid type
+        globals_.GridType = gt
+        self.scene.update()
 
     @staticmethod
     def HandleDiagnostics():
