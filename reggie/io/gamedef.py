@@ -30,6 +30,7 @@ class GameDefViewer(QtWidgets.QWidget):
         self.imgLabel.setPixmap(GetIcon('sprites', False).pixmap(16, 16))
         self.versionLabel = QtWidgets.QLabel()
         self.titleLabel = QtWidgets.QLabel()
+        self.titleLabel.setWordWrap(True)
         self.descLabel = QtWidgets.QLabel()
         self.descLabel.setWordWrap(True)
         self.descLabel.setMinimumHeight(40)
@@ -49,6 +50,7 @@ class GameDefViewer(QtWidgets.QWidget):
         main.addLayout(right)
         main.setStretch(2, 1)
         self.setLayout(main)
+        self.setMinimumWidth(235)
         self.setMaximumWidth(256 + 64)
 
         self.updateLabels()
@@ -269,11 +271,12 @@ class ReggieGameDefinition:
         if name in NoneTypes:
             return
 
-        try:
-            self.InitFromName(name, custom_path)
-        except Exception:
+        # If the named patch is no longer present, fall back to the retail
+        # gamedef and forget the missing LastGameDef instead of crashing.
+        result = self.InitFromName(name, custom_path)
+        if not result:
             self.InitAsEmpty()
-            raise
+            setSetting('LastGameDef', None)
 
     def InitAsEmpty(self):
         """
@@ -334,8 +337,11 @@ class ReggieGameDefinition:
             if custom_setting_path and os.path.isfile(os.path.join(custom_setting_path, "main.xml")):
                 path = os.path.join(custom_setting_path, "main.xml")
                 self.custom_patch_path = custom_setting_path
-        
-        tree = etree.parse(path)
+
+        try:
+            tree = etree.parse(path)
+        except FileNotFoundError:
+            return False
         root = tree.getroot()
 
         # Add the attributes of root: name, description and version.
@@ -348,6 +354,7 @@ class ReggieGameDefinition:
         default = globals_.trans.string('Gamedefs', 15)
         self.description = root.get('description', default).replace('[', '<').replace(']', '>')
         self.version = root.get('version')
+        return True
 
     def __init2__(self):
         """
@@ -371,8 +378,11 @@ class ReggieGameDefinition:
             else:
                 addpath = os.path.join("reggiedata", "patches", self.gamepath)
                 path = os.path.join(addpath, "main.xml")
-            
-        tree = etree.parse(path)
+
+        try:
+            tree = etree.parse(path)
+        except FileNotFoundError:
+            return
         root = tree.getroot()
 
         self.base = None
