@@ -1303,8 +1303,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
             globals_.scalingManager.applyScaling()
 
         # Get the theme settings
-        setSetting('Theme', dlg.themesTab.themeBox.currentText())
-        setSetting('uiStyle', dlg.themesTab.NonWinStyle.currentText())
+        setSetting('Theme', dlg.appearanceTab.themeBox.currentText())
+        setSetting('uiStyle', dlg.appearanceTab.NonWinStyle.currentText())
 
         # Warn the user that they may need to restart
         QtWidgets.QMessageBox.warning(None, globals_.trans.string('PrefsDlg', 0), globals_.trans.string('PrefsDlg', 30))

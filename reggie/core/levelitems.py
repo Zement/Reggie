@@ -3251,7 +3251,10 @@ class CommentItem(LevelEditorItem):
             p.setWidth(3)
             painter.setPen(p)
 
-        painter.drawEllipse(self.Circle)
+        if globals_.theme.useRoundedRectangles:
+            painter.drawEllipse(self.Circle)
+        else:
+            painter.drawRect(self.Circle)
         if not self.isSelected(): painter.setOpacity(.5)
         painter.drawPixmap(4, 4, GetIcon('comments', 24).pixmap(24, 24))
         painter.setOpacity(1)

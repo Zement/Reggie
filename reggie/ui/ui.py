@@ -50,7 +50,6 @@ class ReggieTheme:
         self.forceUiColor = False
         self.forceStyleSheet = False
         self.useRoundedRectangles = True
-        self.overridesFile = os.path.join('reggiedata', 'overrides.png')
 
         # Don't create colors dict yet - do it lazily
         self._colors = None
@@ -121,7 +120,12 @@ class ReggieTheme:
         """
         folder = os.path.join('reggiedata', 'themes', folder)
 
-        fileList = os.listdir(folder)
+        try:
+            fileList = os.listdir(folder)
+        except FileNotFoundError:
+            # Return if the theme cannot be found
+            # (default theme is already inited)
+            return
 
         # Create a XML ElementTree
         maintree = ElementTree.parse(os.path.join(folder, 'main.xml'))
@@ -169,30 +173,6 @@ class ReggieTheme:
                     ico = QtGui.QIcon(pix)
 
                     cache[iconname] = ico
-            elif node.tag.lower() == 'overrides':
-                fn = node.attrib['file']
-                if not fn.endswith('.png'):
-                    continue
-
-                filename = os.path.join(folder, fn)
-                if not os.path.isfile(filename):
-                    continue
-
-                self.overridesFile = filename
-                ##        # Add some overview colors if they weren't specified
-                ##        fallbacks = {
-                ##            'overview_entrance': 'entrance_fill',
-                ##            'overview_location_fill': 'location_fill',
-                ##            'overview_location_lines': 'location_lines',
-                ##            'overview_sprite': 'sprite_fill',
-                ##            'overview_zone_lines': 'zone_lines',
-                ##            }
-                ##        for index in fallbacks:
-                ##            if (index not in colors) and (fallbacks[index] in colors): colors[index] = colors[fallbacks[index]]
-                ##
-                ##        # Use the new colors dict to overwrite values in self.colors
-                ##        for index in colors:
-                ##            self.colors[index] = colors[index]
 
     def parseMainXMLHead(self, root):
         """
@@ -378,7 +358,12 @@ def SetAppStyle(styleKey='', skip_style_reset=False):
     # Append scaling stylesheet if it exists
     if hasattr(globals_.theme, '_scaling_qss') and globals_.theme._scaling_qss:
         final_qss = final_qss + "\n" + globals_.theme._scaling_qss if final_qss else globals_.theme._scaling_qss
-    
+
+    # Fix disabled menubar items being nearly unreadable in some cases
+    # (mainly in dark mode and/or when the UI color is overridden)
+    disabled_qss = "QMenu::item:disabled{color: #646464;}"
+    final_qss = final_qss + "\n" + disabled_qss if final_qss else disabled_qss
+
     # Apply the complete stylesheet
     if final_qss:
         globals_.app.setStyleSheet(final_qss)

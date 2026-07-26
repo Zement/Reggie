@@ -1684,11 +1684,11 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.generalTab = self.getGeneralTab()
         self.toolbarTab = self.getToolbarTab()
         self.interfaceTab = self.getInterfaceTab()
-        self.themesTab = self.getThemesTab(QtWidgets.QWidget)()
+        self.appearanceTab = self.getAppearanceTab(QtWidgets.QWidget)()
         self.tabWidget.addTab(self.generalTab, globals_.trans.string('PrefsDlg', 1))
         self.tabWidget.addTab(self.toolbarTab, globals_.trans.string('PrefsDlg', 2))
         self.tabWidget.addTab(self.interfaceTab, globals_.trans.string('PrefsDlg', 42))
-        self.tabWidget.addTab(self.themesTab, globals_.trans.string('PrefsDlg', 3))
+        self.tabWidget.addTab(self.appearanceTab, globals_.trans.string('PrefsDlg', 3))
 
         # Create the buttonbox
         buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
@@ -2096,20 +2096,20 @@ class PreferencesDialog(QtWidgets.QDialog):
         return InterfaceTab()
 
     @staticmethod
-    def getThemesTab(parent):
+    def getAppearanceTab(parent):
         """
-        Returns the Themes Tab
+        Returns the Appearance Tab
         """
 
-        class ThemesTab(parent):
+        class AppearanceTab(parent):
             """
-            Themes Tab
+            Appearance Tab
             """
             info = globals_.trans.string('PrefsDlg', 6)
 
             def __init__(self):
                 """
-                Initializes the Themes Tab
+                Initializes the Appearance Tab
                 """
                 super().__init__()
 
@@ -2201,8 +2201,8 @@ class PreferencesDialog(QtWidgets.QDialog):
                     if name == self.themeBox.currentText():
                         t = themeObj
                         self.preview.setPixmap(self.drawPreview(t))
-                        text = globals_.trans.string('PrefsDlg', 26, '[name]', t.themeName, '[creator]', t.creator,
-                                            '[description]', t.description)
+                        text = globals_.trans.string('PrefsDlg', 26, '[name]', t.themeName, '[version]', t.version,
+                                            '[creator]', t.creator, '[description]', t.description)
                         self.description.setText(text)
 
             def drawPreview(self, theme):
@@ -2225,6 +2225,7 @@ class PreferencesDialog(QtWidgets.QDialog):
 
                 # Entrance [0] at (13, 8)
                 ent = globals_.mainWindow.CreateEntrance(13 * 16, 8 * 16, 0, add_to_scene=False)
+                scene.addItem(ent)
 
                 # Location [1] at (1, 9) size (6, 2)
                 loc = globals_.mainWindow.CreateLocation(1 * 16, 9 * 16, 6 * 16, 2 * 16, 1, add_to_scene=False)
@@ -2238,7 +2239,7 @@ class PreferencesDialog(QtWidgets.QDialog):
                 path = Path(1, scene, loops=True)
 
                 for x, y in ((13, 5), (18, 5), (18, 9), (13, 9)):
-                    path.add_node(x * 16, y * 16)
+                    path.add_node(x * 16, y * 16, add_to_list=False)
 
                 # Empty comment at (2, 3)
                 comment = CommentItem(2 * 16, 3 * 16, "")
@@ -2265,5 +2266,5 @@ class PreferencesDialog(QtWidgets.QDialog):
 
                 return px
 
-        return ThemesTab
+        return AppearanceTab
 
