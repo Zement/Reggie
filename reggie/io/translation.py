@@ -495,7 +495,7 @@ class ReggieTranslation:
                 57: 'Toggle viewing of sprite images',
                 58: 'Show Locations',
                 59: 'Toggle viewing of locations',
-                60: 'Switch\nGrid',
+                60: 'Switch Grid',
                 61: 'Cycle through available grid views',
                 62: 'Zoom to Maximum',
                 63: 'Zoom in all the way',

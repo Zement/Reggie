@@ -509,8 +509,8 @@ class MenuBuilder:
         vmenu.addAction(self.win.actions['showsprites'])
         vmenu.addAction(self.win.actions['showspriteimages'])
         vmenu.addAction(self.win.actions['showlocations'])
-        vmenu.addAction(self.win.actions['showcomments'])
         vmenu.addAction(self.win.actions['showpaths'])
+        vmenu.addAction(self.win.actions['showcomments'])
         vmenu.addSeparator()
         vmenu.addAction(self.win.actions['grid'])
         vmenu.addAction(self.win.actions['uiscaling'])
@@ -642,6 +642,7 @@ class MenuBuilder:
                 'saveas',
                 'savecopyas',
                 'metainfo',
+                'changegamedef',
                 'screenshot',
                 'changegamepath',
                 'preferences',
@@ -676,6 +677,9 @@ class MenuBuilder:
                 'showlay0',
                 'showlay1',
                 'showlay2',
+                'tileanim',
+                'collisions',
+                'realview',
             ), (
                 'showsprites',
                 'showspriteimages',
@@ -683,6 +687,7 @@ class MenuBuilder:
                 'showpaths',
             ), (
                 'areaoptions',
+                'camprofiles',
                 'zones',
                 'backgrounds',
             ), (
