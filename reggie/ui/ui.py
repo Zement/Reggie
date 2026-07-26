@@ -89,6 +89,7 @@ class ReggieTheme:
             'overview_viewbox': _make_color(0, 0, 255),  # Overview background fill
             'overview_zone_fill': _make_color(47, 79, 79, 120),  # Overview zone fill
             'overview_zone_lines': _make_color(0, 255, 255),  # Overview zone lines
+            'overview_path': _make_color(6, 249, 20),  # Overview path fill
             'path_connector': _make_color(6, 249, 20),  # Path node connecting lines
             'path_fill': _make_color(6, 249, 20, 120),  # Unselected path node fill
             'path_fill_s': _make_color(6, 249, 20, 240),  # Selected path node fill

@@ -1874,7 +1874,6 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.selObj = None
         self.selObjs = None
 
-        self.spriteList.clearSelection()
         self.entranceList.setCurrentItem(None)
         self.locationList.setCurrentItem(None)
         self.pathList.setCurrentItem(None)
