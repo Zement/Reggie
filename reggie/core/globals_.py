@@ -85,6 +85,8 @@ ViewActions = None
 ZoneThemeValues = None
 FirstStageFilename = None
 UseFullFilepath = False
+UseRoundedRectangles = True
+DarkMode = False
 
 app = None
 firstLoad = True

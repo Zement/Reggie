@@ -343,6 +343,8 @@ def main():
     globals_.PlaceObjectsAtFullSize = setting('PlaceObjectsAtFullSize', True)
     globals_.InsertPathNode = setting('InsertPathNode', False)
     globals_.UseFullFilepath = setting('UseFullFilepath', False)
+    globals_.UseRoundedRectangles = setting('UseRoundedRectangles', True)
+    globals_.DarkMode = setting('DarkMode', False)
     SLib.RealViewEnabled = globals_.RealViewEnabled
     print("[BOOT] ✓ Global settings loaded")
 
@@ -440,6 +442,9 @@ def main():
             setSetting('AutoSaveFileData', 'x')
         print("[BOOT] ✓ Autosave dialog handled")
     print("[BOOT] ✓ Autosave check complete")
+
+    # Toggle light/dark mode
+    deferred.SetColorScheme()
 
     # Create and show the main window
     print("[BOOT] Creating main window...")

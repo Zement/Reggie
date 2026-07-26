@@ -613,7 +613,7 @@
 		<string id="22">Preview</string>
 		<string id="23" />
 		<string id="24">[b]Window Style[/b][br]This changes what style Reggie's UI uses. Note that this may cause issues with certain themes.</string>
-		<string id="25">Options</string>
+		<string id="25">Window Style:</string>
 		<string id="26">[b][name][/b] - Version [version][br]By [creator][br][description]</string>
 		<string id="27" />
 		<string id="28" />
@@ -630,6 +630,11 @@
 		<string id="39">Insert new path node after selected node</string>
 		<string id="40">Style</string>
 		<string id="41">Theme:</string>
+		<string id="42">Interface</string>
+		<string id="45">Use Rounded Rectangles</string>
+		<string id="46">[b]Use Rounded Rectangles[/b][br]This makes the corners of sprites, entrances, and path nodes appear rounded instead of sharp.</string>
+		<string id="47">Dark Mode</string>
+		<string id="48">[b]Dark Mode[/b][br]This determines the overall color style Reggie uses, independent from the current theme.[br][br]Note that this may cause issues with certain themes.</string>
 		<string id="49">Display full filepath of opened level</string>
 	</section>
 	<section id="ScrShtDlg">

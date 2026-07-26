@@ -1339,7 +1339,16 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         # Get the theme settings
         setSetting('Theme', dlg.appearanceTab.themeBox.currentText())
-        setSetting('uiStyle', dlg.appearanceTab.NonWinStyle.currentText())
+        setSetting('uiStyle', dlg.appearanceTab.windowStyle.currentText())
+
+        globals_.UseRoundedRectangles = dlg.appearanceTab.roundedRects.isChecked()
+        globals_.DarkMode = dlg.appearanceTab.darkMode.isChecked()
+
+        setSetting('UseRoundedRectangles', globals_.UseRoundedRectangles)
+        setSetting('DarkMode', globals_.DarkMode)
+
+        # Update mode
+        deferred.SetColorScheme()
 
         # Warn the user that they may need to restart
         QtWidgets.QMessageBox.warning(None, globals_.trans.string('PrefsDlg', 0), globals_.trans.string('PrefsDlg', 30))

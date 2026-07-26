@@ -2424,7 +2424,7 @@ class SpriteItem(LevelEditorItem):
                 painter.setBrush(QtGui.QBrush(globals_.theme.color('spritebox_fill')))
                 painter.setPen(QtGui.QPen(globals_.theme.color('spritebox_lines'), 1))
 
-            if globals_.theme.useRoundedRectangles:
+            if globals_.UseRoundedRectangles:
                 painter.drawRoundedRect(spriteboxRect, 4, 4)
             else:
                 painter.drawRect(spriteboxRect)
@@ -2684,7 +2684,7 @@ class EntranceItem(LevelEditorItem):
             painter.setBrush(QtGui.QBrush(globals_.theme.color('entrance_fill')))
             painter.setPen(QtGui.QPen(globals_.theme.color('entrance_lines')))
 
-        if globals_.theme.useRoundedRectangles:
+        if globals_.UseRoundedRectangles:
             painter.drawRoundedRect(self.RoundedRect, 4, 4)
         else:
             painter.drawRect(self.RoundedRect)
@@ -3069,7 +3069,7 @@ class PathItem(LevelEditorItem):
             painter.setBrush(QtGui.QBrush(globals_.theme.color('path_fill')))
             painter.setPen(QtGui.QPen(globals_.theme.color('path_lines')))
 
-        if globals_.theme.useRoundedRectangles:
+        if globals_.UseRoundedRectangles:
             painter.drawRoundedRect(self.RoundedRect, 4, 4)
         else:
             painter.drawRect(self.RoundedRect)
@@ -3252,7 +3252,7 @@ class CommentItem(LevelEditorItem):
             p.setWidth(3)
             painter.setPen(p)
 
-        if globals_.theme.useRoundedRectangles:
+        if globals_.UseRoundedRectangles:
             painter.drawEllipse(self.Circle)
         else:
             painter.drawRect(self.Circle)

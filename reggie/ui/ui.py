@@ -49,7 +49,6 @@ class ReggieTheme:
         self.style = None
         self.forceUiColor = False
         self.forceStyleSheet = False
-        self.useRoundedRectangles = True
 
         # Don't create colors dict yet - do it lazily
         self._colors = None
@@ -206,7 +205,6 @@ class ReggieTheme:
         self.style = root.get("style")
         self.forceUiColor = root.get("forceUiColor", "false") == "true"
         self.forceStyleSheet = root.get("forceStyleSheet", "false") == "true"
-        self.useRoundedRectangles = root.get("useRoundedRectangles", "true") == "true"
 
         try:
             self.version = float(root.get("version", "1.0"))
@@ -367,6 +365,17 @@ def SetAppStyle(styleKey='', skip_style_reset=False):
     # Apply the complete stylesheet
     if final_qss:
         globals_.app.setStyleSheet(final_qss)
+
+
+def SetColorScheme():
+    """
+    Toggle the application-wide native light/dark color scheme, independent
+    of the current theme.
+    """
+    if globals_.DarkMode:
+        globals_.app.styleHints().setColorScheme(QtCore.Qt.ColorScheme.Dark)
+    else:
+        globals_.app.styleHints().setColorScheme(QtCore.Qt.ColorScheme.Light)
 
 
 def GetIcon(name, big=False):
