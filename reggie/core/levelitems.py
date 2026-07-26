@@ -111,8 +111,14 @@ class InstanceDefinition:
         Returns a matching instance of this thing in the level
         """
         for item in self.itemList():
-            if self.matches(item):
-                return item
+            if isinstance(item, Path):
+                # Path does not have objx/y, but the nodes do
+                for node in item._nodes:
+                    if self.matches(node):
+                        return node
+            else:
+                if self.matches(item):
+                    return item
 
 
 class InstanceDefinition_ObjectItem(InstanceDefinition):
@@ -1455,7 +1461,7 @@ class ZoneItem(LevelEditorItem):
                 painter.drawLine(lineStart, lineEnd)
 
         # Paint liquids/fog
-        if globals_.SpritesShown and globals_.RealViewEnabled:
+        if globals_.SpritesShown and globals_.SpriteImagesShown and globals_.RealViewEnabled:
             zoneRect = self.mapRectToScene(self.DrawRect)
             from reggie.sprites import SpriteImage_LiquidOrFog as liquidOrFogType
             from reggie.sprites import SpriteImage_BubbleGen as bubbleGenType
@@ -1465,6 +1471,8 @@ class ZoneItem(LevelEditorItem):
                     sprite.ImageObj.realViewZone(painter, zoneRect)
                 if isinstance(sprite.ImageObj, bubbleGenType) and hasattr(sprite, 'zoneID') and self.id == sprite.zoneID:
                     sprite.ImageObj.realViewZone(painter, zoneRect)
+        else:  # Fixes issues with the liquid/fog only disappearing where sprites updated the scene
+            self.update(self.DrawRect)
 
         # Now paint the borders
         painter.setPen(QtGui.QPen(globals_.theme.color('zone_lines'), 3))
@@ -1681,6 +1689,7 @@ class LocationItem(LevelEditorItem):
         # since font never changes, we can just define TitleRect here
         metrics = QtGui.QFontMetrics(self.font)
         self.TitleRect = QtCore.QRectF(metrics.boundingRect(self.title))
+        self.TitleRect.setWidth(self.TitleRect.width() + 4.0)
         self.TitleRect.moveTo(4, 4)
 
         self.UpdateRects()
@@ -1724,7 +1733,7 @@ class LocationItem(LevelEditorItem):
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
         # Paint liquids/fog
-        if globals_.SpritesShown and globals_.RealViewEnabled:
+        if globals_.SpritesShown and globals_.SpriteImagesShown and globals_.RealViewEnabled:
             location_rect = self.sceneTransform().mapRect(self.DrawRect)
             from reggie.sprites import SpriteImage_LiquidOrFog as liquidOrFogType
 
@@ -3269,6 +3278,16 @@ class CommentItem(LevelEditorItem):
             self.TextEdit.textChanged.connect(self.handleTextChanged)
             self.reposTextEdit()
             self.TextEdit.setVisible(shouldBeVisible)
+
+        # Stop focusing on the textbox. Comments cannot be deleted
+        # while the textbox is focused, which is rather annoying
+        if not self.isSelected():
+            # Stop selecting any highlighted text
+            cursor = self.TextEdit.textCursor()
+            cursor.clearSelection()
+            self.TextEdit.setTextCursor(cursor)
+
+            self.TextEdit.clearFocus()
 
     def handleTextChanged(self):
         """

@@ -22,13 +22,8 @@ class ZonesDialog(QtWidgets.QDialog):
         self.tabWidget = QtWidgets.QTabWidget()
         self.zoneTabs = []
 
-        num_zones = len(globals_.Area.zones)
-
         for i, z in enumerate(globals_.Area.zones):
-            if num_zones <= 5:
-                zone_tab_name = globals_.trans.string('ZonesDlg', 3, '[num]', z.id + 1)
-            else:
-                zone_tab_name = str(z.id + 1)
+            zone_tab_name = globals_.trans.string('ZonesDlg', 3, '[num]', z.id + 1)
 
             tab = ZoneTab(z)
             self.zoneTabs.append(tab)
@@ -60,11 +55,7 @@ class ZonesDialog(QtWidgets.QDialog):
                 return
 
         z = globals_.mainWindow.CreateZone(256, 256)
-
-        if len(self.zoneTabs) + 1 <= 5:
-            zone_tab_name = globals_.trans.string('ZonesDlg', 3, '[num]', z.id + 1)
-        else:
-            zone_tab_name = str(z.id + 1)
+        zone_tab_name = globals_.trans.string('ZonesDlg', 3, '[num]', z.id + 1)
 
         tab = ZoneTab(z)
         self.zoneTabs.append(tab)
@@ -72,24 +63,6 @@ class ZonesDialog(QtWidgets.QDialog):
 
         tab_amount = self.tabWidget.count()
         self.tabWidget.setCurrentIndex(tab_amount - 1)
-
-        # Re-label zone tabs. This is only needed if the number of zones grows
-        # above 5, as the long names need to be replaced by short names. Since
-        # this function always adds a zone, it can never happen that the short
-        # name needs to be lengthened.
-        if tab_amount != 6:
-            return
-
-        # No need to do the last one, since that's the one we just added, and
-        # we already set that correctly.
-        for tab in range(tab_amount - 1):
-            widget = self.tabWidget.widget(tab)
-
-            if widget is None:
-                break
-
-            zone_id = widget.zoneObj.id
-            self.tabWidget.setTabText(tab, str(zone_id + 1))
 
     def DeleteZone(self):
         index = self.tabWidget.currentIndex()
