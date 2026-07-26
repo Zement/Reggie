@@ -659,8 +659,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
     def SelectAll(self):
         """
-        Select all objects in the current area
+        Select all objects in the current area, or all text in the focused widget
         """
+        if globals_.app.activeWindow() is not globals_.mainWindow:
+            focus = globals_.app.focusWidget()
+            if focus is not None:
+                if isinstance(focus, (QtWidgets.QTextEdit, QtWidgets.QPlainTextEdit, QtWidgets.QLineEdit)):
+                    focus.selectAll()
+            return
+
         paintRect = QtGui.QPainterPath()
         paintRect.addRect(0, 0, 1024 * 24, 512 * 24)
         self.scene.setSelectionArea(paintRect)
@@ -695,6 +702,21 @@ class ReggieWindow(QtWidgets.QMainWindow):
         return self._clipboard.Cut()
 
     def Copy(self):
+        # If a separate window (e.g. the sprite-data editor) is focused, copy the
+        # selected text from it instead of the selected scene items.
+        if globals_.app.activeWindow() is not globals_.mainWindow:
+            focus = globals_.app.focusWidget()
+            if focus is not None:
+                if isinstance(focus, (QtWidgets.QTextEdit, QtWidgets.QPlainTextEdit)):
+                    text = focus.textCursor().selectedText()
+                elif isinstance(focus, QtWidgets.QLineEdit):
+                    text = focus.selectedText()
+                else:
+                    return
+
+                self.systemClipboard.setText(text)
+            return
+
         return self._clipboard.Copy()
 
     def Paste(self):
