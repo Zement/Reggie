@@ -84,6 +84,7 @@ TilesetsAnimating = False
 ViewActions = None
 ZoneThemeValues = None
 FirstStageFilename = None
+UseFullFilepath = False
 
 app = None
 firstLoad = True

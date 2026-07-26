@@ -685,6 +685,7 @@ class ReggieTranslation:
                 40: 'Style',
                 41: 'Theme:',
                 42: 'Interface',
+                49: 'Display full filepath of opened level',
             },
             'ScrShtDlg': {
                 0: 'Level Screenshot',

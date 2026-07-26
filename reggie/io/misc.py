@@ -1766,6 +1766,9 @@ class PreferencesDialog(QtWidgets.QDialog):
                 # Insert new path node
                 self.insertPathNode = QtWidgets.QCheckBox(globals_.trans.string('PrefsDlg', 39))
 
+                # Display full filepath
+                self.fullFileTitle = QtWidgets.QCheckBox(globals_.trans.string('PrefsDlg', 49))
+
                 # Create the main layout
                 L = QtWidgets.QFormLayout()
                 L.addRow(globals_.trans.string('PrefsDlg', 14), self.Trans)
@@ -1778,6 +1781,7 @@ class PreferencesDialog(QtWidgets.QDialog):
                 L.addWidget(self.erbIndicator)
                 L.addWidget(self.fullObjSize)
                 L.addWidget(self.insertPathNode)
+                L.addWidget(self.fullFileTitle)
                 self.setLayout(L)
 
                 # Set the buttons
@@ -1816,6 +1820,7 @@ class PreferencesDialog(QtWidgets.QDialog):
 
                 self.fullObjSize.setChecked(globals_.PlaceObjectsAtFullSize)
                 self.insertPathNode.setChecked(globals_.InsertPathNode)
+                self.fullFileTitle.setChecked(globals_.UseFullFilepath)
 
             def ClearRecent(self):
                 """

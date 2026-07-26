@@ -342,6 +342,7 @@ def main():
     globals_.PaddingLength = int(setting('PaddingLength', 0))
     globals_.PlaceObjectsAtFullSize = setting('PlaceObjectsAtFullSize', True)
     globals_.InsertPathNode = setting('InsertPathNode', False)
+    globals_.UseFullFilepath = setting('UseFullFilepath', False)
     SLib.RealViewEnabled = globals_.RealViewEnabled
     print("[BOOT] ✓ Global settings loaded")
 

@@ -630,6 +630,7 @@
 		<string id="39">Insert new path node after selected node</string>
 		<string id="40">Style</string>
 		<string id="41">Theme:</string>
+		<string id="49">Display full filepath of opened level</string>
 	</section>
 	<section id="ScrShtDlg">
 		<string id="0">Level Screenshot</string>

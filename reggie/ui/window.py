@@ -1276,6 +1276,18 @@ class ReggieWindow(QtWidgets.QMainWindow):
         globals_.InsertPathNode = dlg.generalTab.insertPathNode.isChecked()
         setSetting('InsertPathNode', globals_.InsertPathNode)
 
+        # Display full filepath setting
+        globals_.UseFullFilepath = dlg.generalTab.fullFileTitle.isChecked()
+        setSetting('UseFullFilepath', globals_.UseFullFilepath)
+
+        # Update window title
+        if self.fileSavePath:
+            if globals_.UseFullFilepath:
+                self.fileTitle = self.fileSavePath
+            else:
+                self.fileTitle = os.path.basename(self.fileSavePath)
+            self.UpdateTitle()
+
         # Get the Toolbar tab settings
         boxes = (
             dlg.toolbarTab.FileBoxes, dlg.toolbarTab.EditBoxes, dlg.toolbarTab.ViewBoxes, dlg.toolbarTab.SettingsBoxes,
