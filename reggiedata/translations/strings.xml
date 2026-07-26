@@ -85,6 +85,7 @@
 		<string id="49">Present:</string>
 		<string id="50">Custom:</string>
 		<string id="51">On the left is a list of sprites already present in the level (their resources will be loaded by default). On the right, you can add more sprites you'd like to load.</string>
+		<string id="52">Type a Sprite ID...</string>
 	</section>
 	<section id="AutoSaveDlg">
 		<string id="0">Auto-saved backup found</string>
@@ -684,6 +685,7 @@
 		<string id="23">Sprite [id]: suggested in zone</string>
 		<string id="24" />
 		<string id="25">This sprite has the following dependencies:</string>
+		<string id="29">Next Free</string>
 		<string id="30">Sprite [id]: required resource</string>
 		<string id="31">Add to Loaded Sprites</string>
 	</section>

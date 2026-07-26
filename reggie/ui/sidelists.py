@@ -653,7 +653,7 @@ class Stamp:
                         if tile > 0:
                             if globals_.Tiles[tile] is None: continue
                             r = globals_.Tiles[tile].main
-                            painter.drawPixmap(destx + drawOffsetX, desty + drawOffsetY, r)
+                            painter.drawPixmap(int(destx + drawOffsetX), int(desty + drawOffsetY), r)
                         destx += 24
                     desty += 24
                 painter.restore()

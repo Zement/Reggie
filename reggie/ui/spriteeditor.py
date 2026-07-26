@@ -170,10 +170,11 @@ class IntSpinBox(QtWidgets.QAbstractSpinBox):
         """
         flag = QtWidgets.QAbstractSpinBox.StepEnabledFlag.StepNone
 
-        if self._value < self._maximum:
-            flag |= QtWidgets.QAbstractSpinBox.StepEnabledFlag.StepUpEnabled
-        if self._minimum < self._value:
-            flag |= QtWidgets.QAbstractSpinBox.StepEnabledFlag.StepDownEnabled
+        if self._value is not None:
+            if self._value < self._maximum:
+                flag |= QtWidgets.QAbstractSpinBox.StepEnabledFlag.StepUpEnabled
+            if self._minimum < self._value:
+                flag |= QtWidgets.QAbstractSpinBox.StepEnabledFlag.StepDownEnabled
 
         return flag
 
@@ -213,6 +214,9 @@ class IntSpinBox(QtWidgets.QAbstractSpinBox):
         Updates the value shown by the line edit and emits a signal when the
         value represented by the text of the line edit has changed.
         """
+        if val is None and val != 0:
+            val = self._maximum
+
         if self._value == val:
             if val == 0:
                 self.lineEdit().setText(self.textFromValue(self._start))
@@ -698,7 +702,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
             layout.addWidget(label, row, 0, QtCore.Qt.AlignmentFlag.AlignRight)
 
             if idtype is not None:
-                next_free_button = QtWidgets.QPushButton("Next Free")
+                next_free_button = QtWidgets.QPushButton(globals_.trans.string('SpriteDataEditor', 29))
                 next_free_button.clicked.connect(self.handle_next_free)
 
                 layout.addWidget(self.widget, row, 1)
@@ -842,7 +846,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
             layout.addWidget(label, row, 0, QtCore.Qt.AlignmentFlag.AlignRight)
 
             if idtype is not None:
-                next_free_button = QtWidgets.QPushButton("Next Free")
+                next_free_button = QtWidgets.QPushButton(globals_.trans.string('SpriteDataEditor', 29))
                 next_free_button.clicked.connect(self.handle_next_free)
 
                 layout.addWidget(self.widget, row, 1)
@@ -2213,7 +2217,13 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         self.advNotes = sprite.advNotes
 
         self.relatedObjFilesButton.setVisible(sprite.relatedObjFiles is not None)
-        self.relatedObjFiles = sprite.relatedObjFiles
+        if sprite.relatedObjFiles is not None:
+            self.relatedObjFiles = sprite.relatedObjFiles
+
+            if sprite.notes is None:
+                self.com_more.setVisible(False)
+                self.com_extra.setVisible(False)
+                self.ShowRelatedObjFilesTooltip()
 
         self.asm.setVisible(sprite.asm is True)
 
@@ -2298,6 +2308,11 @@ class SpriteEditorWidget(QtWidgets.QWidget):
 
         if sprite.dependencynotes is not None:
             self.dependencyNotes = sprite.dependencynotes
+
+            if sprite.notes is None:
+                self.com_more.setVisible(False)
+                self.com_extra.setVisible(False)
+                self.ShowDependencies()
 
         # yoshi info
         if sprite.noyoshi is True:
@@ -2571,6 +2586,7 @@ class SpriteEditorWidget(QtWidgets.QWidget):
         self.com_deplist_w.setVisible(False)
         self.com_dep.setText(globals_.trans.string('SpriteDataEditor', 18))
         self.com_dep.setVisible(self.com_deplist.count() > 0)
+        self.com_box.setVisible(True)
 
     def DependencyToggle(self):
         """

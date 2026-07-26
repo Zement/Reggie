@@ -134,6 +134,7 @@ class ReggieTranslation:
                 49: 'Present:',
                 50: 'Custom:',
                 51: 'On the left is a list of sprites already present in the level (their resources will be loaded by default). On the right, you can add more sprites you\'d like to load.',
+                52: 'Type a Sprite ID...',
             },
             'AutoSaveDlg': {
                 0: 'Auto-saved backup found',
@@ -742,6 +743,7 @@ class ReggieTranslation:
                 26: 'Add Sprite',
                 27: 'Resize',
                 28: 'NO TITLE GIVEN!',
+                29: 'Next Free',
                 30: 'Sprite [id]: required resource',
                 31: 'Add to Loaded Sprites',
             },

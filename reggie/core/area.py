@@ -313,6 +313,7 @@ class LoadedSpritesTab(QtWidgets.QWidget):
         )
 
         self.sprite_input = QtWidgets.QLineEdit()
+        self.sprite_input.setPlaceholderText(globals_.trans.string('AreaDlg', 52))
         self.sprite_input.textChanged.connect(self.handle_input_change)
 
         self.add_button = QtWidgets.QPushButton(globals_.trans.string('AreaDlg', 47))
@@ -334,6 +335,10 @@ class LoadedSpritesTab(QtWidgets.QWidget):
         auto_list = QtWidgets.QListView()
         auto_list.setModel(self.auto_model)
         auto_list.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+
+        # Dark mode readability fixes
+        self.custom_list.setStyleSheet("color: #7f7f7f;")
+        auto_list.setStyleSheet("color: #7f7f7f;")
 
         sprites_layout.addWidget(QtWidgets.QLabel(globals_.trans.string('AreaDlg', 49)), 0, 0)
         sprites_layout.addWidget(QtWidgets.QLabel(globals_.trans.string('AreaDlg', 50)), 0, 1)
