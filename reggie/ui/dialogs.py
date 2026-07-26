@@ -22,7 +22,7 @@ class AboutDialog(QtWidgets.QDialog):
         """
         QtWidgets.QDialog.__init__(self)
         self.setWindowTitle(globals_.trans.string('AboutDlg', 0))
-        self.setWindowIcon(GetIcon('reggie'))
+
 
         # Open the readme file
         readme = ""
@@ -30,10 +30,12 @@ class AboutDialog(QtWidgets.QDialog):
             readme = f.read()
 
         # Logo
-        logo = QtGui.QPixmap(os.path.join('reggiedata', 'about.png'))
+        logo = QtGui.QPixmap(os.path.join('reggiedata', 'icon.png'))
         logoLabel = QtWidgets.QLabel()
         logoLabel.setPixmap(logo)
         logoLabel.setContentsMargins(16, 4, 32, 4)
+
+        link = 'https://horizon.miraheze.org/wiki/Discord_Servers'
 
         # Description
         description = '<html><head><style type="text/CSS">'
@@ -44,13 +46,14 @@ class AboutDialog(QtWidgets.QDialog):
         description += globals_.trans.string('AboutDlg', 1)
         description += '</h1><div class="main">'
         description += globals_.trans.string('AboutDlg', 2)
-        description += globals_.trans.string('AboutDlg', 3)
+        description += globals_.trans.string('AboutDlg', 3, '[link]', link)
         description += '</div></center></body></html>'
 
         # Description label
         descLabel = QtWidgets.QLabel()
         descLabel.setText(description)
         descLabel.setMinimumWidth(512)
+        descLabel.setOpenExternalLinks(True)
         descLabel.setWordWrap(True)
 
         # Readme.md viewer
@@ -516,7 +519,7 @@ class AutoSavedInfoDialog(QtWidgets.QDialog):
 
 class AreaChoiceDialog(QtWidgets.QDialog):
     """
-    Dialog which lets you choose an area
+    Dialog which lets you choose an area to import
     """
 
     def __init__(self, areacount):
@@ -525,7 +528,7 @@ class AreaChoiceDialog(QtWidgets.QDialog):
         """
         QtWidgets.QDialog.__init__(self)
         self.setWindowTitle(globals_.trans.string('AreaChoiceDlg', 0))
-        self.setWindowIcon(GetIcon('areas'))
+        self.setWindowIcon(GetIcon('area'))
 
         self.areaCombo = QtWidgets.QComboBox()
         for i in range(areacount):
@@ -581,7 +584,7 @@ class DiagnosticToolDialog(QtWidgets.QDialog):
         hW = QtWidgets.QWidget()
         hW.setLayout(self.header)
 
-        self.buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        self.buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
         self.buttonBox.accepted.connect(self.accept)
         self.buttonBox.rejected.connect(self.reject)
 
@@ -699,6 +702,11 @@ class DiagnosticToolDialog(QtWidgets.QDialog):
         self.errorLayout.addWidget(self.errorList)
         self.errorLayout.addWidget(self.fixBtn)
 
+        # Automatically select first item since its "focused" by default, which makes it
+        # look selected, and it can be super confusing
+        if self.errorList.count() != 0:
+            self.errorList.item(0).setSelected(True)
+
         if foundCritical:
             return True, len(self.buttonHandlers)
         elif foundAnything:
@@ -775,8 +783,8 @@ class DiagnosticToolDialog(QtWidgets.QDialog):
         """
         Checks if there are any sprites which are known to be crashy and cause problems often
         """
-        problems = (121,  # en reverse
-                    475)  # will crash if you use a looped path
+        # TODO: Fill out this list, if needed
+        problems = (121,)  # Collision Switcher
 
         founds = []
         for sprite in globals_.Area.sprites:
