@@ -412,6 +412,9 @@ class LevelIO:
         self.win.objAllTab.setTabEnabled(2, False)
         self.win.objAllTab.setTabEnabled(3, False)
 
+        self.win.actions['swapobjectstypes'].setEnabled(True)
+        self.win.actions['swapobjectstilesets'].setEnabled(True)
+
         # Reset Quick Paint Tool for new level
         if hasattr(self.win, 'qpt_palette') and self.win.qpt_palette is not None:
             try:

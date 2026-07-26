@@ -129,11 +129,14 @@ class ObjectTilesetSwapDialog(QtWidgets.QDialog):
         self.setWindowIcon(GetIcon('swap'))
 
         # Create widgets
-        self.FromTS = QtWidgets.QSpinBox()
-        self.FromTS.setRange(1, 4)
+        self.FromTS = QtWidgets.QComboBox()
+        self.ToTS = QtWidgets.QComboBox()
 
-        self.ToTS = QtWidgets.QSpinBox()
-        self.ToTS.setRange(1, 4)
+        slots = ('Pa0', 'Pa1', 'Pa2', 'Pa3')
+        for i in range(4): # Only offer slots that have a tileset
+            if globals_.mainWindow.objAllTab.isTabEnabled(i):
+                self.FromTS.addItem(slots[i])
+                self.ToTS.addItem(slots[i])
 
         # Swap layouts
         swapLayout = QtWidgets.QFormLayout()
@@ -144,7 +147,9 @@ class ObjectTilesetSwapDialog(QtWidgets.QDialog):
         self.DoExchange = QtWidgets.QCheckBox(globals_.trans.string('SwapObjTilesDlg', 3))
 
         # Buttonbox
-        buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        buttonBox = QtWidgets.QDialogButtonBox()
+        buttonBox.addButton(globals_.trans.string('SwapObjTilesDlg', 4), QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole)
+        buttonBox.addButton(globals_.trans.string('SwapObjTilesDlg', 5), QtWidgets.QDialogButtonBox.ButtonRole.RejectRole)
         buttonBox.accepted.connect(self.accept)
         buttonBox.rejected.connect(self.reject)
 
@@ -171,18 +176,28 @@ class ObjectTypeSwapDialog(QtWidgets.QDialog):
 
         # Create widgets
         self.FromType = QtWidgets.QSpinBox()
-        self.FromType.setRange(0, 255)
-
         self.ToType = QtWidgets.QSpinBox()
-        self.ToType.setRange(0, 255)
 
-        self.FromTileset = QtWidgets.QSpinBox()
-        self.FromTileset.setRange(1, 4)
+        self.FromTileset = QtWidgets.QComboBox()
+        self.ToTileset = QtWidgets.QComboBox()
 
-        self.ToTileset = QtWidgets.QSpinBox()
-        self.ToTileset.setRange(1, 4)
+        slots = ('Pa0', 'Pa1', 'Pa2', 'Pa3')
+        for i in range(4): # Only offer slots that have a tileset
+            if globals_.mainWindow.objAllTab.isTabEnabled(i):
+                self.FromTileset.addItem(slots[i])
+                self.ToTileset.addItem(slots[i])
+
+        self.FromTileset.currentIndexChanged.connect(self.setObjectMax)
+        self.ToTileset.currentIndexChanged.connect(self.setObjectMax)
+
+        # Call this manually to set maximums
+        self.setObjectMax()
 
         self.DoExchange = QtWidgets.QCheckBox(globals_.trans.string('SwapObjDlg', 5))
+
+        separator = QtWidgets.QFrame()
+        separator.setFrameShape(QtWidgets.QFrame.Shape.VLine)
+        separator.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
 
         # Swap layout
         swapLayout = QtWidgets.QGridLayout()
@@ -193,15 +208,19 @@ class ObjectTypeSwapDialog(QtWidgets.QDialog):
         swapLayout.addWidget(QtWidgets.QLabel(globals_.trans.string('SwapObjDlg', 2)), 1, 0)
         swapLayout.addWidget(self.FromTileset, 1, 1)
 
-        swapLayout.addWidget(QtWidgets.QLabel(globals_.trans.string('SwapObjDlg', 3)), 0, 2)
-        swapLayout.addWidget(self.ToType, 0, 3)
+        swapLayout.addWidget(separator, 0, 2, 2, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
 
-        swapLayout.addWidget(QtWidgets.QLabel(globals_.trans.string('SwapObjDlg', 4)), 1, 2)
-        swapLayout.addWidget(self.ToTileset, 1, 3)
+        swapLayout.addWidget(QtWidgets.QLabel(globals_.trans.string('SwapObjDlg', 3)), 0, 3)
+        swapLayout.addWidget(self.ToType, 0, 4)
+
+        swapLayout.addWidget(QtWidgets.QLabel(globals_.trans.string('SwapObjDlg', 4)), 1, 3)
+        swapLayout.addWidget(self.ToTileset, 1, 4)
 
         # Buttonbox
-        self.buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Apply | QtWidgets.QDialogButtonBox.StandardButton.Close)
-        self.buttons.clicked.connect(self.button_clicked)
+        self.buttons = QtWidgets.QDialogButtonBox()
+        self.buttons.addButton(globals_.trans.string('SwapObjDlg', 6), QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole)
+        self.buttons.addButton(globals_.trans.string('SwapObjDlg', 7), QtWidgets.QDialogButtonBox.ButtonRole.RejectRole)
+        self.buttons.clicked.connect(self.buttonClicked)
 
         # Main layout
         mainLayout = QtWidgets.QVBoxLayout()
@@ -210,29 +229,27 @@ class ObjectTypeSwapDialog(QtWidgets.QDialog):
         mainLayout.addWidget(self.buttons)
         self.setLayout(mainLayout)
 
-    def button_clicked(self, button):
+    def buttonClicked(self, button):
         """
         Handles one of the buttons being pressed and calls the correct handler.
         """
         role = self.buttons.buttonRole(button)
 
         if role == QtWidgets.QDialogButtonBox.ButtonRole.RejectRole:
-            # The close button was pressed
             self.reject()
-        elif role == QtWidgets.QDialogButtonBox.ButtonRole.ApplyRole:
-            # The apply button was pressed
-            self.swap_tiles()
+        elif role == QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole:
+            self.swapTiles()
         else:
             raise ValueError("ObjectTypeSwapDialog: Unknown role on pressed button. " + repr(role))
 
-    def swap_tiles(self):
+    def swapTiles(self):
         """
-        Actually does the swapping
+        Swaps the tile objects
         """
         from_type = self.FromType.value()
-        from_tileset = self.FromTileset.value() - 1
+        from_tileset = self.FromTileset.currentIndex()
         to_type = self.ToType.value()
-        to_tileset = self.ToTileset.value() - 1
+        to_tileset = self.ToTileset.currentIndex()
         do_exchange = self.DoExchange.isChecked()
 
         # If we don't need to do anything, don't do anything.
@@ -247,6 +264,33 @@ class ObjectTypeSwapDialog(QtWidgets.QDialog):
                 elif do_exchange and nsmbobj.type == to_type and nsmbobj.tileset == to_tileset:
                     nsmbobj.SetType(from_tileset, from_type)
                     SetDirty()
+
+    def getTilesetObjNum(self, index):
+        """
+        Returns the number of objects in a tileset
+        """
+        # There's probably a better way to do this
+        return len(globals_.mainWindow.objPicker.models[index].ritems) - 1
+
+    def setObjectMax(self):
+        """
+        Sets upper limits for the object spinboxes
+        """
+        from_tileset = self.FromTileset.currentIndex()
+        to_tileset = self.ToTileset.currentIndex()
+
+        from_obj_num = self.getTilesetObjNum(from_tileset)
+        to_obj_num = self.getTilesetObjNum(to_tileset)
+
+        self.FromType.setRange(0, from_obj_num)
+        self.ToType.setRange(0, to_obj_num)
+
+        # Make sure we aren't above the new maximum
+        if self.FromType.value() > from_obj_num:
+            self.FromType.setValue(from_obj_num)
+
+        if self.ToType.value() > to_obj_num:
+            self.ToType.setValue(to_obj_num)
 
 
 class MetaInfoDialog(QtWidgets.QDialog):

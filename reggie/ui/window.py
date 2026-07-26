@@ -770,8 +770,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
 
-        from_tileset = dlg.FromTS.value() - 1
-        to_tileset = dlg.ToTS.value() - 1
+        from_tileset = dlg.FromTS.currentIndex()
+        to_tileset = dlg.ToTS.currentIndex()
         do_exchange = dlg.DoExchange.isChecked()
 
         if from_tileset == to_tileset:
@@ -1764,6 +1764,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.objAllTab.setTabEnabled(2, (globals_.Area.tileset2 != ''))
         self.objAllTab.setTabEnabled(3, (globals_.Area.tileset3 != ''))
 
+        if globals_.Area.tileset0 == '' and globals_.Area.tileset1 == '' and globals_.Area.tileset2 == '' and globals_.Area.tileset3 == '':
+            self.actions['swapobjectstypes'].setEnabled(False)
+            self.actions['swapobjectstilesets'].setEnabled(False)
+
         # Load events
         self.LoadEventTabFromLevel()
 
@@ -2669,6 +2673,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         globals_.Area.unkVal2 = dlg.LoadingTab.unk4.value()
 
         # Tilesets
+        tilesetNum = 0
         for idx, fname in enumerate(dlg.TilesetsTab.values()):
 
             if fname in ('', None):
@@ -2686,6 +2691,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 globals_.Area.tileset3 = fname
 
             if fname != '':
+                tilesetNum += 1
                 LoadTileset(idx, fname)
             else:
                 UnloadTileset(idx)
@@ -2700,6 +2706,9 @@ class ReggieWindow(QtWidgets.QMainWindow):
         for layer in globals_.Area.layers:
             for obj in layer:
                 obj.updateObjCache()
+
+        self.actions['swapobjectstypes'].setEnabled(tilesetNum != 0)
+        self.actions['swapobjectstilesets'].setEnabled(tilesetNum != 0)
 
         self.scene.update()
 
