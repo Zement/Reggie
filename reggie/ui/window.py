@@ -895,7 +895,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         return obj
 
-    def CreateEntrance(self, x, y, id_ = None, add_to_scene = True):
+    def CreateEntrance(self, x, y, id_ = None, add_to_scene = True, allow_dupe_id = False):
         """
         Creates and returns a new entrance and makes sure it's added to the
         right lists. This function returns None if this entrance could not be
@@ -906,9 +906,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
             id_ = common.find_first_available_id(all_ids, 256)
 
         if id_ is None:
-            print("ReggieWindow#CreateEntrance: No free entrance id")
+            QtWidgets.QMessageBox.warning(self, globals_.trans.string('MainWindow', 2), globals_.trans.string('MainWindow', 3),
+                                          QtWidgets.QMessageBox.StandardButton.Ok)
             return None
-        elif id_ in all_ids and add_to_scene:
+        elif id_ in all_ids and add_to_scene and not allow_dupe_id:
             print("ReggieWindow#CreateEntrance: Given entrance id (%d) already in use" % id_)
             return None
 
