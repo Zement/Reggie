@@ -285,7 +285,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 loaded = self.LoadLevel(lastlevel, True, 1)
 
         if not loaded:
-            self.LoadLevel('01-01', False, 1)
+            self.LoadLevel(globals_.FirstStageFilename, True, 1)
 
         # call each toggle-button handler to set each feature correctly upon
         # startup
@@ -1217,8 +1217,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 break
 
         if not auto:
-            # Try loading 01-01. If that fails, load up an empty canvas.
-            ok = self.LoadLevel('01-01', False, 1)
+            # Try loading the first detected file in our Stage folder. If that fails, load up an empty canvas.
+            ok = self.LoadLevel(globals_.FirstStageFilename, True, 1)
             if not ok:
                 self.LoadLevel(None, False, 1)
 
@@ -2650,7 +2650,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         globals_.Area.toadHouseType = dlg.LoadingTab.toadHouseType.currentIndex()
         globals_.Area.wrapFlag = dlg.LoadingTab.wrap.isChecked()
         globals_.Area.creditsFlag = dlg.LoadingTab.credits.isChecked()
-        globals_.Area.ambushFlag = dlg.LoadingTab.ambush.isChecked()
+        globals_.Area.faceLeftFlag = dlg.LoadingTab.faceLeft.isChecked()
         globals_.Area.unkFlag1 = dlg.LoadingTab.unk1.isChecked()
         globals_.Area.unkFlag2 = dlg.LoadingTab.unk2.isChecked()
         globals_.Area.unkVal1 = dlg.LoadingTab.unk3.value()

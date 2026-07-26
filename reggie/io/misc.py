@@ -127,10 +127,20 @@ def areValidGamePaths(stage_check='ug', texture_check='ug'):
     if not os.path.isdir(stage_check) or not os.path.isdir(texture_check):
         return False
 
-    # Check that a readable 01-01 file is located in the stage folder
-    for ext in globals_.FileExtentions:
-        if os.path.isfile(os.path.join(stage_check, "01-01" + ext)):
-            return True
+    # Check that at least one readable level is located in the stage folder
+    files = [f for f in os.listdir(stage_check) if os.path.isfile(os.path.join(stage_check, f))]
+    for fname in files:
+        if os.path.isfile(os.path.join(stage_check, fname)):
+            name, ext = os.path.splitext(os.path.join(stage_check, fname))
+
+            # For compressed files, splitting only gives us the LH/LZ extension, while '.arc' is considered part of the filename
+            if ext in ('.LH', '.LZ'):
+                ext = globals_.FileExtentions[0] + ext
+                name = name.removesuffix('.arc')
+
+            if ext in globals_.FileExtentions:
+                globals_.FirstStageFilename = name + ext
+                return True
 
     return False
 
@@ -362,13 +372,14 @@ def LoadTilesetNames_Category(node):
             if 'override' not in child.attrib:
                 continue
 
-            # override present, add it to the correct type
-            type_ = str(child.attrib['override'])
+            # override present, add it to the correct type(s)
+            types = str(child.attrib['override']).split(',')
 
-            if type_ not in globals_.OverriddenTilesets:
-                raise ValueError("Unknown override type '%s' for tileset '%s'" % (type_, fname))
+            for type_ in types:
+                if type_ not in globals_.OverriddenTilesets:
+                    raise ValueError("Unknown override type '%s' for tileset '%s'" % (type_, fname))
 
-            globals_.OverriddenTilesets[type_].add(fname)
+                globals_.OverriddenTilesets[type_].add(fname)
 
     return list(cat)
 

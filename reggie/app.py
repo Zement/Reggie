@@ -407,10 +407,11 @@ def main():
         if areValidGamePaths():
             break
 
-        QtWidgets.QMessageBox.information(
-            None, globals_.trans.string('ChangeGamePath', 1),
-            globals_.trans.string('ChangeGamePath', 3)
-        )
+        if globals_.gamedef.custom:
+            msg = globals_.trans.string('ChangeGamePath', 3, '[game]', globals_.gamedef.name)
+        else:
+            msg = globals_.trans.string('ChangeGamePath', 2)
+        QtWidgets.QMessageBox.information(None, globals_.trans.string('ChangeGamePath', 1), msg)
     
     # Open Patch Manager only if we just did initial setup
     print("[BOOT] Checking if patch manager needed...")
