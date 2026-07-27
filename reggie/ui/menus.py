@@ -109,6 +109,12 @@ class MenuBuilder:
         )
 
         self.CreateAction(
+            'undohistory', self.win.HandleShowUndoHistory, GetIcon('undo'),
+            'Undo History...', 'View the list of undoable editing steps',
+            GetKeybind('undohistory'),
+        )
+
+        self.CreateAction(
             'changegamedef', None, GetIcon('game'),
             globals_.trans.stringOneLine('MenuItems', 98), globals_.trans.stringOneLine('MenuItems', 99),
             None,
@@ -464,6 +470,7 @@ class MenuBuilder:
         fmenu.addAction(self.win.actions['saveas'])
         fmenu.addAction(self.win.actions['savecopyas'])
         fmenu.addAction(self.win.actions['metainfo'])
+        fmenu.addAction(self.win.actions['undohistory'])
         fmenu.addSeparator()
         fmenu.addAction(self.win.actions['changegamedef'])
         fmenu.addAction(self.win.actions['patchmanager'])

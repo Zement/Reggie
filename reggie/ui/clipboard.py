@@ -92,10 +92,10 @@ class ClipboardController:
                 self.win.clipboard = self.encodeObjects(clipboard_o, clipboard_s, clipboard_e, clipboard_l, clipboard_p)
                 self.win.systemClipboard.setText(self.win.clipboard)
 
-            for obj in to_be_deleted:
-                obj.delete()
-                obj.setSelected(False)
-                self.win.scene.removeItem(obj)
+            if to_be_deleted:
+                from reggie.core import undo
+                self.win.undoStack.push(
+                    undo.RemoveItemsCommand(to_be_deleted, text='Cut'))
 
         if cutAction:
             self.win.levelOverview.update()
@@ -119,7 +119,12 @@ class ClipboardController:
         Paste the selected items
         """
         if self.win.clipboard is not None:
-            self.placeEncodedObjects(self.win.clipboard)
+            created = self.placeEncodedObjects(self.win.clipboard)
+
+            if created:
+                from reggie.core import undo
+                self.win.undoStack.push(
+                    undo.AddItemsCommand(created, text='Paste', already_applied=True))
 
     def encodeObjects(self, clipboard_o, clipboard_s, clipboard_e=None, clipboard_l=None, clipboard_p=None):
         """

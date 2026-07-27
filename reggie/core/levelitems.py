@@ -9,7 +9,6 @@ from reggie.core import common
 from reggie.core.tiles import RenderObject
 from reggie.ui.ui import GetIcon, clipStr
 from reggie.core.dirty import SetDirty
-from reggie.core.undo import MoveItemUndoAction, SimultaneousUndoAction
 
 from reggie.core.raw_data import RawData
 
@@ -362,23 +361,8 @@ class LevelEditorItem(QtWidgets.QGraphicsItem):
                 if self.positionChanged is not None:
                     self.positionChanged(self, oldx, oldy, x, y)
 
-                if not isinstance(self, PathEditorLineItem):
-                    if len(globals_.mainWindow.CurrentSelection) == 1:
-                        act = MoveItemUndoAction(self, oldx, oldy, x, y)
-                        globals_.mainWindow.undoStack.addOrExtendAction(act)
-                    elif len(globals_.mainWindow.CurrentSelection) > 1:
-                        # This is certainly not the most efficient way to do this
-                        # (the number of UndoActions > (selection size ^ 2)), but
-                        # it works and I can't think of a better way to do it. :P
-                        acts = set()
-                        acts.add(MoveItemUndoAction(self, oldx, oldy, x, y))
-                        for item in globals_.mainWindow.CurrentSelection:
-                            if item is self: continue
-                            act = MoveItemUndoAction(item, item.objx, item.objy, item.objx, item.objy)
-                            acts.add(act)
-                        act = SimultaneousUndoAction(acts)
-                        globals_.mainWindow.undoStack.addOrExtendAction(act)
-
+                # Undo recording for interactive drags happens per-gesture in
+                # LevelViewWidget.mouseReleaseEvent (Block C - A1), not here.
                 SetDirty()
 
             return newpos
@@ -817,12 +801,8 @@ class ObjectItem(LevelEditorItem):
                 if self.positionChanged is not None:
                     self.positionChanged(self, oldx, oldy, x, y)
 
-                if len(globals_.mainWindow.CurrentSelection) == 1:
-                    act = MoveItemUndoAction(self, oldx, oldy, x, y)
-                    globals_.mainWindow.undoStack.addOrExtendAction(act)
-                elif len(globals_.mainWindow.CurrentSelection) > 1:
-                    pass
-
+                # Undo recording for interactive drags happens per-gesture in
+                # LevelViewWidget.mouseReleaseEvent (Block C - A1), not here.
                 SetDirty()
 
                 # updRect = QtCore.QRectF(self.x(), self.y(), self.BoundingRect.width(), self.BoundingRect.height())
@@ -2309,13 +2289,8 @@ class SpriteItem(LevelEditorItem):
                 if self.positionChanged is not None:
                     self.positionChanged(self, oldx, oldy, x, y)
 
-                # Add moving this sprite to the undo stack.
-                if len(globals_.mainWindow.CurrentSelection) == 1:
-                    act = MoveItemUndoAction(self, oldx, oldy, x, y)
-                    globals_.mainWindow.undoStack.addOrExtendAction(act)
-                elif len(globals_.mainWindow.CurrentSelection) > 1:
-                    pass
-
+                # Undo recording for interactive drags happens per-gesture in
+                # LevelViewWidget.mouseReleaseEvent (Block C - A1), not here.
                 self.ImageObj.positionChanged()
 
                 SetDirty()

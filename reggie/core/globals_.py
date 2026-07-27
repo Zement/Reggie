@@ -28,6 +28,7 @@ HideResetSpritedata = False
 HelpActions = None
 Initializing = None
 InsertPathNode = False
+UndoLimit = 500
 Layer0Shown = True
 Layer1Shown = True
 Layer2Shown = True

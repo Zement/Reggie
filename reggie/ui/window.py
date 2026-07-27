@@ -115,6 +115,7 @@ from reggie.core.level import Level_NSMBW
 # from sidelists import Stamp, StampChooserWidget, SpriteList, SpritePickerWidget, ObjectPickerWidget, LevelOverviewWidget
 # from spriteeditor import SpriteEditorWidget
 from reggie.ui.editors import LocationEditorWidget, PathNodeEditorWidget, EntranceEditorWidget
+from reggie.core import undo
 from reggie.core.undo import UndoStack
 from reggie.io.translation import LoadTranslation
 
@@ -215,6 +216,14 @@ class ReggieWindow(QtWidgets.QMainWindow):
         print("[INIT2] Setting up actions and menus...")
         self.SetupActionsAndMenus()
         print("[INIT2] ✓ Actions and menus set up")
+
+        # Undo/redo menu items follow the QUndoStack state (Block C - A1)
+        self._undoBaseText = self.actions['undo'].text()
+        self._redoBaseText = self.actions['redo'].text()
+        self.undoStack.canUndoChanged.connect(self.actions['undo'].setEnabled)
+        self.undoStack.canRedoChanged.connect(self.actions['redo'].setEnabled)
+        self.undoStack.undoTextChanged.connect(self.HandleUndoTextChanged)
+        self.undoStack.redoTextChanged.connect(self.HandleRedoTextChanged)
 
         # set up the status bar
         print("[INIT2] Creating status bar widgets...")
@@ -692,6 +701,46 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         self.undoStack.redo()
 
+    def HandleUndoTextChanged(self, text):
+        """
+        Shows the next undo step's description in the Edit menu
+        """
+        if text:
+            self.actions['undo'].setText('%s: %s' % (self._undoBaseText, text))
+        else:
+            self.actions['undo'].setText(self._undoBaseText)
+
+    def HandleRedoTextChanged(self, text):
+        """
+        Shows the next redo step's description in the Edit menu
+        """
+        if text:
+            self.actions['redo'].setText('%s: %s' % (self._redoBaseText, text))
+        else:
+            self.actions['redo'].setText(self._redoBaseText)
+
+    def HandleShowUndoHistory(self):
+        """
+        Shows the undo history in a modal dialog (File menu; moves to a
+        nicer home in Block D)
+        """
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle('Undo History')
+        dlg.resize(400, 500)
+
+        view = QtWidgets.QUndoView(self.undoStack, dlg)
+        view.setEmptyLabel('<Level loaded>')
+
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dlg.reject)
+        buttons.accepted.connect(dlg.accept)
+
+        layout = QtWidgets.QVBoxLayout(dlg)
+        layout.addWidget(view)
+        layout.addWidget(buttons)
+
+        dlg.exec()
+
     # Cut/Copy/Paste + ReggieClip encode/decode/place extracted to
     # reggie.ui.clipboard.ClipboardController (Phase 2 — see
     # _docs/plan/REFACTORING_ANALYSIS.md). Thin delegators keep the QAction
@@ -775,12 +824,20 @@ class ReggieWindow(QtWidgets.QMainWindow):
         xpoffset = xoffset * 1.5
         ypoffset = yoffset * 1.5
 
+        old_positions = [(obj, (obj.objx, obj.objy)) for obj in items]
+
         globals_.OverrideSnapping = True
 
         for obj in items:
             obj.setPos(obj.x() + xpoffset, obj.y() + ypoffset)
 
         globals_.OverrideSnapping = False
+
+        entries = [(obj, old, (obj.objx, obj.objy))
+                   for obj, old in old_positions if (obj.objx, obj.objy) != old]
+        if entries:
+            self.undoStack.push(undo.MoveItemsCommand(
+                entries, already_applied=True, text='Shift items'))
 
         SetDirty()
 
@@ -824,23 +881,26 @@ class ReggieWindow(QtWidgets.QMainWindow):
         new_rect = QtCore.QRectF()
 
         type_loc = LocationItem
-        for obj in items:
-            if not isinstance(obj, type_loc):
-                continue
-
+        locations = [obj for obj in items if isinstance(obj, type_loc)]
+        for obj in locations:
             new_rect |= obj.ZoneRect
-
-            obj.delete()
-            obj.setSelected(False)
-            self.scene.removeItem(obj)
-            self.levelOverview.update()
-            SetDirty()
 
         if not new_rect.isValid():
             return
 
-        loc = self.CreateLocation(*new_rect.getRect())
-        loc.setSelected(True)
+        self.undoStack.beginMacro('Merge locations')
+        try:
+            self.undoStack.push(undo.RemoveItemsCommand(locations))
+            self.levelOverview.update()
+
+            loc = self.CreateLocation(*new_rect.getRect())
+            if loc is not None:
+                self.undoStack.push(undo.AddItemsCommand([loc], already_applied=True))
+        finally:
+            self.undoStack.endMacro()
+
+        if loc is not None:
+            loc.setSelected(True)
 
     ###########################################################################
     # Functions that create items
@@ -1301,6 +1361,14 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # Display full filepath setting
         globals_.UseFullFilepath = dlg.generalTab.fullFileTitle.isChecked()
         setSetting('UseFullFilepath', globals_.UseFullFilepath)
+
+        # Undo history limit setting. Qt only allows changing the limit of an
+        # empty stack, so a non-empty stack picks the new value up on its next
+        # clear() (level load / area switch / save).
+        globals_.UndoLimit = dlg.undoTab.historyLimit.value()
+        setSetting('UndoLimit', globals_.UndoLimit)
+        if self.undoStack.count() == 0:
+            self.undoStack.setUndoLimit(globals_.UndoLimit)
 
         # Update window title
         if self.fileSavePath:
@@ -2666,12 +2734,9 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
                 self.SelectionUpdateFlag = True
 
-                for obj in sel:
-                    obj.delete()
-                    obj.setSelected(False)
-                    self.scene.removeItem(obj)
+                # The command performs the deletion and owns the removed items
+                self.undoStack.push(undo.RemoveItemsCommand(sel))
 
-                SetDirty()
                 event.accept()
                 self.levelOverview.update()
                 self.SelectionUpdateFlag = False
