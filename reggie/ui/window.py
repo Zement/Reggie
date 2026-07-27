@@ -856,14 +856,25 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if from_tileset == to_tileset:
             return
 
+        to_change = []
         for layer in globals_.Area.layers:
             for nsmbobj in layer:
                 if nsmbobj.tileset == from_tileset:
-                    nsmbobj.SetType(to_tileset, nsmbobj.type)
-                    SetDirty()
+                    to_change.append((nsmbobj, to_tileset))
                 elif do_exchange and nsmbobj.tileset == to_tileset:
-                    nsmbobj.SetType(from_tileset, nsmbobj.type)
-                    SetDirty()
+                    to_change.append((nsmbobj, from_tileset))
+
+        if not to_change:
+            return
+
+        self.undoStack.beginMacro('Swap tilesets %d and %d' % (from_tileset + 1, to_tileset + 1))
+        try:
+            for nsmbobj, new_tileset in to_change:
+                with undo.record_property_edit(nsmbobj):
+                    nsmbobj.SetType(new_tileset, nsmbobj.type)
+                SetDirty()
+        finally:
+            self.undoStack.endMacro()
 
     def SwapObjectsTypes(self):
         """
@@ -2389,16 +2400,21 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         items = self.scene.selectedItems()
         type_spr = SpriteItem
-        changed = False
+        sprites = [x for x in items if isinstance(x, type_spr)]
 
-        for x in items:
-            if isinstance(x, type_spr):
-                x.spritedata = self.defaultDataEditor.data  # change this first or else images get messed up
-                x.SetType(type)
-                x.update()
-                changed = True
+        if sprites:
+            if len(sprites) > 1:
+                self.undoStack.beginMacro('Replace %d sprites with sprite %d' % (len(sprites), type))
+            try:
+                for x in sprites:
+                    with undo.record_property_edit(x, text='Replace sprite with %d' % type):
+                        x.spritedata = self.defaultDataEditor.data.copy()  # change this first or else images get messed up
+                        x.SetType(type)
+                    x.update()
+            finally:
+                if len(sprites) > 1:
+                    self.undoStack.endMacro()
 
-        if changed:
             SetDirty()
 
         self.ChangeSelectionHandler()
@@ -2446,7 +2462,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         if self.spriteEditorDock.isVisible():
             obj = self.selObj
-            obj.spritedata = data
+            with undo.record_property_edit(obj, text='Edit sprite %d data' % obj.type):
+                obj.spritedata = data
             obj.UpdateListItem()
             SetDirty()
 

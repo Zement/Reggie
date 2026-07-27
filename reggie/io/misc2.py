@@ -154,8 +154,9 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
 
     def _beginDragUndoSession(self):
         """
-        Snapshots the positions of all currently selected level items. Called
-        after a left-button press has been processed by the scene.
+        Snapshots the positions (and, for objects and locations, sizes) of all
+        currently selected level items. Called after a left-button press has
+        been processed by the scene.
         """
         from reggie.core import undo
 
@@ -169,14 +170,19 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
                 continue
             if not hasattr(item, 'objx'):
                 continue
-            session.append((item, (item.objx, item.objy)))
+
+            if isinstance(item, (ObjectItem, LocationItem)):
+                session.append((item, (item.objx, item.objy, item.width, item.height)))
+            else:
+                session.append((item, (item.objx, item.objy)))
 
         self._dragUndoSession = session or None
 
     def _endDragUndoSession(self):
         """
-        Compares current item positions against the press-time snapshot and
-        records the whole gesture as a single MoveItemsCommand.
+        Compares current item geometry against the press-time snapshot and
+        records the whole gesture as a single undo step: a move, a resize
+        (corner-grabber drags), or a macro of both.
         """
         from reggie.core import undo
 
@@ -184,15 +190,35 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
         if not session or undo.is_recording_blocked():
             return
 
-        entries = []
+        moves = []
+        resizes = []
         for item, old in session:
-            new = (item.objx, item.objy)
-            if new != old:
-                entries.append((item, old, new))
+            if len(old) == 4:
+                new = (item.objx, item.objy, item.width, item.height)
+                if new == old:
+                    continue
+                if new[2:] == old[2:]:
+                    # Size unchanged: plain move
+                    moves.append((item, old[:2], new[:2]))
+                else:
+                    resizes.append((item, old, new))
+            else:
+                new = (item.objx, item.objy)
+                if new != old:
+                    moves.append((item, old, new))
 
-        if entries:
-            globals_.mainWindow.undoStack.push(
-                undo.MoveItemsCommand(entries, already_applied=True))
+        stack = globals_.mainWindow.undoStack
+        if moves and resizes:
+            stack.beginMacro('Move & resize %d items' % (len(moves) + len(resizes)))
+            try:
+                stack.push(undo.MoveItemsCommand(moves, already_applied=True))
+                stack.push(undo.ResizeItemsCommand(resizes, already_applied=True))
+            finally:
+                stack.endMacro()
+        elif moves:
+            stack.push(undo.MoveItemsCommand(moves, already_applied=True))
+        elif resizes:
+            stack.push(undo.ResizeItemsCommand(resizes, already_applied=True))
 
     def _recordPaintedItems(self):
         """

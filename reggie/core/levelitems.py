@@ -3272,7 +3272,19 @@ class CommentItem(LevelEditorItem):
         """
         Handles the text being changed
         """
-        self.text = str(self.TextEdit.toPlainText())
+        old_text = self.text
+        new_text = str(self.TextEdit.toPlainText())
+        self.text = new_text
+
+        if new_text != old_text:
+            # Record the edit; consecutive keystrokes merge into one step.
+            # Blocked while an undo command re-applies text to the editor.
+            from reggie.core import undo
+            if not undo.is_recording_blocked():
+                globals_.mainWindow.undoStack.push(undo.ChangePropertyCommand(
+                    self, {'text': old_text}, {'text': new_text},
+                    text='Edit comment'))
+
         if hasattr(self, 'textChanged'): self.textChanged(self)
 
     def reposTextEdit(self):

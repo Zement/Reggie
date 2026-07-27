@@ -26,6 +26,8 @@ from reggie.core.dirty import SetDirty
 
 # Merge ids for QUndoCommand.id() (-1 = never merges)
 MOVE_COMMAND_ID = 1
+PROPERTY_COMMAND_ID = 2
+PATH_DATA_COMMAND_ID = 3
 
 
 _apply_depth = 0
@@ -491,6 +493,423 @@ class RemoveItemsCommand(QtGui.QUndoCommand):
                 self._contexts.append((item, _detach_item(item)))
             _finish_mutation()
             globals_.mainWindow.ChangeSelectionHandler()
+
+
+###############################################################################
+# Property edits (Round 2)
+###############################################################################
+
+def _property_attrs(item):
+    """
+    The attributes that define an item's editable properties (not geometry,
+    except for locations where the editor panel edits geometry directly).
+    """
+    from reggie.core.levelitems import (
+        ObjectItem, SpriteItem, EntranceItem, LocationItem, CommentItem,
+    )
+
+    if isinstance(item, ObjectItem):
+        return ('tileset', 'type')
+    if isinstance(item, SpriteItem):
+        return ('type', 'spritedata')
+    if isinstance(item, EntranceItem):
+        return ('entid', 'destarea', 'destentrance', 'enttype', 'entzone',
+                'entlayer', 'entpath', 'cpdirection', 'entsettings',
+                'leave_level')
+    if isinstance(item, LocationItem):
+        return ('objx', 'objy', 'width', 'height', 'id')
+    if isinstance(item, CommentItem):
+        return ('text',)
+    return ()
+
+
+def _copy_value(value):
+    """
+    Snapshot-copies a property value (RawData is mutable and reused by the
+    sprite editor, so it must be copied).
+    """
+    copy = getattr(value, 'copy', None)
+    if copy is not None and not isinstance(value, (bytes, str)):
+        return copy()
+    return value
+
+
+def _values_equal(a, b):
+    """
+    Compares two property values. RawData has no __eq__, so compare its parts.
+    """
+    from reggie.core.raw_data import RawData
+
+    if isinstance(a, RawData) and isinstance(b, RawData):
+        return (a.original == b.original and a.blocks == b.blocks
+                and a.format == b.format)
+    return a == b
+
+
+def snapshot_properties(item):
+    """
+    Returns a {attr: copied value} snapshot of the item's properties.
+    """
+    return {attr: _copy_value(getattr(item, attr)) for attr in _property_attrs(item)}
+
+
+def _refresh_item(item):
+    """
+    Refreshes an item's visuals, tooltip, list entry and (if it is being
+    edited) its editor panel, after its properties or geometry changed.
+    """
+    from reggie.core.levelitems import (
+        ObjectItem, SpriteItem, EntranceItem, LocationItem, CommentItem,
+    )
+
+    mw = globals_.mainWindow
+
+    if isinstance(item, ObjectItem):
+        item.updateObjCache()
+        item.UpdateRects()
+        item.update()
+
+    elif isinstance(item, SpriteItem):
+        # SetType refreshes name, tooltip, sprite image and list item
+        item.SetType(item.type)
+        item.UpdateDynamicSizing()
+        mw.spriteList.updateSprite(item)
+        item.update()
+
+        editor = getattr(mw, 'spriteDataEditor', None)
+        if editor is not None and mw.selObj is item:
+            editor.setSprite(item.type, initial_data=item.spritedata)
+
+    elif isinstance(item, EntranceItem):
+        item.TypeChange()
+        item.UpdateTooltip()
+        item.UpdateListItem()
+        item.update()
+
+        editor = getattr(mw, 'entranceEditor', None)
+        if editor is not None and editor.ent is item:
+            editor.ent = None  # bypass the same-object early return
+            editor.setEntrance(item)
+
+    elif isinstance(item, LocationItem):
+        item.autoPosChange = True
+        try:
+            item.setPos(int(item.objx * 1.5), int(item.objy * 1.5))
+        finally:
+            item.autoPosChange = False
+        item.UpdateTitle()
+        item.UpdateRects()
+        item.UpdateListItem()
+        item.update()
+
+        editor = getattr(mw, 'locationEditor', None)
+        if editor is not None and editor.loc is item:
+            editor.setLocation(item)
+
+    elif isinstance(item, CommentItem):
+        # Push the (possibly undone) text back into the in-scene text editor.
+        # Its textChanged handler is a recording site, but recording is
+        # blocked while commands run, so this does not echo.
+        if item.TextEdit.toPlainText() != item.text:
+            item.TextEdit.setPlainText(item.text)
+        item.UpdateTooltip()
+        item.UpdateListItem()
+        item.update()
+        mw.SaveComments()
+
+    mw.scene.update()
+
+
+class ChangePropertyCommand(QtGui.QUndoCommand):
+    """
+    One property-edit step on a single item (editor panel spinbox, checkbox,
+    sprite data field, comment text...). Consecutive edits to the same fields
+    of the same item merge into one step, so spinbox scrubbing and typing
+    stay one entry each.
+    """
+
+    def __init__(self, item, before, after, text=None, already_applied=True):
+        super().__init__()
+        self.item = item
+        self.before = before
+        self.after = after
+        self.changed_keys = frozenset(
+            k for k in before if not _values_equal(before[k], after.get(k)))
+        self._skip_first_redo = bool(already_applied)
+
+        if text is None:
+            text = 'Edit %s' % _item_label(item)
+        self.setText(text)
+
+    def id(self):
+        return PROPERTY_COMMAND_ID
+
+    def mergeWith(self, other):
+        if not isinstance(other, ChangePropertyCommand):
+            return False
+        if other.item is not self.item or other.changed_keys != self.changed_keys:
+            return False
+
+        self.after = other.after
+        self.setText(other.text())
+        return True
+
+    def undo(self):
+        with _ApplyGuard():
+            for attr, value in self.before.items():
+                setattr(self.item, attr, _copy_value(value))
+            _refresh_item(self.item)
+            _finish_mutation()
+
+    def redo(self):
+        if self._skip_first_redo:
+            self._skip_first_redo = False
+            return
+
+        with _ApplyGuard():
+            for attr, value in self.after.items():
+                setattr(self.item, attr, _copy_value(value))
+            _refresh_item(self.item)
+            _finish_mutation()
+
+
+class record_property_edit:
+    """
+    Context manager for recording a property edit at a call site:
+
+        with record_property_edit(item):
+            item.destarea = 3
+
+    Snapshots the item's properties around the body and pushes a merged
+    ChangePropertyCommand if anything changed. No-op while commands run.
+    """
+
+    def __init__(self, item, text=None):
+        self.item = item
+        self.text = text
+
+    def __enter__(self):
+        self.active = self.item is not None and not is_recording_blocked()
+        self.before = snapshot_properties(self.item) if self.active else None
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is not None or not self.active:
+            return False
+
+        after = snapshot_properties(self.item)
+        changed = any(not _values_equal(self.before[k], after[k]) for k in after)
+        if changed:
+            globals_.mainWindow.undoStack.push(ChangePropertyCommand(
+                self.item, self.before, after, text=self.text))
+        return False
+
+
+###############################################################################
+# Geometry (move + resize) edits (Round 2)
+###############################################################################
+
+def _apply_geometry(item, x, y, w, h):
+    """
+    Applies position and (if given) size to an item.
+    """
+    from reggie.core.levelitems import ObjectItem, LocationItem
+
+    if isinstance(item, ObjectItem):
+        oldBR = item.getFullRect()
+
+        item.objx, item.objy = x, y
+        if w is not None:
+            item.width, item.height = w, h
+            item.updateObjCache()
+        item.setPos(x * 24, y * 24)
+        item.UpdateRects()
+        item.update()
+
+        globals_.mainWindow.scene.update(oldBR)
+        globals_.mainWindow.scene.update(item.getFullRect())
+        globals_.mainWindow.levelOverview.update()
+
+    elif isinstance(item, LocationItem):
+        item.objx, item.objy = x, y
+        if w is not None:
+            item.width, item.height = w, h
+
+        item.autoPosChange = True
+        try:
+            item.setPos(int(x * 1.5), int(y * 1.5))
+        finally:
+            item.autoPosChange = False
+        item.UpdateRects()
+        item.update()
+        globals_.mainWindow.levelOverview.update()
+
+        editor = getattr(globals_.mainWindow, 'locationEditor', None)
+        if editor is not None and editor.loc is item:
+            editor.setLocation(item)
+
+    else:
+        _apply_position(item, x, y)
+
+
+class ResizeItemsCommand(QtGui.QUndoCommand):
+    """
+    One resize gesture (objects / locations): position and size change
+    together, because corner drags move the origin too.
+    """
+
+    def __init__(self, entries, already_applied=True, text=None):
+        """
+        entries: list of (item, (old_x, old_y, old_w, old_h),
+                                (new_x, new_y, new_w, new_h))
+        """
+        super().__init__()
+        self.entries = list(entries)
+        self._skip_first_redo = bool(already_applied)
+
+        if text is None:
+            text = 'Resize %s' % _items_label([e[0] for e in self.entries])
+        self.setText(text)
+
+    def undo(self):
+        with _ApplyGuard():
+            for item, old, new in reversed(self.entries):
+                _apply_geometry(item, *old)
+            _finish_mutation()
+
+    def redo(self):
+        if self._skip_first_redo:
+            self._skip_first_redo = False
+            return
+
+        with _ApplyGuard():
+            for item, old, new in self.entries:
+                _apply_geometry(item, *new)
+            _finish_mutation()
+
+
+###############################################################################
+# Path data edits (Round 2)
+###############################################################################
+
+def _refresh_path_editor(node):
+    """
+    Refreshes the path editor panel if it is editing the given node.
+    """
+    editor = getattr(globals_.mainWindow, 'pathEditor', None)
+    if editor is not None and editor.path_node is node:
+        editor.path_node = None  # bypass the same-object early return
+        editor.setPath(node)
+
+
+class PathNodeDataCommand(QtGui.QUndoCommand):
+    """
+    Speed/accel/delay change of a single path node. Consecutive edits to the
+    same node merge (spinbox scrubbing).
+    """
+
+    def __init__(self, node, before, after, already_applied=True):
+        """
+        before/after: (speed, accel, delay) tuples
+        """
+        super().__init__()
+        self.node = node
+        self.before = before
+        self.after = after
+        self._skip_first_redo = bool(already_applied)
+        self.setText('Edit %s' % _item_label(node))
+
+    def id(self):
+        return PATH_DATA_COMMAND_ID
+
+    def mergeWith(self, other):
+        if not isinstance(other, PathNodeDataCommand) or other.node is not self.node:
+            return False
+        self.after = other.after
+        return True
+
+    def _apply(self, values):
+        speed, accel, delay = values
+        self.node.path.set_node_data(self.node, speed=speed, accel=accel, delay=delay)
+        _refresh_path_editor(self.node)
+        _finish_mutation()
+
+    def undo(self):
+        with _ApplyGuard():
+            self._apply(self.before)
+
+    def redo(self):
+        if self._skip_first_redo:
+            self._skip_first_redo = False
+            return
+        with _ApplyGuard():
+            self._apply(self.after)
+
+
+class PathSettingCommand(QtGui.QUndoCommand):
+    """
+    A whole-path setting change: 'loops' (bool) or 'id' (int).
+    """
+
+    def __init__(self, path, setting, before, after, node=None, already_applied=True):
+        super().__init__()
+        self.path = path
+        self.setting = setting
+        self.before = before
+        self.after = after
+        self.node = node  # panel refresh anchor
+        self._skip_first_redo = bool(already_applied)
+        self.setText('Edit path %d %s' % (path._id if setting != 'id' else before, setting))
+
+    def _apply(self, value):
+        if self.setting == 'loops':
+            self.path.set_loops(bool(value))
+        else:
+            self.path.set_id(int(value))
+        if self.node is not None:
+            _refresh_path_editor(self.node)
+        _finish_mutation()
+
+    def undo(self):
+        with _ApplyGuard():
+            self._apply(self.before)
+
+    def redo(self):
+        if self._skip_first_redo:
+            self._skip_first_redo = False
+            return
+        with _ApplyGuard():
+            self._apply(self.after)
+
+
+class PathNodeOrderCommand(QtGui.QUndoCommand):
+    """
+    A node being moved to a different index within its path.
+    """
+
+    def __init__(self, node, old_index, new_index, already_applied=True):
+        super().__init__()
+        self.node = node
+        self.old_index = old_index
+        self.new_index = new_index
+        self._skip_first_redo = bool(already_applied)
+        self.setText('Reorder path %d node' % node.pathid)
+
+    def _apply(self, index):
+        self.node.path.move_node(self.node, index)
+        _refresh_path_editor(self.node)
+        _finish_mutation()
+
+    def undo(self):
+        with _ApplyGuard():
+            self._apply(self.old_index)
+
+    def redo(self):
+        if self._skip_first_redo:
+            self._skip_first_redo = False
+            return
+        with _ApplyGuard():
+            self._apply(self.new_index)
 
 
 def _deletion_order(items):
