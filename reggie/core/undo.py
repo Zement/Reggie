@@ -90,6 +90,13 @@ class UndoStack(QtGui.QUndoStack):
 # Item helpers: labels, position application, detach/attach
 ###############################################################################
 
+def _tr(numcode, *replacements):
+    """
+    Fetches a string from the 'Undo' translation section.
+    """
+    return globals_.trans.string('Undo', numcode, *replacements)
+
+
 def _item_label(item):
     """
     A short human-readable description of a level item, for command texts.
@@ -100,20 +107,20 @@ def _item_label(item):
     )
 
     if isinstance(item, ObjectItem):
-        return 'object %d-%d' % (item.tileset, item.type)
+        return _tr(10, '[ts]', item.tileset, '[type]', item.type)
     if isinstance(item, SpriteItem):
-        return 'sprite %d' % item.type
+        return _tr(11, '[id]', item.type)
     if isinstance(item, EntranceItem):
-        return 'entrance %d' % item.entid
+        return _tr(12, '[id]', item.entid)
     if isinstance(item, LocationItem):
-        return 'location %d' % item.id
+        return _tr(13, '[id]', item.id)
     if isinstance(item, PathItem):
-        return 'path %d node %d' % (item.pathid, item.nodeid)
+        return _tr(14, '[path]', item.pathid, '[node]', item.nodeid)
     if isinstance(item, CommentItem):
-        return 'comment'
+        return _tr(15)
     if isinstance(item, ZoneItem):
-        return 'zone %d' % (item.id + 1)
-    return 'item'
+        return _tr(16, '[id]', item.id + 1)
+    return _tr(17)
 
 
 def _items_label(items):
@@ -122,7 +129,7 @@ def _items_label(items):
     """
     if len(items) == 1:
         return _item_label(items[0])
-    return '%d items' % len(items)
+    return _tr(18, '[n]', len(items))
 
 
 def _apply_position(item, x, y):
@@ -397,9 +404,9 @@ class MoveItemsCommand(QtGui.QUndoCommand):
             items = [e[0] for e in self.entries]
             if len(self.entries) == 1:
                 item, old, new = self.entries[0]
-                text = 'Move %s to (%d, %d)' % (_item_label(item), new[0], new[1])
+                text = _tr(20, '[what]', _item_label(item), '[x]', new[0], '[y]', new[1])
             else:
-                text = 'Move %s' % _items_label(items)
+                text = _tr(21, '[what]', _items_label(items))
         self.setText(text)
 
     def id(self):
@@ -441,7 +448,7 @@ class AddItemsCommand(QtGui.QUndoCommand):
         self._skip_first_redo = bool(already_applied)
 
         if text is None:
-            text = 'Add %s' % _items_label(self.items)
+            text = _tr(22, '[what]', _items_label(self.items))
         self.setText(text)
 
     def undo(self):
@@ -469,15 +476,25 @@ class RemoveItemsCommand(QtGui.QUndoCommand):
     One or more items removed from the level. redo() performs the removal
     (this command is pushed *instead of* deleting inline); the removed items
     stay alive inside the command and are re-attached on undo.
+
+    Alternatively, pass `precaptured` = [(item, detach_ctx), ...] for items a
+    caller already detached itself (bulk edit sessions); the first redo() is
+    then skipped.
     """
 
-    def __init__(self, items, text=None):
+    def __init__(self, items, text=None, precaptured=None):
         super().__init__()
-        self.items = [item for item in items if item is not None]
-        self._contexts = None
+        if precaptured is not None:
+            self._contexts = list(precaptured)
+            self.items = [item for item, ctx in self._contexts]
+            self._skip_first_redo = True
+        else:
+            self.items = [item for item in items if item is not None]
+            self._contexts = None
+            self._skip_first_redo = False
 
         if text is None:
-            text = 'Delete %s' % _items_label(self.items)
+            text = _tr(23, '[what]', _items_label(self.items))
         self.setText(text)
 
     def undo(self):
@@ -487,6 +504,10 @@ class RemoveItemsCommand(QtGui.QUndoCommand):
             _finish_mutation()
 
     def redo(self):
+        if self._skip_first_redo:
+            self._skip_first_redo = False
+            return
+
         with _ApplyGuard():
             self._contexts = []
             for item in _deletion_order(self.items):
@@ -638,7 +659,7 @@ class ChangePropertyCommand(QtGui.QUndoCommand):
         self._skip_first_redo = bool(already_applied)
 
         if text is None:
-            text = 'Edit %s' % _item_label(item)
+            text = _tr(25, '[what]', _item_label(item))
         self.setText(text)
 
     def id(self):
@@ -768,7 +789,7 @@ class ResizeItemsCommand(QtGui.QUndoCommand):
         self._skip_first_redo = bool(already_applied)
 
         if text is None:
-            text = 'Resize %s' % _items_label([e[0] for e in self.entries])
+            text = _tr(24, '[what]', _items_label([e[0] for e in self.entries]))
         self.setText(text)
 
     def undo(self):
@@ -817,7 +838,7 @@ class PathNodeDataCommand(QtGui.QUndoCommand):
         self.before = before
         self.after = after
         self._skip_first_redo = bool(already_applied)
-        self.setText('Edit %s' % _item_label(node))
+        self.setText(_tr(25, '[what]', _item_label(node)))
 
     def id(self):
         return PATH_DATA_COMMAND_ID
@@ -859,7 +880,8 @@ class PathSettingCommand(QtGui.QUndoCommand):
         self.after = after
         self.node = node  # panel refresh anchor
         self._skip_first_redo = bool(already_applied)
-        self.setText('Edit path %d %s' % (path._id if setting != 'id' else before, setting))
+        self.setText(_tr(39, '[id]', path._id if setting != 'id' else before,
+                         '[setting]', setting))
 
     def _apply(self, value):
         if self.setting == 'loops':
@@ -893,7 +915,7 @@ class PathNodeOrderCommand(QtGui.QUndoCommand):
         self.old_index = old_index
         self.new_index = new_index
         self._skip_first_redo = bool(already_applied)
-        self.setText('Reorder path %d node' % node.pathid)
+        self.setText(_tr(38, '[id]', node.pathid))
 
     def _apply(self, index):
         self.node.path.move_node(self.node, index)
@@ -910,6 +932,290 @@ class PathNodeOrderCommand(QtGui.QUndoCommand):
             return
         with _ApplyGuard():
             self._apply(self.new_index)
+
+
+###############################################################################
+# Bulk edit sessions (Round 3) — used by the Quick Paint Tool
+###############################################################################
+#
+# QPT strokes, fills and erases mutate many objects across several code paths
+# (including timer-deferred deletions). A bulk session collects every object
+# created or removed between begin_bulk_edit()/end_bulk_edit() and pushes ONE
+# undo step at the end. Creations are reported by ReggieWindow.CreateObject
+# (via notify_item_created); removals must go through bulk_remove_object().
+# Sessions are reentrant; nothing is pushed for empty sessions.
+
+_bulk_session = None
+
+
+class _BulkSession:
+    def __init__(self, text):
+        self.text = text
+        self.depth = 1
+        self.created = []
+        self.removed = []  # (item, detach_ctx)
+
+
+def begin_bulk_edit(text):
+    """
+    Opens (or nests into) a bulk edit session.
+    """
+    global _bulk_session
+
+    if is_recording_blocked():
+        return
+
+    if _bulk_session is not None:
+        _bulk_session.depth += 1
+        return
+
+    _bulk_session = _BulkSession(text)
+
+
+def end_bulk_edit():
+    """
+    Closes a bulk edit session; the outermost close pushes the collected
+    changes as a single undo step.
+    """
+    global _bulk_session
+
+    session = _bulk_session
+    if session is None:
+        return
+
+    session.depth -= 1
+    if session.depth > 0:
+        return
+
+    _bulk_session = None
+
+    # Items created AND removed within the same session are a net no-op
+    removed_items = [item for item, ctx in session.removed]
+    created = [item for item in session.created
+               if item is not None and item.scene() is not None]
+    removed = [(item, ctx) for item, ctx in session.removed
+               if not any(item is c for c in session.created)]
+
+    created = [item for item in created
+               if not any(item is r for r in removed_items)]
+
+    stack = globals_.mainWindow.undoStack
+    if created and removed:
+        stack.beginMacro(session.text)
+        try:
+            stack.push(RemoveItemsCommand(None, text=session.text, precaptured=removed))
+            stack.push(AddItemsCommand(created, text=session.text, already_applied=True))
+        finally:
+            stack.endMacro()
+    elif created:
+        stack.push(AddItemsCommand(created, text=session.text, already_applied=True))
+    elif removed:
+        stack.push(RemoveItemsCommand(None, text=session.text, precaptured=removed))
+
+
+class bulk_edit_session:
+    """
+    Context-manager form of begin_bulk_edit()/end_bulk_edit().
+    """
+
+    def __init__(self, text):
+        self.text = text
+
+    def __enter__(self):
+        begin_bulk_edit(self.text)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        end_bulk_edit()
+        return False
+
+
+def notify_item_created(item):
+    """
+    Reports a freshly created level item. Only recorded while a bulk edit
+    session is open (normal interactive flows record via their own commands).
+    """
+    if _bulk_session is not None and not is_recording_blocked() and item is not None:
+        _bulk_session.created.append(item)
+
+
+def bulk_remove_object(item):
+    """
+    Detaches a level item from the scene and all bookkeeping lists (the
+    undo-aware replacement for `item.delete(); scene.removeItem(item)` in
+    bulk code paths). Recorded if a bulk edit session is open.
+    """
+    ctx = _detach_item(item)
+
+    if _bulk_session is not None and not is_recording_blocked():
+        _bulk_session.removed.append((item, ctx))
+
+
+###############################################################################
+# Modal dialog snapshots (Round 3)
+###############################################################################
+
+def _copy_area_value(value):
+    if isinstance(value, set):
+        return set(value)
+    if isinstance(value, list):
+        import copy
+        return copy.deepcopy(value)
+    return value
+
+
+class AreaSettingsCommand(QtGui.QUndoCommand):
+    """
+    A change to area-level settings (Area Options dialog, camera profiles):
+    before/after {attr: value} snapshots of globals_.Area attributes.
+    If tilesets are among the changed attributes, the tileset UI is reloaded.
+    """
+
+    def __init__(self, before, after, text, refresh_tilesets=False, already_applied=True):
+        super().__init__()
+        self.before = {k: _copy_area_value(v) for k, v in before.items()}
+        self.after = {k: _copy_area_value(v) for k, v in after.items()}
+        self.refresh_tilesets = refresh_tilesets
+        self._skip_first_redo = bool(already_applied)
+        self.setText(text)
+
+    def _apply(self, values):
+        for attr, value in values.items():
+            setattr(globals_.Area, attr, _copy_area_value(value))
+
+        if self.refresh_tilesets:
+            globals_.mainWindow.RefreshTilesetsFromArea()
+
+        _finish_mutation()
+
+    def undo(self):
+        with _ApplyGuard():
+            self._apply(self.before)
+
+    def redo(self):
+        if self._skip_first_redo:
+            self._skip_first_redo = False
+            return
+        with _ApplyGuard():
+            self._apply(self.after)
+
+
+# Every ZoneItem attribute the Zones and Backgrounds dialogs can change
+_ZONE_ATTRS = (
+    'objx', 'objy', 'width', 'height', 'modeldark', 'terraindark', 'id',
+    'cammode', 'camzoom', 'camtrack', 'visibility', 'music', 'sfxmod',
+    'mpcamzoomadjust',
+    'yupperbound', 'ylowerbound', 'yupperbound2', 'ylowerbound2',
+    'yupperbound3', 'ylowerbound3',
+    'XscrollA', 'YscrollA', 'XpositionA', 'YpositionA',
+    'bg1A', 'bg2A', 'bg3A', 'ZoomA',
+    'XscrollB', 'YscrollB', 'XpositionB', 'YpositionB',
+    'bg1B', 'bg2B', 'bg3B', 'ZoomB',
+)
+
+
+def snapshot_zones():
+    """
+    Captures the current zone set as [(zone_object, {attr: value})].
+    """
+    return [(z, {attr: getattr(z, attr) for attr in _ZONE_ATTRS})
+            for z in globals_.Area.zones]
+
+
+class ZonesSnapshotCommand(QtGui.QUndoCommand):
+    """
+    A change to the area's zones (Zones or Backgrounds dialog): the whole zone
+    set is snapshotted before/after; zone objects stay alive inside the
+    command, so added/removed zones round-trip with identity intact.
+    """
+
+    def __init__(self, before_state, after_state, text, already_applied=True):
+        super().__init__()
+        self.before_state = before_state
+        self.after_state = after_state
+        self._skip_first_redo = bool(already_applied)
+        self.setText(text)
+
+    @staticmethod
+    def _apply(state):
+        from reggie.core.levelitems import ZoneItem
+
+        mw = globals_.mainWindow
+
+        for item in mw.scene.items():
+            if isinstance(item, ZoneItem):
+                mw.scene.removeItem(item)
+
+        globals_.Area.zones = []
+
+        for z, values in state:
+            for attr, value in values.items():
+                setattr(z, attr, value)
+
+            globals_.Area.zones.append(z)
+            mw.scene.addItem(z)
+
+            z.prepareGeometryChange()
+            z.UpdateRects()
+            z.setPos(z.objx * 1.5, z.objy * 1.5)
+            z.UpdateTitle()
+
+        for spr in globals_.Area.sprites:
+            spr.ImageObj.positionChanged()
+
+        mw.actions['backgrounds'].setEnabled(len(globals_.Area.zones) > 0)
+        _finish_mutation()
+
+    def undo(self):
+        with _ApplyGuard():
+            self._apply(self.before_state)
+
+    def redo(self):
+        if self._skip_first_redo:
+            self._skip_first_redo = False
+            return
+        with _ApplyGuard():
+            self._apply(self.after_state)
+
+
+_METADATA_KEYS = ('Title', 'Author', 'Group', 'Website')
+
+
+def snapshot_metadata():
+    """
+    Captures the level-info metadata strings.
+    """
+    return {key: globals_.Area.Metadata.strData(key) or ''
+            for key in _METADATA_KEYS}
+
+
+class MetadataCommand(QtGui.QUndoCommand):
+    """
+    A change to the level information (Metadata) strings.
+    """
+
+    def __init__(self, before, after, text, already_applied=True):
+        super().__init__()
+        self.before = dict(before)
+        self.after = dict(after)
+        self._skip_first_redo = bool(already_applied)
+        self.setText(text)
+
+    def _apply(self, values):
+        for key, value in values.items():
+            globals_.Area.Metadata.setStrData(key, value)
+        _finish_mutation()
+
+    def undo(self):
+        with _ApplyGuard():
+            self._apply(self.before)
+
+    def redo(self):
+        if self._skip_first_redo:
+            self._skip_first_redo = False
+            return
+        with _ApplyGuard():
+            self._apply(self.after)
 
 
 def _deletion_order(items):

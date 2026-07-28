@@ -209,7 +209,8 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
 
         stack = globals_.mainWindow.undoStack
         if moves and resizes:
-            stack.beginMacro('Move & resize %d items' % (len(moves) + len(resizes)))
+            stack.beginMacro(globals_.trans.string(
+                'Undo', 37, '[n]', len(moves) + len(resizes)))
             try:
                 stack.push(undo.MoveItemsCommand(moves, already_applied=True))
                 stack.push(undo.ResizeItemsCommand(resizes, already_applied=True))

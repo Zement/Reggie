@@ -349,17 +349,25 @@ class ReggieQuickPaintHook:
             QtCore.Qt.MouseButton.MiddleButton: 3,
         }
         button = button_map.get(event.button(), 0)
-        
+
         # Only handle right mouse button for painting
         if button != 2:
             return False
-        
+
+        # Undo: everything mutated between this press and the matching release
+        # is collected into one bulk session = one history step per stroke.
+        # A stale session (release lost outside the view) is flushed first.
+        self._end_stroke_undo_session()
+        from reggie.core import undo as undo_module
+        undo_module.begin_bulk_edit('Quick Paint stroke')
+        self._stroke_undo_session_open = True
+
         # Convert screen coordinates to tile coordinates
         from reggie.core import globals_
         pos = globals_.mainWindow.view.mapToScene(event.pos().x(), event.pos().y())
         tile_x = int(pos.x() / 24)
         tile_y = int(pos.y() / 24)
-        
+
         # Check for Fill Tool first
         if is_fill_active:
             if self.palette.handle_mouse_event("press", (tile_x, tile_y), button):
@@ -425,13 +433,33 @@ class ReggieQuickPaintHook:
         # This prevents Reggie from handling the move event
         return True
     
+    def _end_stroke_undo_session(self):
+        """
+        Closes the per-stroke undo bulk session, if one is open.
+        """
+        if getattr(self, '_stroke_undo_session_open', False):
+            self._stroke_undo_session_open = False
+            from reggie.core import undo as undo_module
+            undo_module.end_bulk_edit()
+
     def handle_mouse_release(self, event) -> bool:
         """
+        Handle mouse release event. Always closes the per-stroke undo session
+        for right-button releases, whether or not QPT handled the event.
+        """
+        try:
+            return self._handle_mouse_release_impl(event)
+        finally:
+            if event.button() == QtCore.Qt.MouseButton.RightButton:
+                self._end_stroke_undo_session()
+
+    def _handle_mouse_release_impl(self, event) -> bool:
+        """
         Handle mouse release event.
-        
+
         Args:
             event: Qt mouse event
-        
+
         Returns:
             True if event was handled by QPT
         """
@@ -960,17 +988,19 @@ class ReggieQuickPaintHook:
         
         print(f"[QPT Hook] Merged {len(empty_positions)} positions into {len(merged_placements)} vertical slices")
         
-        # Create merged objects
+        # Create merged objects as one undo step
+        from reggie.core import undo as undo_module
         placed_count = 0
-        for placement in merged_placements:
-            self.paint_at_position(
-                placement['x'], placement['y'], 
-                fill_object_id, current_layer, 
-                tileset=fill_tileset,
-                width=placement['width'], 
-                height=placement['height']
-            )
-            placed_count += 1
+        with undo_module.bulk_edit_session('Quick Paint fill'):
+            for placement in merged_placements:
+                self.paint_at_position(
+                    placement['x'], placement['y'],
+                    fill_object_id, current_layer,
+                    tileset=fill_tileset,
+                    width=placement['width'],
+                    height=placement['height']
+                )
+                placed_count += 1
         
         # Clear the preview
         self.clear_fill_preview()
@@ -1102,20 +1132,22 @@ class ReggieQuickPaintHook:
         operations = tab.mouse_handler.get_operations()
         if not operations:
             return
-        
+
         # Get current layer and paint type
         from reggie.core import globals_
+        from reggie.core import undo as undo_module
         current_layer = globals_.CurrentLayer
         current_paint_type = globals_.CurrentPaintType
-        
-        # Apply each operation
-        for op in operations:
-            self.apply_operation(op, current_layer)
-        
+
+        # Apply each operation as one undo step
+        with undo_module.bulk_edit_session('Quick Paint stroke'):
+            for op in operations:
+                self.apply_operation(op, current_layer)
+
         # Mark level as dirty
         from reggie.core.dirty import SetDirty
         SetDirty()
-        
+
         # Update the scene
         globals_.mainWindow.scene.update()
     
@@ -1187,15 +1219,15 @@ class ReggieQuickPaintHook:
                     to_process.append(obj)
             
             # Process each object that covers this position
+            from reggie.core import undo as undo_module
             for obj in to_process:
                 obj_x, obj_y = obj.objx, obj.objy
                 obj_w, obj_h = obj.width, obj.height
                 obj_type = obj.type
                 obj_tileset = obj.tileset
-                
-                # Remove the original object
-                layer_obj.remove(obj)
-                globals_.mainWindow.scene.removeItem(obj)
+
+                # Remove the original object (undo-aware)
+                undo_module.bulk_remove_object(obj)
                 
                 # If it's a 1x1 object, we're done
                 if obj_w == 1 and obj_h == 1:
@@ -1250,13 +1282,15 @@ class ReggieQuickPaintHook:
         
         if not pending_deletes:
             return
-        
+
         from reggie.core import globals_
         from reggie.core.dirty import SetDirty
-        
+        from reggie.core import undo as undo_module
+
         deleted_count = 0
-        for x, y, layer in pending_deletes:
-            self.erase_at_position(x, y, layer)
+        with undo_module.bulk_edit_session('Quick Paint erase'):
+            for x, y, layer in pending_deletes:
+                self.erase_at_position(x, y, layer)
             deleted_count += 1
         
         if deleted_count > 0:

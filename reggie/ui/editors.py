@@ -839,7 +839,7 @@ class LocationEditorWidget(QtWidgets.QWidget):
         if right <= left: right += 8
         if bottom <= top: bottom += 8
 
-        with record_property_edit(loc, text='Snap location %d to grid' % loc.id):
+        with record_property_edit(loc, text=globals_.trans.string('Undo', 36, '[id]', loc.id)):
             loc.objx = left
             loc.objy = top
             loc.width = right - left

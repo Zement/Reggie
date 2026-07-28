@@ -3283,7 +3283,7 @@ class CommentItem(LevelEditorItem):
             if not undo.is_recording_blocked():
                 globals_.mainWindow.undoStack.push(undo.ChangePropertyCommand(
                     self, {'text': old_text}, {'text': new_text},
-                    text='Edit comment'))
+                    text=globals_.trans.string('Undo', 35)))
 
         if hasattr(self, 'textChanged'): self.textChanged(self)
 

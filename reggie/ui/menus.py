@@ -110,7 +110,7 @@ class MenuBuilder:
 
         self.CreateAction(
             'undohistory', self.win.HandleShowUndoHistory, GetIcon('undo'),
-            'Undo History...', 'View the list of undoable editing steps',
+            globals_.trans.stringOneLine('Undo', 0), globals_.trans.stringOneLine('Undo', 1),
             GetKeybind('undohistory'),
         )
 

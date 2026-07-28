@@ -725,11 +725,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         nicer home in Block D)
         """
         dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle('Undo History')
+        dlg.setWindowTitle(globals_.trans.string('Undo', 2))
         dlg.resize(400, 500)
 
         view = QtWidgets.QUndoView(self.undoStack, dlg)
-        view.setEmptyLabel('<Level loaded>')
+        view.setEmptyLabel(globals_.trans.string('Undo', 3))
 
         buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dlg.reject)
@@ -837,7 +837,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
                    for obj, old in old_positions if (obj.objx, obj.objy) != old]
         if entries:
             self.undoStack.push(undo.MoveItemsCommand(
-                entries, already_applied=True, text='Shift items'))
+                entries, already_applied=True, text=globals_.trans.string('Undo', 28)))
 
         SetDirty()
 
@@ -867,7 +867,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if not to_change:
             return
 
-        self.undoStack.beginMacro('Swap tilesets %d and %d' % (from_tileset + 1, to_tileset + 1))
+        self.undoStack.beginMacro(globals_.trans.string(
+            'Undo', 30, '[from]', from_tileset + 1, '[to]', to_tileset + 1))
         try:
             for nsmbobj, new_tileset in to_change:
                 with undo.record_property_edit(nsmbobj):
@@ -899,7 +900,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if not new_rect.isValid():
             return
 
-        self.undoStack.beginMacro('Merge locations')
+        self.undoStack.beginMacro(globals_.trans.string('Undo', 29))
         try:
             self.undoStack.push(undo.RemoveItemsCommand(locations))
             self.levelOverview.update()
@@ -983,6 +984,9 @@ class ReggieWindow(QtWidgets.QMainWindow):
             layer_list.append(obj)
             obj.positionChanged = self.HandleObjPosChange
             self.scene.addItem(obj)
+
+            # Recorded only while a bulk edit session (QPT) is open
+            undo.notify_item_created(obj)
 
             SetDirty()
 
@@ -2404,10 +2408,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         if sprites:
             if len(sprites) > 1:
-                self.undoStack.beginMacro('Replace %d sprites with sprite %d' % (len(sprites), type))
+                self.undoStack.beginMacro(globals_.trans.string(
+                    'Undo', 33, '[n]', len(sprites), '[id]', type))
             try:
                 for x in sprites:
-                    with undo.record_property_edit(x, text='Replace sprite with %d' % type):
+                    with undo.record_property_edit(x, text=globals_.trans.string('Undo', 32, '[id]', type)):
                         x.spritedata = self.defaultDataEditor.data.copy()  # change this first or else images get messed up
                         x.SetType(type)
                     x.update()
@@ -2462,7 +2467,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         if self.spriteEditorDock.isVisible():
             obj = self.selObj
-            with undo.record_property_edit(obj, text='Edit sprite %d data' % obj.type):
+            with undo.record_property_edit(obj, text=globals_.trans.string('Undo', 34, '[id]', obj.type)):
                 obj.spritedata = data
             obj.UpdateListItem()
             SetDirty()
@@ -2764,51 +2769,23 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         QtWidgets.QMainWindow.keyPressEvent(self, event)
 
-    def HandleAreaOptions(self):
+    # Area attributes covered by the Area Options dialog's undo snapshot
+    _AREA_SETTINGS_ATTRS = (
+        'loaded_sprites', 'force_loaded_sprites', 'timeLimit', 'startEntrance',
+        'toadHouseType', 'wrapFlag', 'creditsFlag', 'faceLeftFlag',
+        'unkFlag1', 'unkFlag2', 'unkVal1', 'unkVal2',
+        'tileset0', 'tileset1', 'tileset2', 'tileset3',
+    )
+
+    def RefreshTilesetsFromArea(self):
         """
-        Pops up the options for Area Dialogue
+        (Re)loads the tilesets named by globals_.Area.tileset0-3 and refreshes
+        every UI element that depends on them. Used by the Area Options dialog
+        and by undo/redo of area settings.
         """
-        dlg = deferred.AreaOptionsDialog()
-        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
-
-        SetDirty()
-
-        # Sprites
-        # Extracting the sprite id from the sprite name is hacky, but it works.
-        globals_.Area.loaded_sprites = set(int(desc.split(']')[0][1:]) for desc in dlg.LoadedSpritesTab.auto_model.stringList())
-        globals_.Area.force_loaded_sprites = set(int(desc.split(']')[0][1:]) for desc in dlg.LoadedSpritesTab.custom_model.stringList())
-
-        # Settings
-        globals_.Area.timeLimit = dlg.LoadingTab.timer.value() - 200
-        globals_.Area.startEntrance = dlg.LoadingTab.entrance.value()
-        globals_.Area.toadHouseType = dlg.LoadingTab.toadHouseType.currentIndex()
-        globals_.Area.wrapFlag = dlg.LoadingTab.wrap.isChecked()
-        globals_.Area.creditsFlag = dlg.LoadingTab.credits.isChecked()
-        globals_.Area.faceLeftFlag = dlg.LoadingTab.faceLeft.isChecked()
-        globals_.Area.unkFlag1 = dlg.LoadingTab.unk1.isChecked()
-        globals_.Area.unkFlag2 = dlg.LoadingTab.unk2.isChecked()
-        globals_.Area.unkVal1 = dlg.LoadingTab.unk3.value()
-        globals_.Area.unkVal2 = dlg.LoadingTab.unk4.value()
-
-        # Tilesets
         tilesetNum = 0
-        for idx, fname in enumerate(dlg.TilesetsTab.values()):
-
-            if fname in ('', None):
-                fname = ''
-            elif fname.startswith(globals_.trans.string('AreaDlg', 16)):
-                fname = fname[len(globals_.trans.string('AreaDlg', 17, '[name]', '')):]
-
-            if idx == 0:
-                globals_.Area.tileset0 = fname
-            elif idx == 1:
-                globals_.Area.tileset1 = fname
-            elif idx == 2:
-                globals_.Area.tileset2 = fname
-            else:
-                globals_.Area.tileset3 = fname
-
+        for idx, fname in enumerate((globals_.Area.tileset0, globals_.Area.tileset1,
+                                     globals_.Area.tileset2, globals_.Area.tileset3)):
             if fname != '':
                 tilesetNum += 1
                 LoadTileset(idx, fname)
@@ -2838,6 +2815,60 @@ class ReggieWindow(QtWidgets.QMainWindow):
             except Exception as e:
                 print(f"[QPT] Warning: Could not reset QPT: {e}")
 
+    def HandleAreaOptions(self):
+        """
+        Pops up the options for Area Dialogue
+        """
+        dlg = deferred.AreaOptionsDialog()
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+
+        SetDirty()
+
+        before = {attr: getattr(globals_.Area, attr) for attr in self._AREA_SETTINGS_ATTRS}
+
+        # Sprites
+        # Extracting the sprite id from the sprite name is hacky, but it works.
+        globals_.Area.loaded_sprites = set(int(desc.split(']')[0][1:]) for desc in dlg.LoadedSpritesTab.auto_model.stringList())
+        globals_.Area.force_loaded_sprites = set(int(desc.split(']')[0][1:]) for desc in dlg.LoadedSpritesTab.custom_model.stringList())
+
+        # Settings
+        globals_.Area.timeLimit = dlg.LoadingTab.timer.value() - 200
+        globals_.Area.startEntrance = dlg.LoadingTab.entrance.value()
+        globals_.Area.toadHouseType = dlg.LoadingTab.toadHouseType.currentIndex()
+        globals_.Area.wrapFlag = dlg.LoadingTab.wrap.isChecked()
+        globals_.Area.creditsFlag = dlg.LoadingTab.credits.isChecked()
+        globals_.Area.faceLeftFlag = dlg.LoadingTab.faceLeft.isChecked()
+        globals_.Area.unkFlag1 = dlg.LoadingTab.unk1.isChecked()
+        globals_.Area.unkFlag2 = dlg.LoadingTab.unk2.isChecked()
+        globals_.Area.unkVal1 = dlg.LoadingTab.unk3.value()
+        globals_.Area.unkVal2 = dlg.LoadingTab.unk4.value()
+
+        # Tilesets
+        for idx, fname in enumerate(dlg.TilesetsTab.values()):
+
+            if fname in ('', None):
+                fname = ''
+            elif fname.startswith(globals_.trans.string('AreaDlg', 16)):
+                fname = fname[len(globals_.trans.string('AreaDlg', 17, '[name]', '')):]
+
+            if idx == 0:
+                globals_.Area.tileset0 = fname
+            elif idx == 1:
+                globals_.Area.tileset1 = fname
+            elif idx == 2:
+                globals_.Area.tileset2 = fname
+            else:
+                globals_.Area.tileset3 = fname
+
+        self.RefreshTilesetsFromArea()
+
+        after = {attr: getattr(globals_.Area, attr) for attr in self._AREA_SETTINGS_ATTRS}
+        if after != before and not undo.is_recording_blocked():
+            self.undoStack.push(undo.AreaSettingsCommand(
+                before, after, globals_.trans.string('Undo', 51),
+                refresh_tilesets=True))
+
     def HandleZones(self):
         """
         Pops up the options for Zone dialog
@@ -2850,6 +2881,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
             return
 
         SetDirty()
+
+        zones_before = undo.snapshot_zones()
 
         # resync the zones
         items = self.scene.items()
@@ -2916,6 +2949,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.actions['backgrounds'].setEnabled(len(globals_.Area.zones) > 0)
         self.levelOverview.update()
 
+        zones_after = undo.snapshot_zones()
+        if zones_after != zones_before and not undo.is_recording_blocked():
+            self.undoStack.push(undo.ZonesSnapshotCommand(
+                zones_before, zones_after, globals_.trans.string('Undo', 50)))
+
     # Handles setting the backgrounds
     def HandleBG(self):
         """
@@ -2926,6 +2964,9 @@ class ReggieWindow(QtWidgets.QMainWindow):
             return
 
         SetDirty()
+
+        zones_before = undo.snapshot_zones()
+
         for tab, z in zip(dlg.BGTabs, globals_.Area.zones):
             # first index: BGA/BGB
             # second index: X/Y
@@ -2949,6 +2990,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
             z.bg1B = tab.hex_boxes[1][0].value()
             z.bg2B = tab.hex_boxes[1][1].value()
             z.bg3B = tab.hex_boxes[1][2].value()
+
+        zones_after = undo.snapshot_zones()
+        if zones_after != zones_before and not undo.is_recording_blocked():
+            self.undoStack.push(undo.ZonesSnapshotCommand(
+                zones_before, zones_after, globals_.trans.string('Undo', 52)))
 
     def HandleScreenshot(self):
         """
@@ -3052,5 +3098,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
             item = dlg.list.item(row)
             camprofiles.append(item.data(QtCore.Qt.ItemDataRole.UserRole))
 
+        before = {'camprofiles': globals_.Area.camprofiles}
         globals_.Area.camprofiles = camprofiles
         SetDirty()
+
+        if camprofiles != before['camprofiles'] and not undo.is_recording_blocked():
+            self.undoStack.push(undo.AreaSettingsCommand(
+                before, {'camprofiles': camprofiles},
+                globals_.trans.string('Undo', 53)))

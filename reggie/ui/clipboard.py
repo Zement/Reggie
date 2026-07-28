@@ -94,8 +94,8 @@ class ClipboardController:
 
             if to_be_deleted:
                 from reggie.core import undo
-                self.win.undoStack.push(
-                    undo.RemoveItemsCommand(to_be_deleted, text='Cut'))
+                self.win.undoStack.push(undo.RemoveItemsCommand(
+                    to_be_deleted, text=globals_.trans.string('Undo', 26)))
 
         if cutAction:
             self.win.levelOverview.update()
@@ -123,8 +123,8 @@ class ClipboardController:
 
             if created:
                 from reggie.core import undo
-                self.win.undoStack.push(
-                    undo.AddItemsCommand(created, text='Paste', already_applied=True))
+                self.win.undoStack.push(undo.AddItemsCommand(
+                    created, text=globals_.trans.string('Undo', 27), already_applied=True))
 
     def encodeObjects(self, clipboard_o, clipboard_s, clipboard_e=None, clipboard_l=None, clipboard_p=None):
         """

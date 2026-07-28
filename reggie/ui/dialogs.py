@@ -270,7 +270,7 @@ class ObjectTypeSwapDialog(QtWidgets.QDialog):
         from reggie.core import undo
         stack = globals_.mainWindow.undoStack
 
-        stack.beginMacro('Swap object types')
+        stack.beginMacro(globals_.trans.string('Undo', 31))
         try:
             for nsmbobj, new_tileset, new_type in to_change:
                 with undo.record_property_edit(nsmbobj):
