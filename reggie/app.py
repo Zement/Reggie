@@ -343,6 +343,7 @@ def main():
     globals_.PaddingLength = int(setting('PaddingLength', 0))
     globals_.PlaceObjectsAtFullSize = setting('PlaceObjectsAtFullSize', True)
     globals_.InsertPathNode = setting('InsertPathNode', False)
+    globals_.UndoLimit = int(setting('UndoLimit', 500))
     globals_.UseFullFilepath = setting('UseFullFilepath', False)
     globals_.UseRoundedRectangles = setting('UseRoundedRectangles', True)
     globals_.DarkMode = setting('DarkMode', False)

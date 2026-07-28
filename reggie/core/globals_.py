@@ -28,6 +28,7 @@ HideResetSpritedata = False
 HelpActions = None
 Initializing = None
 InsertPathNode = False
+UndoLimit = 500
 Layer0Shown = True
 Layer1Shown = True
 Layer2Shown = True
@@ -65,7 +66,7 @@ ReggieVersionFloat = 4.9
 # Version format: v[Major].[Minor].[Patch]-[MinorPatch]-[CommitID]
 # MinorPatch increments with each commit for proper sorting
 # Version is determined dynamically from git tags at runtime
-ReggieVersionShort = 'v4.9.1-24'  # Fallback if git is not available (update manually with each release)
+ReggieVersionShort = 'v4.9.1-25'  # Fallback if git is not available (update manually with each release)
 ResetDataWhenHiding = False
 RestoredFromAutoSave = False
 SettingsActions = None

@@ -148,6 +148,106 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
         self.lastCursorPosForMidButtonScroll = None
         self.cursorEdgeScrollTimer = None
 
+        # Undo support (Block C - A1): positions of the selected items at
+        # left-button press time, so the whole drag becomes one undo step.
+        self._dragUndoSession = None
+
+    def _beginDragUndoSession(self):
+        """
+        Snapshots the positions (and, for objects and locations, sizes) of all
+        currently selected level items. Called after a left-button press has
+        been processed by the scene.
+        """
+        from reggie.core import undo
+
+        if undo.is_recording_blocked():
+            self._dragUndoSession = None
+            return
+
+        session = []
+        for item in self.scene().selectedItems():
+            if isinstance(item, PathEditorLineItem):
+                continue
+            if not hasattr(item, 'objx'):
+                continue
+
+            if isinstance(item, (ObjectItem, LocationItem)):
+                session.append((item, (item.objx, item.objy, item.width, item.height)))
+            else:
+                session.append((item, (item.objx, item.objy)))
+
+        # Zones resize via their corner grabbers WITHOUT being selected, so
+        # they are never in selectedItems() — snapshot all of them instead
+        # (areas have at most a handful of zones).
+        if globals_.Area is not None:
+            for zone in globals_.Area.zones:
+                session.append((zone, (zone.objx, zone.objy, zone.width, zone.height)))
+
+        self._dragUndoSession = session or None
+
+    def _endDragUndoSession(self):
+        """
+        Compares current item geometry against the press-time snapshot and
+        records the whole gesture as a single undo step: a move, a resize
+        (corner-grabber drags), or a macro of both.
+        """
+        from reggie.core import undo
+
+        session, self._dragUndoSession = self._dragUndoSession, None
+        if not session or undo.is_recording_blocked():
+            return
+
+        moves = []
+        resizes = []
+        for item, old in session:
+            if len(old) == 4:
+                new = (item.objx, item.objy, item.width, item.height)
+                if new == old:
+                    continue
+                if new[2:] == old[2:]:
+                    # Size unchanged: plain move
+                    moves.append((item, old[:2], new[:2]))
+                else:
+                    resizes.append((item, old, new))
+            else:
+                new = (item.objx, item.objy)
+                if new != old:
+                    moves.append((item, old, new))
+
+        stack = globals_.mainWindow.undoStack
+        if moves and resizes:
+            stack.beginMacro(globals_.trans.string(
+                'Undo', 37, '[n]', len(moves) + len(resizes)))
+            try:
+                stack.push(undo.MoveItemsCommand(moves, already_applied=True))
+                stack.push(undo.ResizeItemsCommand(resizes, already_applied=True))
+            finally:
+                stack.endMacro()
+        elif moves:
+            stack.push(undo.MoveItemsCommand(moves, already_applied=True))
+        elif resizes:
+            stack.push(undo.ResizeItemsCommand(resizes, already_applied=True))
+
+    def _recordPaintedItems(self):
+        """
+        Records items created by a right-click paint gesture (object, sprite,
+        entrance, path node, location, comment, or a stamp's item list) as a
+        single AddItemsCommand.
+        """
+        from reggie.core import undo
+
+        cur = self.currentobj
+        if cur is None or undo.is_recording_blocked():
+            return
+
+        items = [item for item in (cur if isinstance(cur, (list, tuple)) else [cur])
+                 if item is not None and item.scene() is not None]
+        if not items:
+            return
+
+        globals_.mainWindow.undoStack.push(
+            undo.AddItemsCommand(items, already_applied=True))
+
     def mousePressEvent(self, event):
         """
         Overrides mouse pressing events if needed
@@ -371,6 +471,11 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
         else:
             QtWidgets.QGraphicsView.mousePressEvent(self, event)
 
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            # Snapshot selected item positions so the whole drag (if one
+            # follows) becomes a single undo step.
+            self._beginDragUndoSession()
+
         globals_.mainWindow.levelOverview.update()
 
     def resizeEvent(self, event):
@@ -440,6 +545,7 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
             return
 
         if event.button() == QtCore.Qt.MouseButton.RightButton:
+            self._recordPaintedItems()
             self.currentobj = None
         elif event.button() == QtCore.Qt.MouseButton.MiddleButton:
             self.setDragMode(QtWidgets.QGraphicsView.DragMode.RubberBandDrag)
@@ -449,6 +555,10 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
             self.cursorEdgeScrollTimer = None
 
         QtWidgets.QGraphicsView.mouseReleaseEvent(self, event)
+
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            # Record the drag gesture (if any) as one undo step
+            self._endDragUndoSession()
 
     def updatePaintDraggedItems(self):
         """Update items that are being paint-dragged (painted with

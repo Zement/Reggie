@@ -1683,6 +1683,7 @@ def LoadDefaultKeybinds():
         'saveas':         (QtGui.QKeySequence.StandardKey.SaveAs, globals_.trans.string('MenuItems', 10)),
         'savecopyas':     (None,                                  globals_.trans.string('MenuItems', 128)),
         'metainfo':       ('Ctrl+Alt+I',                          globals_.trans.string('MenuItems', 12)),
+        'undohistory':    ('Ctrl+H',                              globals_.trans.string('Undo', 2)),
         'screenshot':     ('Ctrl+Alt+S',                          globals_.trans.string('MenuItems', 14)),
         'changegamepath': ('Ctrl+Alt+G',                          globals_.trans.string('MenuItems', 16)),
         'preferences':    ('Ctrl+Alt+P',                          globals_.trans.string('MenuItems', 18)),
@@ -1836,11 +1837,13 @@ class PreferencesDialog(QtWidgets.QDialog):
         # Create other widgets
         self.infoLabel = QtWidgets.QLabel()
         self.generalTab = self.getGeneralTab()
+        self.undoTab = self.getUndoTab()
         self.toolbarTab = self.getToolbarTab()
         self.keybindsTab = self.getKeybindsTab()
         self.interfaceTab = self.getInterfaceTab()
         self.appearanceTab = self.getAppearanceTab(QtWidgets.QWidget)()
         self.tabWidget.addTab(self.generalTab, globals_.trans.string('PrefsDlg', 1))
+        self.tabWidget.addTab(self.undoTab, globals_.trans.string('MenuItems', 124))
         self.tabWidget.addTab(self.toolbarTab, globals_.trans.string('PrefsDlg', 2))
         self.tabWidget.addTab(self.keybindsTab, globals_.trans.string('PrefsDlg', 56))
         self.tabWidget.addTab(self.interfaceTab, globals_.trans.string('PrefsDlg', 42))
@@ -1866,6 +1869,34 @@ class PreferencesDialog(QtWidgets.QDialog):
         Handles the current tab being changed
         """
         self.infoLabel.setText(self.tabWidget.currentWidget().info)
+
+    def getUndoTab(self):
+        """
+        Returns the Undo Tab
+        """
+
+        class UndoTab(QtWidgets.QWidget):
+            """
+            Undo Tab (Block C - A1)
+            """
+            info = globals_.trans.string('Undo', 6)
+
+            def __init__(self):
+                QtWidgets.QWidget.__init__(self)
+
+                self.historyLimit = QtWidgets.QSpinBox()
+                self.historyLimit.setRange(1, 100000)
+                self.historyLimit.setValue(getattr(globals_, 'UndoLimit', 500))
+
+                hint = QtWidgets.QLabel(globals_.trans.string('Undo', 5))
+                hint.setWordWrap(True)
+
+                L = QtWidgets.QFormLayout()
+                L.addRow(globals_.trans.string('Undo', 4), self.historyLimit)
+                L.addRow(hint)
+                self.setLayout(L)
+
+        return UndoTab()
 
     def getGeneralTab(self):
         """

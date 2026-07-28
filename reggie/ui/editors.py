@@ -2,6 +2,8 @@ from PyQt6 import QtWidgets, QtCore
 import sys
 
 from reggie.core import globals_
+from reggie.core import undo
+from reggie.core.undo import record_property_edit
 from reggie.ui.ui import createHorzLine
 from reggie.core.dirty import SetDirty
 from reggie.io.misc import LoadEntranceNames
@@ -213,7 +215,8 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        self.ent.entid = i
+        with record_property_edit(self.ent):
+            self.ent.entid = i
         self.ent.update()
         self.ent.UpdateTooltip()
         self.ent.UpdateListItem()
@@ -225,10 +228,11 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        if checked:
-            self.ent.entsettings |= 0x40
-        else:
-            self.ent.entsettings &= ~0x40
+        with record_property_edit(self.ent):
+            if checked:
+                self.ent.entsettings |= 0x40
+            else:
+                self.ent.entsettings &= ~0x40
 
     def HandleEntranceTypeChanged(self, new_index):
         """
@@ -250,7 +254,8 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         self.forwardPipeCheckbox.setVisible(i in self.CanUseFlag4)
         if self.UpdateFlag: return
         SetDirty()
-        self.ent.enttype = i
+        with record_property_edit(self.ent):
+            self.ent.enttype = i
         self.ent.TypeChange()
         self.ent.update()
         self.ent.UpdateTooltip()
@@ -263,7 +268,8 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        self.ent.destarea = i
+        with record_property_edit(self.ent):
+            self.ent.destarea = i
         self.ent.UpdateTooltip()
         self.ent.UpdateListItem()
 
@@ -273,7 +279,8 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        self.ent.destentrance = i
+        with record_property_edit(self.ent):
+            self.ent.destentrance = i
         self.ent.UpdateTooltip()
         self.ent.UpdateListItem()
 
@@ -283,10 +290,11 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        if not checked:
-            self.ent.entsettings |= 0x80
-        else:
-            self.ent.entsettings &= ~0x80
+        with record_property_edit(self.ent):
+            if not checked:
+                self.ent.entsettings |= 0x80
+            else:
+                self.ent.entsettings &= ~0x80
         self.ent.UpdateTooltip()
         self.ent.UpdateListItem()
 
@@ -296,10 +304,11 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        if checked:
-            self.ent.entsettings |= 2
-        else:
-            self.ent.entsettings &= ~2
+        with record_property_edit(self.ent):
+            if checked:
+                self.ent.entsettings |= 2
+            else:
+                self.ent.entsettings &= ~2
 
     def HandleExitLevelCheckboxClicked(self, checked):
         """
@@ -307,7 +316,8 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag or self.ent.leave_level == checked: return
         SetDirty()
-        self.ent.leave_level = checked
+        with record_property_edit(self.ent):
+            self.ent.leave_level = checked
         self.ent.UpdateTooltip()
         self.ent.UpdateListItem()
 
@@ -326,10 +336,11 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         self.cpHorzLine.setVisible(checked)
         if self.UpdateFlag: return
         SetDirty()
-        if checked:
-            self.ent.entsettings |= 8
-        else:
-            self.ent.entsettings &= ~8
+        with record_property_edit(self.ent):
+            if checked:
+                self.ent.entsettings |= 8
+            else:
+                self.ent.entsettings &= ~8
 
     def HandleConnectedPipeReverseClicked(self, checked):
         """
@@ -337,10 +348,11 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        if checked:
-            self.ent.entsettings |= 1
-        else:
-            self.ent.entsettings &= ~1
+        with record_property_edit(self.ent):
+            if checked:
+                self.ent.entsettings |= 1
+            else:
+                self.ent.entsettings &= ~1
 
     def HandlePathIDChanged(self, i):
         """
@@ -348,7 +360,8 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        self.ent.entpath = i
+        with record_property_edit(self.ent):
+            self.ent.entpath = i
 
     def HandleForwardPipeClicked(self, checked):
         """
@@ -356,10 +369,11 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        if checked:
-            self.ent.entsettings |= 4
-        else:
-            self.ent.entsettings &= ~4
+        with record_property_edit(self.ent):
+            if checked:
+                self.ent.entsettings |= 4
+            else:
+                self.ent.entsettings &= ~4
 
     def HandleActiveLayerChanged(self, i):
         """
@@ -367,7 +381,8 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        self.ent.entlayer = i
+        with record_property_edit(self.ent):
+            self.ent.entlayer = i
 
     def HandleCpDirectionChanged(self, i):
         """
@@ -375,7 +390,8 @@ class EntranceEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        self.ent.cpdirection = i
+        with record_property_edit(self.ent):
+            self.ent.cpdirection = i
 
     def keyPressEvent(self, event):
         """
@@ -515,6 +531,24 @@ class PathNodeEditorWidget(QtWidgets.QWidget):
         """
         self.node_id.setRange(0, len(self.path_node.path) - 1)
 
+    def _RecordNodeDataChange(self, **kwargs):
+        """
+        Applies a speed/accel/delay change and records it as one undo step
+        (consecutive edits of the same node merge).
+        """
+        node = self.path_node
+        before = node.path.get_data_for_node(node.nodeid)
+
+        if not node.path.set_node_data(node, **kwargs):
+            return
+
+        SetDirty()
+
+        if not undo.is_recording_blocked():
+            after = node.path.get_data_for_node(node.nodeid)
+            globals_.mainWindow.undoStack.push(
+                undo.PathNodeDataCommand(node, before, after))
+
     def HandleSpeedChanged(self, i):
         """
         Handler for the speed changing
@@ -522,8 +556,7 @@ class PathNodeEditorWidget(QtWidgets.QWidget):
         if self.UpdateFlag:
             return
 
-        if self.path_node.path.set_node_data(self.path_node, speed=i):
-            SetDirty()
+        self._RecordNodeDataChange(speed=i)
 
     def HandleAccelChanged(self, i):
         """
@@ -532,8 +565,7 @@ class PathNodeEditorWidget(QtWidgets.QWidget):
         if self.UpdateFlag:
             return
 
-        if self.path_node.path.set_node_data(self.path_node, accel=i):
-            SetDirty()
+        self._RecordNodeDataChange(accel=i)
 
     def HandleDelayChanged(self, i):
         """
@@ -542,8 +574,7 @@ class PathNodeEditorWidget(QtWidgets.QWidget):
         if self.UpdateFlag:
             return
 
-        if self.path_node.path.set_node_data(self.path_node, delay=i):
-            SetDirty()
+        self._RecordNodeDataChange(delay=i)
 
     def HandleLoopsChanged(self, i):
         if self.UpdateFlag:
@@ -552,23 +583,40 @@ class PathNodeEditorWidget(QtWidgets.QWidget):
         # i is an integer: 0=Unchecked, 2=Checked
         # Convert to boolean
         new_loops_value = (i == QtCore.Qt.CheckState.Checked.value or i == 2)
-        
+
+        old_loops_value = self.path_node.path.get_loops()
+
         if self.path_node.path.set_loops(new_loops_value):
             SetDirty()
+
+            if not undo.is_recording_blocked():
+                globals_.mainWindow.undoStack.push(undo.PathSettingCommand(
+                    self.path_node.path, 'loops', old_loops_value,
+                    new_loops_value, node=self.path_node))
 
     def HandlePathIdChanged(self, i):
         if self.UpdateFlag or self.path_node.pathid == i:
             return
 
+        old_id = self.path_node.pathid
         self.path_node.path.set_id(i)
         SetDirty()
+
+        if not undo.is_recording_blocked():
+            globals_.mainWindow.undoStack.push(undo.PathSettingCommand(
+                self.path_node.path, 'id', old_id, i, node=self.path_node))
 
     def HandleNodeIdChanged(self, i):
         if self.UpdateFlag or self.path_node.nodeid == i:
             return
 
+        old_index = self.path_node.nodeid
         self.path_node.path.move_node(self.path_node, i)
         SetDirty()
+
+        if not undo.is_recording_blocked():
+            globals_.mainWindow.undoStack.push(
+                undo.PathNodeOrderCommand(self.path_node, old_index, i))
 
     def keyPressEvent(self, event):
         """
@@ -699,9 +747,11 @@ class LocationEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        self.loc.id = i
+        with record_property_edit(self.loc):
+            self.loc.id = i
         self.loc.update()
         self.loc.UpdateTitle()
+        self.loc.UpdateListItem()
         self.FixTitle()
 
     def HandleLocationXChanged(self, i):
@@ -710,7 +760,8 @@ class LocationEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        self.loc.objx = i
+        with record_property_edit(self.loc):
+            self.loc.objx = i
         self.loc.autoPosChange = True
         self.loc.setX(int(i * 1.5))
         self.loc.autoPosChange = False
@@ -723,7 +774,8 @@ class LocationEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        self.loc.objy = i
+        with record_property_edit(self.loc):
+            self.loc.objy = i
         self.loc.autoPosChange = True
         self.loc.setY(int(i * 1.5))
         self.loc.autoPosChange = False
@@ -736,7 +788,8 @@ class LocationEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        self.loc.width = i
+        with record_property_edit(self.loc):
+            self.loc.width = i
         self.loc.UpdateRects()
         self.loc.update()
 
@@ -746,7 +799,8 @@ class LocationEditorWidget(QtWidgets.QWidget):
         """
         if self.UpdateFlag: return
         SetDirty()
-        self.loc.height = i
+        with record_property_edit(self.loc):
+            self.loc.height = i
         self.loc.UpdateRects()
         self.loc.update()
 
@@ -785,10 +839,11 @@ class LocationEditorWidget(QtWidgets.QWidget):
         if right <= left: right += 8
         if bottom <= top: bottom += 8
 
-        loc.objx = left
-        loc.objy = top
-        loc.width = right - left
-        loc.height = bottom - top
+        with record_property_edit(loc, text=globals_.trans.string('Undo', 36, '[id]', loc.id)):
+            loc.objx = left
+            loc.objy = top
+            loc.width = right - left
+            loc.height = bottom - top
 
         loc.setPos(int(left * 1.5), int(top * 1.5))
         loc.UpdateRects()

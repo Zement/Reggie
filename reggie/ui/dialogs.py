@@ -256,14 +256,28 @@ class ObjectTypeSwapDialog(QtWidgets.QDialog):
         if from_type == to_type and from_tileset == to_tileset:
             return
 
+        to_change = []
         for layer in globals_.Area.layers:
             for nsmbobj in layer:
                 if nsmbobj.type == from_type and nsmbobj.tileset == from_tileset:
-                    nsmbobj.SetType(to_tileset, to_type)
-                    SetDirty()
+                    to_change.append((nsmbobj, to_tileset, to_type))
                 elif do_exchange and nsmbobj.type == to_type and nsmbobj.tileset == to_tileset:
-                    nsmbobj.SetType(from_tileset, from_type)
-                    SetDirty()
+                    to_change.append((nsmbobj, from_tileset, from_type))
+
+        if not to_change:
+            return
+
+        from reggie.core import undo
+        stack = globals_.mainWindow.undoStack
+
+        stack.beginMacro(globals_.trans.string('Undo', 31))
+        try:
+            for nsmbobj, new_tileset, new_type in to_change:
+                with undo.record_property_edit(nsmbobj):
+                    nsmbobj.SetType(new_tileset, new_type)
+                SetDirty()
+        finally:
+            stack.endMacro()
 
     def getTilesetObjNum(self, index):
         """

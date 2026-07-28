@@ -47,12 +47,21 @@ class WindowActions:
         if globals_.Area.areanum == 1:
             dlg = MetaInfoDialog()
             if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+                from reggie.core import undo
+
+                before = undo.snapshot_metadata()
+
                 globals_.Area.Metadata.setStrData('Title', dlg.levelName.text())
                 globals_.Area.Metadata.setStrData('Author', dlg.Author.text())
                 globals_.Area.Metadata.setStrData('Group', dlg.Group.text())
                 globals_.Area.Metadata.setStrData('Website', dlg.Website.text())
 
                 SetDirty()
+
+                after = undo.snapshot_metadata()
+                if after != before and not undo.is_recording_blocked():
+                    self.win.undoStack.push(undo.MetadataCommand(
+                        before, after, globals_.trans.string('Undo', 54)))
                 return
         else:
             dlg = QtWidgets.QMessageBox()

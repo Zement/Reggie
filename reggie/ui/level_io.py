@@ -111,6 +111,9 @@ class LevelIO:
 
         setSetting('AutoSaveFilePath', self.win.fileSavePath)
         setSetting('AutoSaveFileData', 'x')
+
+        # Saving resets the undo history (Block C - A1)
+        self.win.undoStack.clear()
         return True
     def HandleSaveAs(self, copy = False):
         """
@@ -175,6 +178,9 @@ class LevelIO:
 
             self.win.UpdateTitle()
             self.win.RecentMenu.AddToList(self.win.fileSavePath)
+
+            # Saving resets the undo history (Block C - A1)
+            self.win.undoStack.clear()
 
         return True
     def HandleSaveCopyAs(self):
@@ -391,6 +397,10 @@ class LevelIO:
                 self.win.qpt_palette.reset()
             except Exception as e:
                 print(f"[QPT] Warning: Could not reset QPT: {e}")
+
+        # The undo history refers to items of the previous level/area, so
+        # reset it (Block C - A1: history resets on level load & area switch)
+        self.win.undoStack.clear()
 
         # If we got this far, everything worked! Return True.
         return True

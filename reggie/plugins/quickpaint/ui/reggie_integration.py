@@ -217,28 +217,30 @@ class QuickPaintTab(QtWidgets.QWidget):
             main_window = globals_.mainWindow
             
             if main_window and placements:
-                # Apply cross-stroke merge deletions FIRST (before creating new objects)
-                # This prevents splitting of newly created merged objects
-                engine = self.mouse_handler.engine
-                merge_deletes = engine.get_pending_merge_deletes()
-                for x, y, layer in merge_deletes:
-                    self._delete_tile_at(x, y, layer)
-                
-                for placement in placements:
-                    # For terrain-aware replacements, delete existing tile first
-                    # This handles the case where we're replacing a border with center
-                    self._delete_tile_at(placement.x, placement.y, placement.layer)
-                    
-                    # Create the object in the level
-                    main_window.CreateObject(
-                        tileset=placement.tileset,
-                        object_num=placement.object_id,
-                        layer=placement.layer,
-                        x=placement.x,
-                        y=placement.y,
-                        width=placement.width,
-                        height=placement.height
-                    )
+                from reggie.core import undo as undo_module
+                with undo_module.bulk_edit_session('Quick Paint stroke'):
+                    # Apply cross-stroke merge deletions FIRST (before creating new objects)
+                    # This prevents splitting of newly created merged objects
+                    engine = self.mouse_handler.engine
+                    merge_deletes = engine.get_pending_merge_deletes()
+                    for x, y, layer in merge_deletes:
+                        self._delete_tile_at(x, y, layer)
+
+                    for placement in placements:
+                        # For terrain-aware replacements, delete existing tile first
+                        # This handles the case where we're replacing a border with center
+                        self._delete_tile_at(placement.x, placement.y, placement.layer)
+
+                        # Create the object in the level
+                        main_window.CreateObject(
+                            tileset=placement.tileset,
+                            object_num=placement.object_id,
+                            layer=placement.layer,
+                            x=placement.x,
+                            y=placement.y,
+                            width=placement.width,
+                            height=placement.height
+                        )
                 print(f"[QPT] OK: Created {len(placements)} objects in level")
                 
                 # Schedule terrain-aware deletions after 100ms delay
@@ -270,15 +272,17 @@ class QuickPaintTab(QtWidgets.QWidget):
             main_window = globals_.mainWindow
             
             if main_window and placement:
-                main_window.CreateObject(
-                    tileset=placement.tileset,
-                    object_num=placement.object_id,
-                    layer=placement.layer,
-                    x=placement.x,
-                    y=placement.y,
-                    width=placement.width,
-                    height=placement.height
-                )
+                from reggie.core import undo as undo_module
+                with undo_module.bulk_edit_session('Quick Paint stroke'):
+                    main_window.CreateObject(
+                        tileset=placement.tileset,
+                        object_num=placement.object_id,
+                        layer=placement.layer,
+                        x=placement.x,
+                        y=placement.y,
+                        width=placement.width,
+                        height=placement.height
+                    )
                 print(f"[QPT] OK: Placed object at ({placement.x}, {placement.y})")
         except Exception as e:
             print(f"[QPT] Error placing object: {e}")
@@ -594,20 +598,22 @@ class QuickPaintTab(QtWidgets.QWidget):
                         'width': run_end_x - run_start_x + 1, 'height': height
                     })
                 
-                # Step 4: Create merged objects
+                # Step 4: Create merged objects as one undo step
+                from reggie.core import undo as undo_module
                 placed_count = 0
-                for p in placements:
-                    try:
-                        globals_.mainWindow.CreateObject(
-                            fill_tileset,
-                            fill_object_id,
-                            layer,
-                            p['x'], p['y'],
-                            p['width'], p['height']
-                        )
-                        placed_count += 1
-                    except Exception as e:
-                        print(f"[QPT] Auto-fill error at ({p['x']}, {p['y']}): {e}")
+                with undo_module.bulk_edit_session('Quick Paint fill'):
+                    for p in placements:
+                        try:
+                            globals_.mainWindow.CreateObject(
+                                fill_tileset,
+                                fill_object_id,
+                                layer,
+                                p['x'], p['y'],
+                                p['width'], p['height']
+                            )
+                            placed_count += 1
+                        except Exception as e:
+                            print(f"[QPT] Auto-fill error at ({p['x']}, {p['y']}): {e}")
                 
                 if placed_count > 0:
                     SetDirty()
@@ -655,15 +661,15 @@ class QuickPaintTab(QtWidgets.QWidget):
                     to_process.append(obj)
             
             # Process each object
+            from reggie.core import undo as undo_module
             for obj in to_process:
                 obj_x, obj_y = obj.objx, obj.objy
                 obj_w, obj_h = obj.width, obj.height
                 obj_type = obj.type
                 obj_tileset = obj.tileset
-                
-                # Remove the original object
-                layer_obj.remove(obj)
-                globals_.mainWindow.scene.removeItem(obj)
+
+                # Remove the original object (undo-aware)
+                undo_module.bulk_remove_object(obj)
                 
                 # If 1x1, we're done
                 if obj_w == 1 and obj_h == 1:
@@ -907,15 +913,12 @@ class QuickPaintTab(QtWidgets.QWidget):
         return None
     
     def _remove_object(self, obj):
-        """Remove an object from the scene and layer"""
-        from reggie.core import globals_
+        """Remove an object from the scene and layer (undo-aware)"""
         from reggie.core.dirty import SetDirty
-        
+        from reggie.core import undo as undo_module
+
         try:
-            layer_idx = obj.layer
-            if layer_idx < len(globals_.Area.layers):
-                globals_.Area.layers[layer_idx].remove(obj)
-            globals_.mainWindow.scene.removeItem(obj)
+            undo_module.bulk_remove_object(obj)
             SetDirty()
         except Exception as e:
             print(f"[QPT] Error removing object: {e}")
@@ -929,14 +932,18 @@ class QuickPaintTab(QtWidgets.QWidget):
         try:
             # Create the object
             obj = ObjectItem(tileset, obj_type, layer, x, y, width, height, 1)
-            
+
             # Add to layer
             if layer < len(globals_.Area.layers):
                 globals_.Area.layers[layer].append(obj)
-            
+
             # Add to scene
             globals_.mainWindow.scene.addItem(obj)
-            
+
+            # Recorded only while a bulk edit session is open
+            from reggie.core import undo as undo_module
+            undo_module.notify_item_created(obj)
+
             SetDirty()
         except Exception as e:
             print(f"[QPT] Error placing object: {e}")
@@ -1436,28 +1443,31 @@ class FillPaintTab(QtWidgets.QWidget):
         
         # Convert to set for efficient lookup
         fill_positions_set = set(positions) if isinstance(positions[0], tuple) else set((p[0], p[1]) for p in positions)
-        
+
         # Shared set to track all occupied positions across all deco fill operations
         # This ensures consecutive deco fills don't overlap with each other
         shared_occupied = set()
-        
+
+        from reggie.core import undo as undo_module
+
         applied_count = 0
-        for container in self._deco_containers:
-            # Check if container has a deco object set
-            tileset, object_id, obj_width, obj_height = container.get_object_info()
-            if object_id is None:
-                continue  # Skip containers without objects
-            
-            # Get probability from the container's slider
-            probability = container.prob_slider.value() / 100.0
-            if probability <= 0:
-                continue  # Skip if probability is 0
-            
-            # Apply deco fill for this container, passing fill positions and shared occupied
-            print(f"[FillPaintTab] Auto-applying deco: container #{container.container_id}, prob={probability:.0%}")
-            self._apply_deco_fill(container, probability, shared_occupied, fill_positions_set)
-            applied_count += 1
-        
+        with undo_module.bulk_edit_session('Quick Paint deco fill'):
+            for container in self._deco_containers:
+                # Check if container has a deco object set
+                tileset, object_id, obj_width, obj_height = container.get_object_info()
+                if object_id is None:
+                    continue  # Skip containers without objects
+
+                # Get probability from the container's slider
+                probability = container.prob_slider.value() / 100.0
+                if probability <= 0:
+                    continue  # Skip if probability is 0
+
+                # Apply deco fill for this container, passing fill positions and shared occupied
+                print(f"[FillPaintTab] Auto-applying deco: container #{container.container_id}, prob={probability:.0%}")
+                self._apply_deco_fill(container, probability, shared_occupied, fill_positions_set)
+                applied_count += 1
+
         if applied_count > 0:
             self.status_label.setText(f"Fill: Placed tiles + {applied_count} deco layer(s)")
     
@@ -2001,12 +2011,12 @@ class FillPaintTab(QtWidgets.QWidget):
         
         print(f"[FillPaintTab] Found {len(objects_to_delete)} objects to delete")
         
-        # Delete the objects
-        for obj in objects_to_delete:
-            obj.delete()
-            obj.setSelected(False)
-            globals_.mainWindow.scene.removeItem(obj)
-            deleted_count += 1
+        # Delete the objects as one undo step
+        from reggie.core import undo as undo_module
+        with undo_module.bulk_edit_session('Quick Paint clear fill'):
+            for obj in objects_to_delete:
+                undo_module.bulk_remove_object(obj)
+                deleted_count += 1
         
         # Cancel the fill preview
         self.fill_engine.cancel_fill()
