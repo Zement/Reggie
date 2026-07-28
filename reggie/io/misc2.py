@@ -176,6 +176,13 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
             else:
                 session.append((item, (item.objx, item.objy)))
 
+        # Zones resize via their corner grabbers WITHOUT being selected, so
+        # they are never in selectedItems() — snapshot all of them instead
+        # (areas have at most a handful of zones).
+        if globals_.Area is not None:
+            for zone in globals_.Area.zones:
+                session.append((zone, (zone.objx, zone.objy, zone.width, zone.height)))
+
         self._dragUndoSession = session or None
 
     def _endDragUndoSession(self):

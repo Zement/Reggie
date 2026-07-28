@@ -1683,7 +1683,7 @@ def LoadDefaultKeybinds():
         'saveas':         (QtGui.QKeySequence.StandardKey.SaveAs, globals_.trans.string('MenuItems', 10)),
         'savecopyas':     (None,                                  globals_.trans.string('MenuItems', 128)),
         'metainfo':       ('Ctrl+Alt+I',                          globals_.trans.string('MenuItems', 12)),
-        'undohistory':    ('Ctrl+Shift+H',                        globals_.trans.string('Undo', 2)),
+        'undohistory':    ('Ctrl+H',                              globals_.trans.string('Undo', 2)),
         'screenshot':     ('Ctrl+Alt+S',                          globals_.trans.string('MenuItems', 14)),
         'changegamepath': ('Ctrl+Alt+G',                          globals_.trans.string('MenuItems', 16)),
         'preferences':    ('Ctrl+Alt+P',                          globals_.trans.string('MenuItems', 18)),

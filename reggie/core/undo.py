@@ -18,7 +18,7 @@ Design rules:
   (see level_io.py), and the history size comes from the 'UndoLimit' setting.
 """
 
-from PyQt6 import QtGui
+from PyQt6 import QtCore, QtGui
 
 from reggie.core import globals_
 from reggie.core.dirty import SetDirty
@@ -734,9 +734,30 @@ def _apply_geometry(item, x, y, w, h):
     """
     Applies position and (if given) size to an item.
     """
-    from reggie.core.levelitems import ObjectItem, LocationItem
+    from reggie.core.levelitems import ObjectItem, LocationItem, ZoneItem
 
-    if isinstance(item, ObjectItem):
+    if isinstance(item, ZoneItem):
+        # Mirrors ZoneItem.mouseMoveEvent's grabber-resize application
+        old_rect = QtCore.QRectF(item.x(), item.y(), item.width * 1.5, item.height * 1.5)
+
+        item.objx, item.objy = x, y
+        if w is not None:
+            item.width, item.height = w, h
+
+        item.UpdateRects()
+        item.setPos(int(x * 1.5), int(y * 1.5))
+
+        new_rect = QtCore.QRectF(item.x(), item.y(), item.width * 1.5, item.height * 1.5)
+        update_rect = old_rect.united(new_rect)
+        update_rect += QtCore.QMarginsF(-3, -3, 3, 3)
+
+        globals_.mainWindow.scene.update(update_rect)
+        globals_.mainWindow.levelOverview.update()
+
+        for spr in globals_.Area.sprites:
+            spr.ImageObj.positionChanged()
+
+    elif isinstance(item, ObjectItem):
         oldBR = item.getFullRect()
 
         item.objx, item.objy = x, y
