@@ -1397,6 +1397,16 @@ class SpriteList(QtWidgets.QWidget):
         self.table.setSortingEnabled(False)
         row = self.getRowFor(sprite)
 
+        # A sprite with no row here has nothing to update. getRowFor returns -1,
+        # and table.item(-1, column) returns None, so the loop below would raise
+        # AttributeError on setText - which is what a collaboration client saw
+        # for every property edit before synced sprites were registered with
+        # this table. Guarding here as well keeps a bookkeeping gap from turning
+        # an edit into a traceback.
+        if row < 0:
+            self.table.setSortingEnabled(True)
+            return
+
         # Skip the first columns (the id and name)
         for i in range(2, self.table.columnCount()):
             id_values = ids.get(self.idtypes[i - 2], [""])
@@ -1405,6 +1415,9 @@ class SpriteList(QtWidgets.QWidget):
                 id_values = id_values[0]
 
             item = self.table.item(row, i)
+            if item is None:
+                continue
+
             item.setText(str(id_values))
 
         # re-enable sorting

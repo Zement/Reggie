@@ -1214,11 +1214,87 @@ def create_item(description, sprite_format=None, area=None):
         # items, so a bare 'add' for them is refused rather than half-handled.
         raise SyncError('remote creation of %r is not supported' % (kind,))
 
-    scene = getattr(globals_, 'mainWindow', None)
-    if scene is not None and getattr(scene, 'scene', None) is not None:
-        scene.scene.addItem(item)
+    _register_created_item(item, target_area)
+    return item
+
+
+def _register_created_item(item, area):
+    """
+    Puts a newly created item into the scene AND the editor's side lists.
+
+    Adding it to the scene alone is not enough, and the difference is not
+    cosmetic: the sprite list is a table whose rows carry the sprite object, and
+    SpriteList.updateSprite() looks a sprite up with getRowFor(), which returns
+    -1 when there is no row. The caller then does table.item(-1, column), gets
+    None, and every property edit raises
+
+        AttributeError: 'NoneType' object has no attribute 'setText'
+
+    which is what Zement hit on sprites but not entrances - the entrance editor
+    does not go through that table.
+
+    Delegates to A1's _attach_item rather than repeating its per-type
+    bookkeeping. That function already knows about id-type registration, comment
+    text proxies, path node renumbering and z-order, and each of those is a
+    separate way for a hand-rolled version to be subtly wrong.
+
+    The item was appended to the area list by the caller, so it is removed again
+    first: _attach_item inserts at a given index and would otherwise leave a
+    second entry pointing at the same object.
+    """
+    from reggie.core import globals_, undo
+
+    window = getattr(globals_, 'mainWindow', None)
+    if window is None or getattr(window, 'scene', None) is None:
+        # Headless: the area lists are the whole model, and the caller has
+        # already updated them.
+        return item
+
+    index = _remove_from_area_lists(item, area)
+
+    try:
+        undo._attach_item(item, {'index': index})
+    except Exception:
+        # Attachment is best-effort: an item visible but missing from a side
+        # list is recoverable, whereas an exception here would abort the whole
+        # snapshot and leave the level half-built.
+        if item.scene() is None:
+            window.scene.addItem(item)
 
     return item
+
+
+def _remove_from_area_lists(item, area):
+    """
+    Takes an item back out of the area lists, returning the index it held.
+
+    _attach_item owns insertion; this undoes the caller's append so the two do
+    not both add it.
+    """
+    from reggie.core import globals_
+
+    target = area if area is not None else getattr(globals_, 'Area', None)
+    if target is None:
+        return 0
+
+    for name in ('sprites', 'entrances', 'locations', 'comments', 'paths'):
+        group = getattr(target, name, None)
+        if isinstance(group, list):
+            for index, existing in enumerate(group):
+                if existing is item:
+                    del group[index]
+                    return index
+
+    layers = getattr(target, 'layers', None)
+    if isinstance(layers, list):
+        for layer in layers:
+            if isinstance(layer, list):
+                for index, existing in enumerate(layer):
+                    if existing is item:
+                        del layer[index]
+                        return index
+
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -1253,7 +1329,47 @@ def build_snapshot(refmap, area=None, area_number=1):
             if len(items) > MAX_SNAPSHOT_ITEMS:
                 raise SyncError('this level has too many items to synchronise')
 
-    return {'area': int(area_number), 'items': items, 'total': len(items)}
+    return {
+        'area': int(area_number),
+        'items': items,
+        'total': len(items),
+        'zones': _snapshot_zone_attrs(target_area),
+        'tilesets': _snapshot_tilesets(target_area),
+    }
+
+
+def _snapshot_zone_attrs(area):
+    """
+    The zones' attributes, positionally.
+
+    Only the attributes travel, not the zone objects: A1's snapshot_zones() is
+    keyed on live objects, and a ZoneItem cannot be reconstructed from the wire
+    without the Zones dialog's own bookkeeping. Sending them means a joining
+    client sees the host's camera bounds, backgrounds and music rather than
+    whatever its own file happened to contain.
+    """
+    from reggie.core.undo import _ZONE_ATTRS
+
+    zones = getattr(area, 'zones', None)
+    if not isinstance(zones, list):
+        return []
+
+    return [{attr: getattr(zone, attr) for attr in _ZONE_ATTRS
+             if hasattr(zone, attr)}
+            for zone in zones[:protocol.MAX_ZONES]]
+
+
+def _snapshot_tilesets(area):
+    """
+    The four tileset names.
+
+    Names only - the tileset *files* are never transferred here; the client
+    loads its own copy by name, which is why both peers need the same patch.
+    Without this a client that had another level open kept that level's
+    tilesets, so every object rendered as the wrong graphic.
+    """
+    return [str(getattr(area, 'tileset%d' % slot, '') or '')
+            for slot in range(4)]
 
 
 def _snapshot_groups(area):
@@ -1266,6 +1382,152 @@ def _snapshot_groups(area):
         list(getattr(area, 'locations', [])),
         list(getattr(area, 'comments', [])),
     )
+
+
+def _apply_snapshot_tilesets(names, area=None):
+    """
+    Adopts the host's tileset names and reloads the object palettes.
+
+    Without this a client that had a different level open kept that level's
+    tilesets, so the host's objects rendered as whatever happened to occupy the
+    same slots - Zement's 01-02 tilesets showing under 01-01's objects.
+
+    Only the *names* cross the network; the files are loaded from the client's
+    own copy of the patch, which is what the patch check exists to guarantee.
+    """
+    from reggie.core import globals_
+
+    if not isinstance(names, list) or not names:
+        return False
+
+    target = area if area is not None else getattr(globals_, 'Area', None)
+    if target is None:
+        return False
+
+    changed = False
+    for slot, name in enumerate(names[:4]):
+        # A tileset name is a filename component from a peer, so it goes through
+        # the same validation as any other path fragment. An empty slot is legal
+        # and means "no tileset".
+        clean = str(name or '')
+        if clean and not _is_safe_tileset_name(clean):
+            raise SyncError('invalid tileset name %r' % (clean,))
+
+        attribute = 'tileset%d' % slot
+        if getattr(target, attribute, None) != clean:
+            setattr(target, attribute, clean)
+            changed = True
+
+    if not changed:
+        return False
+
+    _reload_tilesets()
+    return True
+
+
+def _is_safe_tileset_name(name):
+    """
+    A tileset name must be a plain filename component.
+
+    Rejects separators, traversal and null bytes: the name is handed to the
+    tileset loader, which turns it into a path.
+    """
+    if len(name) > 64:
+        return False
+    if name != name.strip():
+        return False
+
+    for bad in ('/', '\\', '..', '\x00', ':'):
+        if bad in name:
+            return False
+
+    return True
+
+
+def _reload_tilesets():
+    """
+    Reloads the tilesets named on the area and refreshes everything drawn with
+    them.
+
+    Guarded: a missing tileset is a patch mismatch, which is reported elsewhere
+    and must not abort the snapshot - the level is still worth showing.
+    """
+    from reggie.core import globals_
+
+    window = getattr(globals_, 'mainWindow', None)
+    if window is None:
+        return
+
+    # ReloadTilesets reads the tileset names straight off globals_.Area, which
+    # the caller has just replaced, and then does the whole job: loads each
+    # tileset, refreshes the object picker, rebuilds every placed object's cache
+    # and repaints. Calling it is strictly better than reimplementing that here.
+    #
+    # soft=False on purpose: "soft" skips reloading when the filepaths have not
+    # changed, and the names have just changed under it, so the reload must be
+    # forced.
+    reload_tilesets = getattr(window, 'ReloadTilesets', None)
+    if not callable(reload_tilesets):
+        return
+
+    try:
+        reload_tilesets(False)
+    except Exception:
+        # A tileset the client does not have is a patch mismatch, reported by
+        # the patch check rather than here. The level is still worth showing.
+        pass
+
+
+def _apply_snapshot_zones(zone_states, area=None):
+    """
+    Copies the host's zone attributes onto the client's zones.
+
+    Positional, like every other zone operation here, and refused outright when
+    the counts differ: creating or destroying a ZoneItem needs the Zones
+    dialog's own bookkeeping, so a mismatch is reported rather than half-applied
+    (see _apply_zones, which takes the same position).
+
+    A count mismatch during a *snapshot* is not fatal to the snapshot: the items
+    are still worth applying, and the user is better served by a level with the
+    wrong camera bounds than by no level at all. So this returns False rather
+    than raising.
+    """
+    from reggie.core import globals_
+    from reggie.core.undo import _ZONE_ATTRS
+
+    if not isinstance(zone_states, list):
+        return False
+
+    target = area if area is not None else getattr(globals_, 'Area', None)
+    zones = getattr(target, 'zones', None) if target is not None else None
+    if not isinstance(zones, list):
+        return False
+
+    if len(zones) != len(zone_states):
+        # Nothing sensible to do positionally. The level still loads.
+        return False
+
+    allowed = set(_ZONE_ATTRS)
+
+    for zone, state in zip(zones, zone_states):
+        if not isinstance(state, dict):
+            continue
+
+        for attr, value in state.items():
+            if attr not in allowed:
+                # Same allowlist as _apply_zones: "whatever the peer sent" is
+                # never an acceptable definition of what may be assigned.
+                continue
+            if isinstance(value, bool) or isinstance(value, (int, str)):
+                setattr(zone, attr, value)
+
+        try:
+            zone.UpdateRects()
+            zone.update()
+        except Exception:
+            pass
+
+    return True
 
 
 def _clear_area_items(area=None):
@@ -1361,6 +1623,9 @@ def apply_snapshot(snapshot, refmap, sprite_format=None, area=None):
     created = []
 
     with undo._ApplyGuard():
+        _apply_snapshot_tilesets(snapshot.get('tilesets'), area)
+        _apply_snapshot_zones(snapshot.get('zones'), area)
+
         _clear_area_items(area)
         refmap.clear()
 

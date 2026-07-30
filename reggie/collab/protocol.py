@@ -498,6 +498,13 @@ def _v_snapshot(p):
                          default=1),
         'items': _get_list(p, 'items', MAX_SNAPSHOT_ITEMS),
         'total': _get_int(p, 'total', minimum=0, required=False, default=0),
+
+        # Zones and tileset names ride along, so a client that had a different
+        # level open adopts the host's camera bounds, backgrounds and graphics
+        # rather than keeping its own. Optional, so a snapshot from a peer that
+        # predates them is still accepted rather than dropped.
+        'zones': _get_list(p, 'zones', MAX_ZONES, required=False),
+        'tilesets': _get_list(p, 'tilesets', 4, required=False),
     }
 
 
