@@ -51,7 +51,7 @@ import ssl
 import threading
 import time
 
-from reggie.collab import protocol
+from reggie.collab import debuglog, protocol
 from reggie.collab.identity import (
     DEFAULT_HOST_PORT,
     fingerprint_from_der,
@@ -404,6 +404,11 @@ class Connection:
 
         self._close_reason = reason or self._close_reason
         self._stop.set()
+
+        debuglog.log('conn', 'closing', peer=self.peer_address,
+                     reason=self._close_reason,
+                     authenticated=getattr(self, 'authenticated', False),
+                     nick=getattr(self, 'nick', ''))
 
         # Report the closure before tearing the socket down. The reader and
         # writer threads both call _fire_closed() from their finally blocks, and

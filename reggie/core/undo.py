@@ -85,6 +85,37 @@ class UndoStack(QtGui.QUndoStack):
         with _ApplyGuard():
             super().push(cmd)
 
+        # Broadcast after the command has been applied, so a peer never hears
+        # about an edit that failed locally. Outside the guard because the guard
+        # is what marks an edit as *remote*, and this one is ours.
+        #
+        # Every local edit funnels through here, which is why the collaboration
+        # hook lives at this one point rather than at each call site: a command
+        # type added later is broadcast without anyone remembering to wire it.
+        # Remote edits are applied inside the guard and never pushed, so they
+        # cannot reach this line and echo back to their sender.
+        _broadcast_command(cmd)
+
+
+def _broadcast_command(cmd):
+    """
+    Hands a freshly pushed command to a running collaboration session.
+
+    Fully guarded: the edit has already been applied locally and is correct, so
+    a collaboration problem must never surface as a failed edit. A peer that
+    misses an operation can resync; a local edit rolled back by a network error
+    is data loss.
+    """
+    window = getattr(globals_, 'mainWindow', None)
+    controller = getattr(window, '_collab', None)
+    if controller is None:
+        return
+
+    try:
+        controller.broadcastCommand(cmd)
+    except Exception:
+        pass
+
 
 ###############################################################################
 # Item helpers: labels, position application, detach/attach

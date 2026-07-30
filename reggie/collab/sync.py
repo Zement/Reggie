@@ -137,6 +137,38 @@ class RefMap:
             self._by_item[id(item)] = ref
             return ref
 
+    def size(self):
+        """
+        How many items are referenced. For diagnostics only.
+        """
+        with self._lock:
+            return len(self._by_ref)
+
+    def seed(self, area):
+        """
+        Mints a reference for every item already in an area. Host only.
+
+        Called when hosting starts, so that edits made before anyone joins can
+        still be encoded. Without it, references would first be minted by
+        build_snapshot - and a host who moved an existing object before the
+        first client joined would produce an unreferenced-item error for an
+        edit that is perfectly valid.
+
+        Returns the number of items now referenced. Idempotent: mint() returns
+        the existing reference for an item it already knows.
+        """
+        if area is None:
+            return 0
+
+        count = 0
+        for group in _snapshot_groups(area):
+            for item in group:
+                if item is not None:
+                    self.mint(item)
+                    count += 1
+
+        return count
+
     def bind(self, ref, item):
         """
         Records a host-assigned reference. Used by clients applying a snapshot or

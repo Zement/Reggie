@@ -49,6 +49,7 @@ class CollabSignals(QtCore.QObject):
     operationReceived = QtCore.pyqtSignal(dict, str)   # op payload, sender id
     presenceReceived = QtCore.pyqtSignal(dict, str)    # presence payload, sender
     snapshotReceived = QtCore.pyqtSignal(dict)
+    snapshotRequested = QtCore.pyqtSignal(str, int)    # session id, area
     operationRejected = QtCore.pyqtSignal(str)         # reason
 
     # Anything worth showing in the status window that is not chat.
@@ -119,6 +120,13 @@ class CollabBridge(QtCore.QObject):
 
         elif kind == 'snapshot_request':
             self.signals.statusMessage.emit('%s is loading the level.' % nick)
+
+            # The host has to answer this, or the client sits on an empty level
+            # forever. Building the snapshot reads the scene, so it must happen
+            # on the main thread - hence a signal rather than a direct call.
+            self.signals.snapshotRequested.emit(
+                getattr(participant, 'session_id', ''),
+                int(data.get('area', 1) or 1))
 
         elif kind == 'op_error':
             self.signals.errorOccurred.emit(

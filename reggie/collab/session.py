@@ -34,7 +34,7 @@ import threading
 import time
 import uuid
 
-from reggie.collab import auth, protocol
+from reggie.collab import auth, debuglog, protocol
 
 
 # Nickname colours assigned in order, so two peers rarely collide. Chosen to stay
@@ -348,7 +348,14 @@ class HostSession:
         """
         ip = connection.peer_address[0] if connection.peer_address else ''
 
-        if self.bans.contains(ip) or self.failures.is_locked(ip):
+        banned = self.bans.contains(ip)
+        locked = self.failures.is_locked(ip)
+        debuglog.log('host', 'peer connected', ip=ip, banned=banned,
+                     locked=locked)
+
+        if banned or locked:
+            debuglog.log('host', 'REFUSED before handshake', ip=ip,
+                         banned=banned, locked=locked)
             connection.send_type(protocol.T_AUTH_FAILED,
                                  {'reason': auth.GENERIC_AUTH_FAILURE})
             connection.close_after_flush('refused before handshake')
@@ -382,7 +389,15 @@ class HostSession:
         proof_ok = bool(nonce) and auth.verify_proof(
             payload['proof'], self.secret, nonce, self.cert_fingerprint)
 
+        debuglog.log('host', 'client_auth received', ip=ip,
+                     nick=payload.get('nick', ''), have_nonce=bool(nonce),
+                     proof_ok=proof_ok, version_ok=version_ok, banned=banned)
+
         if banned or not version_ok or not proof_ok:
+            debuglog.log('host', 'AUTH REJECTED', ip=ip,
+                         reason=('banned' if banned else
+                                 'version' if not version_ok else
+                                 'no nonce' if not nonce else 'bad proof'))
             if not banned and not proof_ok:
                 # Only a bad proof counts toward lockout. Counting version
                 # mismatches would let an honest peer on a stale build lock

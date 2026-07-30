@@ -30,7 +30,8 @@ import os
 from PyQt6 import QtCore, QtWidgets
 
 from reggie.collab import (
-    discovery, files, identity, protocol, session, sync, transport, upnp,
+    broadcast, debuglog, discovery, files, identity, protocol, session, sync,
+    transport, upnp,
 )
 from reggie.core import globals_
 from reggie.ui import collab_dialogs
@@ -76,6 +77,7 @@ class CollabController(QtCore.QObject):
         self.signals.errorOccurred.connect(self._onError)
         self.signals.operationReceived.connect(self._onOperation)
         self.signals.snapshotReceived.connect(self._onSnapshot)
+        self.signals.snapshotRequested.connect(self._onSnapshotRequested)
         self.signals.operationRejected.connect(self._onOperationRejected)
         self.signals.connected.connect(self._onConnected)
         self.signals.roomInfoChanged.connect(self._onRoomInfoChanged)
@@ -107,6 +109,11 @@ class CollabController(QtCore.QObject):
         # reaches here is a session ended by the *other* side, where the window
         # is kept on purpose so the reason stays readable.
         self._closeStatusWindow()
+
+        # Re-read the settings here rather than trusting the copy taken at
+        # construction: the user may have changed them in Preferences since.
+        self.settings = collab_dialogs.load_collab_settings()
+        self._configureDebugLog()
 
         dialog = collab_dialogs.CollabSetupDialog(self.window)
         dialog.startDiscovery()
@@ -141,6 +148,13 @@ class CollabController(QtCore.QObject):
         secret = identity.generate_secret()
         self.refmap = sync.RefMap(origin='host', is_authority=True)
 
+        # Give every item that already exists a reference, so edits made before
+        # anyone joins can still be broadcast. Without this the first move of an
+        # existing object fails to encode ('unreferenced item') and triggers a
+        # pointless resync, because refs would otherwise only be minted by
+        # build_snapshot when the first client asks for the level.
+        self._seedRefMap()
+
         self.host_session = session.HostSession(
             secret=secret,
             cert_fingerprint=fingerprint,
@@ -168,6 +182,11 @@ class CollabController(QtCore.QObject):
 
         self.host_session.start_maintenance()
         self._restoreBans()
+
+        debuglog.log('controller', 'hosting started', port=self.server.port,
+                     fp=debuglog.short_fingerprint(fingerprint),
+                     refs=self.refmap.size(),
+                     bans=len(self.host_session.bans.entries()))
 
         # The port may differ from the request (0 means "any free port").
         actual_port = self.server.port
@@ -279,6 +298,8 @@ class CollabController(QtCore.QObject):
             return False
 
         self.mode = 'join'
+        debuglog.log('controller', 'joined', host=host, port=port,
+                     fp=debuglog.short_fingerprint(self.client.cert_fingerprint))
         self.showStatusWindow()
         return True
 
@@ -376,12 +397,28 @@ class CollabController(QtCore.QObject):
             self.server.stop()
             self.server = None
 
-        self.client = None
+        if self.client is not None:
+            # Close it, do not merely drop it. A ClientTransport owns a reader
+            # thread and a live socket; dropping the reference leaves both
+            # running, still connected to the host's port. The next session then
+            # races a ghost connection from the previous one - which is why
+            # restarting a session sometimes ended with the client apparently
+            # kicked the moment it joined. close() is idempotent, so calling it
+            # after the peer already hung up is harmless.
+            try:
+                self.client.close('session ended')
+            except Exception:
+                pass
+            self.client = None
+
         self.host_session = None
         self.client_session = None
         self.refmap = None
+        self._secret = ''
         self.join_code = ''
         self.mode = ''
+
+        debuglog.log('controller', 'session torn down')
 
     # -- status window ------------------------------------------------------
 
@@ -535,6 +572,10 @@ class CollabController(QtCore.QObject):
         """
         Applies a remote operation. Main thread, so touching the scene is safe.
         """
+        debuglog.log('op-in', 'received', kind=payload.get('kind'),
+                     targets=len(payload.get('targets') or []),
+                     sender=sender_id, have_refmap=self.refmap is not None)
+
         if self.refmap is None:
             return
 
@@ -566,6 +607,57 @@ class CollabController(QtCore.QObject):
             if connection.session_id != sender_id:
                 connection.send(message)
 
+    # -- outbound operations ------------------------------------------------
+
+    def broadcastCommand(self, command):
+        """
+        Sends a locally pushed undo command to the other peers.
+
+        Called from UndoStack.push, so this is the main thread and the edit has
+        already been applied. Returns True if anything was sent.
+        """
+        if not self.is_active or self.refmap is None:
+            return False
+
+        try:
+            payload = broadcast.encode_command(command, self.refmap)
+        except broadcast.BroadcastError as exc:
+            # Our view of the level and the ref map have drifted. Resyncing is
+            # the honest answer; carrying on would diverge silently.
+            self._appendStatus('A change could not be shared: %s' % exc)
+            self._requestResync()
+            return False
+
+        if payload is None:
+            debuglog.log('op-out', 'command not broadcast (no encoder)',
+                         command=type(command).__name__)
+            return False
+
+        debuglog.log('op-out', 'broadcasting', kind=payload.get('kind'),
+                     targets=len(payload.get('targets') or []),
+                     as_host=self.is_host)
+
+        if self.is_host:
+            message = protocol.make_message(protocol.T_OP, payload)
+            peers = self.server.authenticated_connections()
+            for connection in peers:
+                connection.send(message)
+            debuglog.log('op-out', 'sent to peers', peers=len(peers))
+            return True
+
+        # A client sends to the host, which authorises and sequences it before
+        # relaying. Its own role check here is advisory - the host re-checks -
+        # but it turns a silent rejection into an explanation.
+        if self.client_session is not None:
+            kind = broadcast.op_kind_of(command)
+            if kind and not self.client_session.may_send_op(kind):
+                self._appendStatus(
+                    'Your access level does not allow that change (%s).' % kind)
+                return False
+
+        self.client.send(protocol.make_message(protocol.T_OP, payload))
+        return True
+
     def _onSnapshot(self, payload):
         if self.refmap is None:
             return
@@ -580,6 +672,57 @@ class CollabController(QtCore.QObject):
             return
 
         self._appendStatus('Level loaded from the host.')
+
+    def _configureDebugLog(self):
+        """
+        Turns the diagnostic log on or off to match the current preference.
+
+        The path is reported in the status window when it is on, because a log
+        nobody can find helps nobody.
+        """
+        if self.settings.get('debug_log'):
+            path = debuglog.enable(_settings_directory())
+            if path:
+                self._appendStatus('Debug log: %s' % path)
+        else:
+            debuglog.disable()
+
+    def _seedRefMap(self):
+        """
+        Mints a reference for every item currently in the area.
+
+        Guarded rather than allowed to fail: an empty or half-loaded area is a
+        normal state (Reggie can host before a level is open), and hosting must
+        not depend on there being anything to share yet.
+        """
+        if self.refmap is None:
+            return 0
+
+        try:
+            return self.refmap.seed(getattr(globals_, 'Area', None))
+        except Exception:
+            return 0
+
+    def _onSnapshotRequested(self, session_id, area):
+        """
+        Sends the current level to a client that asked for it.
+
+        Host only, and on the main thread: build_snapshot walks the scene, which
+        is exactly what must not happen on a reader thread.
+        """
+        if not self.is_host or self.refmap is None or self.server is None:
+            return
+
+        try:
+            payload = sync.build_snapshot(self.refmap, area_number=int(area or 1))
+        except sync.SyncError as exc:
+            self._appendStatus('The level could not be shared: %s' % exc)
+            return
+
+        message = protocol.make_message(protocol.T_SNAPSHOT, payload)
+        for connection in self.server.authenticated_connections():
+            if not session_id or connection.session_id == session_id:
+                connection.send(message)
 
     def _requestResync(self):
         if self.client is not None:

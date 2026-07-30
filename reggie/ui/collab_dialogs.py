@@ -121,6 +121,7 @@ def load_collab_settings():
         'upnp': bool(setting('CollabUPnP', False)),
         'port': int(setting('CollabPort', identity.DEFAULT_HOST_PORT) or
                     identity.DEFAULT_HOST_PORT),
+        'debug_log': bool(setting('CollabDebugLog', False)),
     }
 
 
@@ -134,6 +135,7 @@ def save_collab_settings(values):
     setSetting('CollabDiscoverable', bool(values.get('discoverable', False)))
     setSetting('CollabUPnP', bool(values.get('upnp', False)))
     setSetting('CollabPort', int(values.get('port', identity.DEFAULT_HOST_PORT)))
+    setSetting('CollabDebugLog', bool(values.get('debug_log', False)))
 
 
 def load_ban_list():
@@ -803,6 +805,15 @@ class CollabSettingsTab(QtWidgets.QWidget):
         layout.addRow(patchHint)
         layout.addRow(_tr(16), self.banList)
         layout.addRow(removeBan)
+
+        self.debugLog = QtWidgets.QCheckBox('Write a collaboration debug log')
+        self.debugLog.setChecked(bool(values.get('debug_log', False)))
+        self.debugLog.setToolTip(
+            'Records connections, operations and disconnects to a file, for '
+            'diagnosing problems. Contains nicknames and level activity, but '
+            'never the join code, session secret or authentication data.')
+        layout.addRow(self.debugLog)
+
         self.setLayout(layout)
 
     def _reloadBans(self):
@@ -833,6 +844,7 @@ class CollabSettingsTab(QtWidgets.QWidget):
             'cursors': self.cursors.currentData() or CURSORS_ON_MOVE,
             'clicks': self.clicks.isChecked(),
             'patch_source': self.patchSource.currentData() or PATCH_SOURCE_CATALOG,
+            'debug_log': self.debugLog.isChecked(),
         }
 
     def apply(self):
