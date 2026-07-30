@@ -167,3 +167,10 @@ assets/mods/*
 assets/snapshots/*
 assets/qpt/presets/*
 
+# Collaboration host identity (Block C-B1). These are generated per machine and
+# collab_host_key.pem is a PRIVATE KEY - it must never be committed. They belong
+# in the user profile; this is a backstop in case one is ever created in a
+# checkout.
+collab_host_cert.pem
+collab_host_key.pem
+

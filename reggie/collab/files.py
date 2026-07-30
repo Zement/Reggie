@@ -261,11 +261,16 @@ def validate_manifest(payload, require_allowed_extension=True):
                                 % (path, exc))
 
         normalised = path.replace('\\', '/')
-        if normalised in seen:
-            # Two entries for one path would let the second overwrite the first
-            # after the first had already been verified.
+
+        # Compared case-insensitively: Windows filesystems are case-insensitive,
+        # so 'foo.png' and 'FOO.png' are one file on disk. Treating them as
+        # distinct would let the second overwrite the first *after* it had been
+        # verified, and then leave commit() half-finished when the vanished
+        # source could not be moved.
+        key = normalised.lower()
+        if key in seen:
             raise ManifestError('The host listed %r twice.' % path)
-        seen.add(normalised)
+        seen.add(key)
 
         size = entry.get('size')
         if isinstance(size, bool) or not isinstance(size, int) or size < 0:

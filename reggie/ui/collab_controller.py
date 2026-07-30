@@ -24,6 +24,7 @@ The controller is also where the two roles diverge:
   told. It re-applies nothing locally that the host has not confirmed.
 """
 
+import hmac
 import os
 
 from PyQt6 import QtCore, QtWidgets
@@ -290,9 +291,28 @@ class CollabController(QtCore.QObject):
             from reggie.collab import auth
 
             payload = message['p']
+
+            # The proof MUST be bound to the fingerprint we computed from the
+            # certificate the peer actually presented - never to the cert_fp it
+            # claims in server_hello. Signing a self-declared value would turn
+            # this client into an oracle: a third party could relay our proof to
+            # a different host, which is exactly the attack the fingerprint
+            # binding in auth.py exists to stop.
+            verified = connection.cert_fingerprint
+
+            claimed = (payload.get('cert_fp') or '').strip().lower()
+            if not hmac.compare_digest(claimed, (verified or '').lower()):
+                # A peer misreporting its own identity has no benign reason to.
+                collab_dialogs.report_pin_mismatch(
+                    self.window,
+                    'The host reported a different identity than the '
+                    'certificate it presented.')
+                connection.close('server_hello fingerprint mismatch')
+                return
+
             connection.send_type(protocol.T_CLIENT_AUTH, {
                 'proof': auth.compute_proof(self._secret, payload['nonce'],
-                                            payload['cert_fp']),
+                                            verified),
                 'protocol': protocol.PROTOCOL_VERSION,
                 'app_version': str(getattr(globals_, 'ReggieVersionShort', '')),
                 'nick': self.client_session.nick,
@@ -584,17 +604,39 @@ class CollabController(QtCore.QObject):
 
 def _settings_directory():
     """
-    Where the host certificate lives. Beside the user's settings, so it survives
-    updates and is not world-readable on a shared machine.
+    Where the host certificate and private key live.
+
+    Beside the user's settings file, so the key survives updates and sits in the
+    user profile rather than anywhere world-readable.
+
+    The fallback is deliberately NOT the working directory. During development
+    that is the repository checkout, and the key file then lands next to the
+    source where a `git add -A` would publish a private key. A per-user
+    application data directory is the correct place even when QSettings is
+    unavailable.
     """
-    path = getattr(globals_, 'settings', None)
-    if path is not None:
+    settings = getattr(globals_, 'settings', None)
+    if settings is not None:
         try:
-            return os.path.dirname(path.fileName())
+            directory = os.path.dirname(settings.fileName())
+
+            # On Windows, QSettings defaults to the registry, and fileName()
+            # then returns something like '\\HKEY_CURRENT_USER\\Software\\...'
+            # which is not a filesystem path at all. Only use it when it really
+            # is a directory we could write a key into.
+            if directory and os.path.isabs(directory) and os.path.isdir(
+                    os.path.dirname(directory) or directory):
+                return directory
         except Exception:
             pass
 
-    return os.path.abspath('.')
+    base = (os.environ.get('APPDATA')
+            or os.environ.get('XDG_CONFIG_HOME')
+            or os.path.expanduser('~'))
+
+    directory = os.path.join(base, 'Reggie Next')
+    os.makedirs(directory, exist_ok=True)
+    return directory
 
 
 def _sprite_format():

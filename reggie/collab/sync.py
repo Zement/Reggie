@@ -849,12 +849,34 @@ def _apply_area_settings(payload, refmap, sprite_format, area):
 
     target = area if area is not None else globals_.Area
 
+    # An explicit allowlist, matching _ZONE_ATTRS and _METADATA_KEYS in the
+    # sibling appliers. A `hasattr` gate would be weaker: dunders and any other
+    # pre-existing attribute would pass it, so the set of writable names would
+    # be "whatever the object happens to have" rather than "what the Area
+    # Options dialog edits".
+    allowed = AREA_SETTINGS_ATTRS
+
     for name, encoded in snapshot.items():
-        if not hasattr(target, name):
-            raise SyncError('unknown area setting %r' % (name,))
+        if name not in allowed:
+            raise SyncError('area setting %r is not editable' % (name,))
         setattr(target, name, decode_value(encoded, sprite_format))
 
     return {'kind': 'area_settings', 'items': []}
+
+
+# The area attributes the Area Options and camera dialogs can change.
+#
+# Mirrors ReggieWindow._AREA_SETTINGS_ATTRS. Duplicated rather than imported on
+# purpose: this module must not import reggie.ui (it would drag Qt into a layer
+# that is deliberately Qt-free and headless-testable), and an authorisation
+# allowlist is exactly the kind of thing that should be readable in the file
+# that enforces it. A test asserts the two lists stay in step.
+AREA_SETTINGS_ATTRS = frozenset({
+    'loaded_sprites', 'force_loaded_sprites', 'timeLimit', 'startEntrance',
+    'toadHouseType', 'wrapFlag', 'creditsFlag', 'faceLeftFlag',
+    'unkFlag1', 'unkFlag2', 'unkVal1', 'unkVal2',
+    'tileset0', 'tileset1', 'tileset2', 'tileset3',
+})
 
 
 def _apply_metadata(payload, refmap, sprite_format, area):
