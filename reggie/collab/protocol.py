@@ -475,17 +475,40 @@ def _v_snapshot(p):
     }
 
 
+# Zones are the one op whose before/after is a *list* (one attribute dict per
+# zone, positionally). A1's snapshot_zones() is keyed on live zone objects, which
+# cannot cross a network, so only the attribute dicts travel - see
+# sync.encode_zones. Rather than loosen the dict check for every other op, the
+# list shape is validated explicitly here.
+MAX_ZONES = 16
+
+
 def _v_op(p):
     kind = _get_str(p, 'kind', 64)
     _require(kind in OP_KINDS, 'unknown op kind %r' % kind)
-    return {
+
+    common = {
         'kind': kind,
         'targets': _get_list(p, 'targets', MAX_OP_TARGETS, required=False),
-        'before': _get_dict(p, 'before', required=False),
-        'after': _get_dict(p, 'after', required=False),
         'base': _get_int(p, 'base', minimum=0, required=False),
         'text': _get_str(p, 'text', 200, required=False),
     }
+
+    if kind == 'zones':
+        before = _get_list(p, 'before', MAX_ZONES, required=False)
+        after = _get_list(p, 'after', MAX_ZONES, required=False)
+        for state in (before, after):
+            for entry in state:
+                _require(isinstance(entry, dict),
+                         'each zone snapshot entry must be an object')
+                _require(len(entry) <= 64, 'a zone entry has too many fields')
+        common['before'] = before
+        common['after'] = after
+    else:
+        common['before'] = _get_dict(p, 'before', required=False)
+        common['after'] = _get_dict(p, 'after', required=False)
+
+    return common
 
 
 def _v_op_reject(p):
