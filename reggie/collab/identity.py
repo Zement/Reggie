@@ -548,6 +548,30 @@ def safe_join(root, relative_path, require_allowed_extension=True):
     return candidate
 
 
+def safe_component(name):
+    """
+    Validates a bare *directory* name that arrived over the network, such as a
+    patch id, and returns it unchanged.
+
+    Separate from safe_filename() because a directory has no extension, so the
+    transfer allowlist does not apply - but every other check does: no
+    separators, no traversal, no null bytes, no Windows reserved names, no
+    trailing dots or spaces.
+    """
+    text = str(name or '')
+    if not text:
+        raise UnsafePathError('empty name')
+
+    if '/' in text or '\\' in text:
+        raise UnsafePathError('name must not contain a path separator')
+
+    components = _reject_traversal_components(text)
+    if len(components) != 1:
+        raise UnsafePathError('name must be a single component')
+
+    return components[0]
+
+
 def safe_filename(name, extension='.arc'):
     """
     Validates a bare filename (no directories) that arrived over the network,

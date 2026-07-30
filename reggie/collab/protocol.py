@@ -49,10 +49,16 @@ MAX_STRING_CHARS = 4096      # generic cap for any other free-form string
 MAX_LIST_ITEMS = 4096        # generic cap for any list payload
 MAX_OP_TARGETS = 2048
 
-# File transfer limits (spec section 4.4). Named here so raising them later is
-# a one-line change; Zement expects the file count to grow, because a patch can
-# contain many small sprite images.
-MAX_MANIFEST_FILES = 256
+# File transfer limits (spec section 4.4).
+#
+# Raised from 256 to 1024 in phase 6 after measuring the real patches in
+# reggiedata/patches: NewerSMBW is 535 transferable files (~9.4 MiB) and
+# NSMBWerPlus is 468, almost all small PNGs. 256 would have rejected both, which
+# is exactly the growth Zement predicted when he asked to keep 256 "for now".
+#
+# The byte cap is the meaningful limit and stays at 64 MiB: it bounds what a peer
+# can make us store, whereas the file count only bounds bookkeeping.
+MAX_MANIFEST_FILES = 1024
 MAX_MANIFEST_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MiB
 MAX_CHUNK_BYTES = 256 * 1024                 # 256 KiB of raw bytes per chunk
 
