@@ -99,6 +99,14 @@ class CollabController(QtCore.QObject):
             self.showStatusWindow()
             return
 
+        # A window left over from a finished session has the wrong controls for
+        # the next one (a host's buttons for a client, or vice versa) and a stale
+        # chat log, so start fresh.
+        if self.status_window is not None:
+            self.status_window.close()
+            self.status_window.deleteLater()
+            self.status_window = None
+
         dialog = collab_dialogs.CollabSetupDialog(self.window)
         dialog.startDiscovery()
 
@@ -173,6 +181,12 @@ class CollabController(QtCore.QObject):
             self._startDiscovery(actual_port, nick)
 
         self.showStatusWindow()
+
+        # Show the roster straight away. HostSession only broadcasts it when the
+        # membership changes, so without this the host sees an empty
+        # participants list until somebody joins - and reasonably concludes the
+        # feature is broken.
+        self.bridge.on_host_roster(self.host_session.participants())
         collab_dialogs.show_join_code(self.window, self.join_code)
         return True
 
@@ -336,6 +350,7 @@ class CollabController(QtCore.QObject):
         if self.status_window is None:
             window = collab_dialogs.CollabStatusWindow(self.is_host, self.window)
             window.chatRequested = self._sendChat
+            window.leaveRequested = self.leave
             if self.is_host:
                 window.kickRequested = self._kick
                 window.banRequested = self._ban
@@ -420,8 +435,14 @@ class CollabController(QtCore.QObject):
 
     def _onDisconnected(self, reason):
         self._appendStatus(reason or 'Disconnected.')
+
         if self.is_active:
             self._teardown()
+
+        # Disable the controls but keep the window open, so the chat log and the
+        # reason for the disconnect stay readable.
+        if self.status_window is not None:
+            self.status_window.setSessionEnded()
 
     def _onRejected(self, reason):
         QtWidgets.QMessageBox.warning(

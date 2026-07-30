@@ -153,6 +153,13 @@ class CollabBridge(QtCore.QObject):
         if kind == 'connected':
             self.signals.connected.emit(dict(data.get('room_info') or {}))
 
+            # auth_ok carries the roster, and the host does not broadcast another
+            # one until membership changes. Without this the client shows an
+            # empty participants list right after joining.
+            roster = data.get('roster')
+            if roster:
+                self.signals.rosterChanged.emit(list(roster))
+
         elif kind == 'rejected':
             self.signals.rejected.emit(
                 data.get('reason', 'The host refused the connection.'))

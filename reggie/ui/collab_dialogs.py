@@ -513,6 +513,7 @@ class CollabStatusWindow(QtWidgets.QDialog):
         self.banRequested = _ignore
         self.roleRequested = _ignore
         self.chatRequested = _ignore
+        self.leaveRequested = _ignore
 
         self.roster = QtWidgets.QListWidget()
         self.roster.setMinimumWidth(200)
@@ -554,6 +555,15 @@ class CollabStatusWindow(QtWidgets.QDialog):
 
             self.roster.currentRowChanged.connect(self._updateHostButtons)
             self._updateHostButtons(-1)
+
+        # Ending the session must always be reachable. Separated from the
+        # per-participant controls above, since it acts on the session rather
+        # than on whoever happens to be selected.
+        rosterColumn.addSpacing(8)
+        self.leaveButton = QtWidgets.QPushButton(
+            'End session' if self.is_host else 'Leave session')
+        self.leaveButton.clicked.connect(self._leave)
+        rosterColumn.addWidget(self.leaveButton)
 
         columns = QtWidgets.QHBoxLayout()
         columns.addLayout(rosterColumn, 1)
@@ -652,6 +662,39 @@ class CollabStatusWindow(QtWidgets.QDialog):
         self.roleRequested(
             session_id,
             protocol.ROLE_FULL if choice.startswith('Full') else protocol.ROLE_EDITOR)
+
+    def _leave(self):
+        """
+        Ends the session. A host is asked to confirm, because ending it
+        disconnects everyone else; a client leaving affects only themselves, so
+        it happens immediately.
+        """
+        if self.is_host:
+            confirmed = QtWidgets.QMessageBox.question(
+                self, _tr(0),
+                'End the session for everyone?\n\n'
+                'All participants will be disconnected. Your level stays as it '
+                'is, and nothing is saved automatically.',
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No)
+
+            if confirmed != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+
+        self.leaveRequested()
+        self.setSessionEnded()
+
+    def setSessionEnded(self):
+        """
+        Puts the window into a finished state: the session is over, but the chat
+        log stays readable rather than vanishing.
+        """
+        self.chatEntry.setEnabled(False)
+        self.leaveButton.setEnabled(False)
+
+        if self.is_host:
+            for button in (self.roleButton, self.kickButton, self.banButton):
+                button.setEnabled(False)
 
     def _kick(self):
         session_id = self._selectedSessionId()
