@@ -1268,9 +1268,81 @@ def _snapshot_groups(area):
     )
 
 
+def _clear_area_items(area=None):
+    """
+    Removes every item a snapshot is about to replace.
+
+    Uses A1's own _detach_item so each item leaves the scene, the area lists and
+    the side panels together - doing it by hand would strip the scene but leave
+    the list widgets holding rows for items that no longer exist.
+
+    Returns the number of items removed. Tolerates a missing main window, like
+    _finish_mutation_if_possible, so this stays usable headlessly.
+    """
+    from reggie.core import globals_, undo
+
+    target_area = area if area is not None else getattr(globals_, 'Area', None)
+    if target_area is None:
+        return 0
+
+    window = getattr(globals_, 'mainWindow', None)
+    removed = 0
+
+    for group in _snapshot_groups(target_area):
+        # _snapshot_groups already returns copies, so detaching while iterating
+        # is safe even though _detach_item mutates the underlying lists.
+        for item in group:
+            if item is None:
+                continue
+
+            try:
+                if window is not None:
+                    undo._detach_item(item)
+                else:
+                    _detach_without_window(target_area, item)
+                removed += 1
+            except Exception:
+                # One stubborn item must not abort the whole resync: the
+                # alternative is a half-cleared level, which is worse than a
+                # single leftover.
+                continue
+
+    return removed
+
+
+def _detach_without_window(area, item):
+    """
+    Removes an item from the area lists only, for headless use.
+
+    A1's _detach_item needs mainWindow for the scene and the side panels; when
+    there is no window there is nothing to detach from but the lists.
+    """
+    for name in ('sprites', 'entrances', 'locations', 'comments', 'paths'):
+        group = getattr(area, name, None)
+        if isinstance(group, list) and item in group:
+            group.remove(item)
+
+    layers = getattr(area, 'layers', None)
+    if isinstance(layers, list):
+        for layer in layers:
+            if isinstance(layer, list) and item in layer:
+                layer.remove(item)
+
+
 def apply_snapshot(snapshot, refmap, sprite_format=None, area=None):
     """
-    Client side: rebuilds an area from a host snapshot.
+    Client side: replaces an area with a host snapshot.
+
+    *Replaces*, which is the whole point: both peers normally have the same
+    level file open, so the client already holds its own copy of every item. It
+    previously only created, leaving the client with two of everything - one
+    from its own file and one from the host - which is why a move looked like it
+    cloned the item and left the original behind.
+
+    The existing items must therefore go first. They are detached rather than
+    reconciled, because the snapshot is the host's authoritative state and
+    matching items up by position would guess at identities the host has already
+    assigned.
 
     Runs inside the apply guard for the same reason as apply_remote - a snapshot
     is emphatically not a local edit, and must not land in the undo stack.
@@ -1289,6 +1361,7 @@ def apply_snapshot(snapshot, refmap, sprite_format=None, area=None):
     created = []
 
     with undo._ApplyGuard():
+        _clear_area_items(area)
         refmap.clear()
 
         for entry in items:
