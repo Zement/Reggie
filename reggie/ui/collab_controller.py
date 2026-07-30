@@ -26,6 +26,7 @@ The controller is also where the two roles diverge:
 
 import hmac
 import os
+import time
 
 from PyQt6 import QtCore, QtWidgets
 
@@ -36,6 +37,12 @@ from reggie.collab import (
 from reggie.core import globals_
 from reggie.ui import collab_dialogs
 from reggie.ui.collab_bridge import CollabBridge
+
+
+# Minimum gap between snapshot requests. A resync is usually triggered by a
+# problem that will affect the next edit too, so without a floor here one broken
+# reference produces a request per edit.
+RESYNC_INTERVAL_SECONDS = 5.0
 
 
 class CollabController(QtCore.QObject):
@@ -64,6 +71,7 @@ class CollabController(QtCore.QObject):
 
         self.refmap = None
         self.join_code = ''
+        self._last_resync = 0.0
         self.settings = collab_dialogs.load_collab_settings()
 
         self._connect_signals()
@@ -725,9 +733,26 @@ class CollabController(QtCore.QObject):
                 connection.send(message)
 
     def _requestResync(self):
-        if self.client is not None:
-            self.client.send(protocol.make_message(
-                protocol.T_SNAPSHOT_REQUEST, {'area': 1}))
+        """
+        Asks the host for a fresh copy of the level.
+
+        Rate limited, because the thing that triggers a resync is usually the
+        thing that makes the next edit fail too: without this, one broken
+        reference produced a snapshot request per edit, which is the flood of
+        "client is loading the level" lines in Zement's log.
+        """
+        if self.client is None:
+            return False
+
+        now = time.monotonic()
+        if now - self._last_resync < RESYNC_INTERVAL_SECONDS:
+            return False
+
+        self._last_resync = now
+        debuglog.log('client', 'requesting resync')
+        self.client.send(protocol.make_message(
+            protocol.T_SNAPSHOT_REQUEST, {'area': 1}))
+        return True
 
     # -- patches ------------------------------------------------------------
 

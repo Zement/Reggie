@@ -44,6 +44,7 @@ Security notes specific to this file:
   peer cannot hold a slot open or stream us unbounded data before authenticating.
 """
 
+import errno
 import os
 import queue
 import socket
@@ -88,6 +89,21 @@ PEER_TIMEOUT_SECONDS = 60.0
 
 # How long a reader blocks before re-checking the stop flag.
 _READ_TIMEOUT_SECONDS = 0.5
+
+# recv() errors that mean "nothing to read yet", not "this connection failed".
+#
+# On Windows a socket with a timeout can still surface WSAEWOULDBLOCK (10035)
+# as a BlockingIOError instead of socket.timeout, particularly under TLS where
+# the SSL layer drives the underlying socket itself. EINTR appears when a signal
+# interrupts the call. Treating any of these as fatal drops healthy connections.
+_RETRYABLE_READ_ERRNOS = frozenset(
+    value for value in (
+        getattr(errno, 'WSAEWOULDBLOCK', None),
+        getattr(errno, 'EWOULDBLOCK', None),
+        getattr(errno, 'EAGAIN', None),
+        getattr(errno, 'EINTR', None),
+    ) if value is not None
+)
 
 
 class TransportError(Exception):
@@ -510,11 +526,49 @@ class Connection:
 
                 try:
                     self._socket.sendall(frame)
-                except (OSError, ssl.SSLError) as exc:
+                except ssl.SSLError as exc:
+                    # Before OSError, which it subclasses.
+                    self.close('write failed: %s' % exc)
+                    break
+                except OSError as exc:
+                    # Same transient-errno problem as the read loop: a send that
+                    # would block is "try again", not a dead connection. Retried
+                    # once after a short pause rather than in a tight loop, so a
+                    # peer that has genuinely stopped reading still hits the
+                    # queue limit and gets closed.
+                    if exc.errno in _RETRYABLE_READ_ERRNOS:
+                        if self._retry_send(frame):
+                            continue
+
                     self.close('write failed: %s' % exc)
                     break
         finally:
             self._fire_closed()
+
+    def _retry_send(self, frame, attempts=20, pause=0.05):
+        """
+        Re-attempts a send that reported "would block".
+
+        Bounded on purpose: a peer whose buffer is briefly full recovers within
+        a few tries, and one that never does must be closed rather than retried
+        forever. Roughly a second in total, well under the peer timeout.
+        """
+        for _ in range(attempts):
+            if self._stop.is_set():
+                return False
+
+            time.sleep(pause)
+
+            try:
+                self._socket.sendall(frame)
+                return True
+            except ssl.SSLError:
+                return False
+            except OSError as exc:
+                if exc.errno not in _RETRYABLE_READ_ERRNOS:
+                    return False
+
+        return False
 
     # -- receiving ----------------------------------------------------------
 
@@ -528,7 +582,33 @@ class Connection:
                         self.close('handshake timed out')
                         break
                     continue
-                except (OSError, ssl.SSLError) as exc:
+                except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                    # TLS needs more bytes before it can return a record, or
+                    # wants to write during a renegotiation. Both mean "not
+                    # yet", never "failed".
+                    if self._handshake_expired():
+                        self.close('handshake timed out')
+                        break
+                    continue
+                except ssl.SSLError as exc:
+                    # Must precede OSError: ssl.SSLError subclasses it, so an
+                    # OSError clause first would swallow every TLS failure and
+                    # test it against socket errnos it never sets.
+                    self.close('read failed: %s' % exc)
+                    break
+                except OSError as exc:
+                    # WSAEWOULDBLOCK (10035) is Windows saying "no data ready".
+                    # It reaches us as BlockingIOError rather than
+                    # socket.timeout, and treating it as fatal killed healthy
+                    # connections the moment a read raced an empty buffer -
+                    # which is why a client was disconnected immediately after a
+                    # successful authentication, seemingly at random.
+                    if exc.errno in _RETRYABLE_READ_ERRNOS:
+                        if self._handshake_expired():
+                            self.close('handshake timed out')
+                            break
+                        continue
+
                     self.close('read failed: %s' % exc)
                     break
 

@@ -473,11 +473,31 @@ def _v_snapshot_request(p):
     return {'area': _get_int(p, 'area', minimum=1, maximum=4, required=False, default=1)}
 
 
+# A full level of items. Mirrors sync.MAX_SNAPSHOT_ITEMS, which is the value
+# that actually bounds the work; duplicated rather than imported because
+# protocol.py must not depend on sync.py (sync imports Qt via reggie.core).
+MAX_SNAPSHOT_ITEMS = 20000
+
+
 def _v_snapshot(p):
+    """
+    A level snapshot: {'area', 'items': [description], 'total'}.
+
+    This must match what sync.build_snapshot actually produces. It previously
+    required 'rev' and a 'state' dict, which build_snapshot has never emitted,
+    so every snapshot failed validation and was dropped in silence - leaving a
+    joining client with an empty ref map, and therefore an "unreferenced item"
+    error on the first edit of anything it had not created itself.
+
+    Item descriptions are validated by sync.validate_description when they are
+    applied; checking the envelope here keeps the size bound at the edge, before
+    a peer's payload is handed on.
+    """
     return {
-        'area': _get_int(p, 'area', minimum=1, maximum=4),
-        'rev': _get_int(p, 'rev', minimum=0),
-        'state': _get_dict(p, 'state'),
+        'area': _get_int(p, 'area', minimum=1, maximum=4, required=False,
+                         default=1),
+        'items': _get_list(p, 'items', MAX_SNAPSHOT_ITEMS),
+        'total': _get_int(p, 'total', minimum=0, required=False, default=0),
     }
 
 

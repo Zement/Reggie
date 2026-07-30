@@ -38,14 +38,22 @@ def log_path():
     return _path
 
 
-def enable(directory, filename='collab_debug.log'):
+def enable(directory, filename=''):
     """
     Starts logging to `directory`/`filename`. Returns the path, or '' on
     failure - logging must never be the reason a session cannot start.
+
+    The default filename carries the process id, because the common case is two
+    Reggie instances on one machine and a shared file interleaves them: their
+    timestamps are monotonic per process, so the merged ordering is misleading
+    exactly where it matters. One file per process keeps each timeline honest.
     """
     global _handle, _path, _enabled, _start
 
     disable()
+
+    if not filename:
+        filename = 'collab_debug_%d.log' % os.getpid()
 
     try:
         os.makedirs(directory, exist_ok=True)
