@@ -194,6 +194,10 @@ T_FILE_CHUNK = 'file_chunk'
 T_FILE_DONE = 'file_done'
 
 # Roles (spec section 5.1). Ordered least to most privileged.
+CHAT_KIND_USER = 'user'
+CHAT_KIND_SYSTEM = 'system'
+CHAT_KINDS = (CHAT_KIND_USER, CHAT_KIND_SYSTEM)
+
 ROLE_EDITOR = 'editor'
 ROLE_FULL = 'full'
 ROLE_HOST = 'host'
@@ -435,7 +439,16 @@ def _v_banned(p):
 def _v_chat(p):
     text = sanitize_text(_get_str(p, 'text', MAX_CHAT_CHARS), MAX_CHAT_CHARS)
     _require(text != '', 'chat text must not be empty after sanitising')
-    return {'text': text}
+
+    # 'kind' distinguishes a peer's message from a notice the host generated
+    # (joins, kicks, rate-limit warnings). It is validated here but the host
+    # OVERWRITES it on relay - a client claiming kind='system' must not be able
+    # to render text that looks like it came from the host itself.
+    kind = _get_str(p, 'kind', 16, required=False, default=CHAT_KIND_USER)
+    if kind not in CHAT_KINDS:
+        kind = CHAT_KIND_USER
+
+    return {'text': text, 'kind': kind}
 
 
 def _v_ping(p):
