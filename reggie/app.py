@@ -146,6 +146,35 @@ def _excepthook(*exc_info):
 sys.excepthook = _excepthook
 
 
+def _TriggerFirewallPrompt():
+    """
+    Briefly listens on the collaboration port so Windows raises its firewall
+    prompt at boot instead of mid-feature.
+
+    Fully guarded and non-blocking: this is a convenience, and nothing about
+    starting the editor may depend on it. Never creates a firewall rule itself -
+    that needs administrator rights, and the prompt is the user's decision to
+    make.
+    """
+    try:
+        from reggie.collab import firewall, identity
+        from reggie.io.gamedef import setting
+
+        if not firewall.is_supported():
+            return
+
+        # On by default: the whole point is to spare the user a first run that
+        # fails. Users who do not want it can turn it off in Preferences.
+        if not bool(setting('CollabFirewallPrompt', True)):
+            return
+
+        port = int(setting('CollabPort', identity.DEFAULT_HOST_PORT)
+                   or identity.DEFAULT_HOST_PORT)
+        firewall.trigger(port)
+    except Exception:
+        pass
+
+
 def main():
     """
     Main startup function for Reggie
@@ -460,6 +489,13 @@ def main():
     print("[BOOT] Showing main window...")
     globals_.mainWindow.show()
     print("[BOOT] ✓ Main window shown")
+
+    # Provoke the firewall prompt now, while a window has just appeared and the
+    # user expects Windows to say something. Doing it here rather than lazily
+    # means the run that creates the rule is not the run that fails: the Patch
+    # Manager has to be restarted when it triggers the prompt itself, and an
+    # inbound-blocked collaboration session would be far harder to diagnose.
+    _TriggerFirewallPrompt()
 
     if '-generatestringsxml' in sys.argv:
         globals_.trans.generateXML()

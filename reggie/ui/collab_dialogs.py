@@ -122,6 +122,7 @@ def load_collab_settings():
         'port': int(setting('CollabPort', identity.DEFAULT_HOST_PORT) or
                     identity.DEFAULT_HOST_PORT),
         'debug_log': bool(setting('CollabDebugLog', False)),
+        'firewall_prompt': bool(setting('CollabFirewallPrompt', True)),
     }
 
 
@@ -136,6 +137,8 @@ def save_collab_settings(values):
     setSetting('CollabUPnP', bool(values.get('upnp', False)))
     setSetting('CollabPort', int(values.get('port', identity.DEFAULT_HOST_PORT)))
     setSetting('CollabDebugLog', bool(values.get('debug_log', False)))
+    setSetting('CollabFirewallPrompt',
+               bool(values.get('firewall_prompt', True)))
 
 
 def load_ban_list():
@@ -806,6 +809,17 @@ class CollabSettingsTab(QtWidgets.QWidget):
         layout.addRow(_tr(16), self.banList)
         layout.addRow(removeBan)
 
+        self.firewallPrompt = QtWidgets.QCheckBox(
+            'Ask the firewall for permission at startup')
+        self.firewallPrompt.setChecked(
+            bool(values.get('firewall_prompt', True)))
+        self.firewallPrompt.setToolTip(
+            'Briefly listens on the collaboration port when Reggie starts, so '
+            'Windows asks for firewall permission then rather than in the '
+            'middle of hosting a session. Never creates a firewall rule '
+            'itself - the prompt is yours to answer.')
+        layout.addRow(self.firewallPrompt)
+
         self.debugLog = QtWidgets.QCheckBox('Write a collaboration debug log')
         self.debugLog.setChecked(bool(values.get('debug_log', False)))
         self.debugLog.setToolTip(
@@ -845,6 +859,7 @@ class CollabSettingsTab(QtWidgets.QWidget):
             'clicks': self.clicks.isChecked(),
             'patch_source': self.patchSource.currentData() or PATCH_SOURCE_CATALOG,
             'debug_log': self.debugLog.isChecked(),
+            'firewall_prompt': self.firewallPrompt.isChecked(),
         }
 
     def apply(self):
