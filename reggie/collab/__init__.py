@@ -13,8 +13,10 @@ Layout (see _workspace/docs/refactor-add-features-2026_07/BLOCK_C_B1_PROTOCOL_SP
     sync.py       snapshot, op encode/apply, ref map, presence
     files.py      manifest, chunking, path/extension validation, staging
 
-Only the first three modules exist so far (phase 2). They are deliberately free
-of sockets and Qt so they can be unit-tested headlessly.
+The first six modules exist so far (phases 2-3). `protocol.py`, `identity.py`
+and `auth.py` are deliberately free of sockets and Qt so they can be unit-tested
+headlessly; `transport.py`, `discovery.py` and `upnp.py` own sockets but no Qt,
+and are tested over real loopback sockets.
 
 Security invariants that apply to every module here (spec section 1.3):
 
