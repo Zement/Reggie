@@ -115,6 +115,15 @@ class MenuBuilder:
         )
 
         self.CreateAction(
+            # No dedicated icon ships for this; 'spritelist' reads as a
+            # participant list and avoids adding an asset the next block's UI
+            # redesign would replace anyway.
+            'collaborate', self.win.HandleCollaborate, GetIcon('spritelist'),
+            'Collaborate...', 'Host or join a collaborative editing session',
+            GetKeybind('collaborate'),
+        )
+
+        self.CreateAction(
             'changegamedef', None, GetIcon('game'),
             globals_.trans.stringOneLine('MenuItems', 98), globals_.trans.stringOneLine('MenuItems', 99),
             None,
@@ -471,6 +480,8 @@ class MenuBuilder:
         fmenu.addAction(self.win.actions['savecopyas'])
         fmenu.addAction(self.win.actions['metainfo'])
         fmenu.addAction(self.win.actions['undohistory'])
+        fmenu.addSeparator()
+        fmenu.addAction(self.win.actions['collaborate'])
         fmenu.addSeparator()
         fmenu.addAction(self.win.actions['changegamedef'])
         fmenu.addAction(self.win.actions['patchmanager'])
