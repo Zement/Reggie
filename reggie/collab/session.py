@@ -283,6 +283,33 @@ class HostSession:
             except Exception:
                 pass
 
+    def set_room_info(self, room_info):
+        """
+        Replaces the room info and tells every client.
+
+        Called when the host switches game patch or loads another level. Without
+        this the clients keep the room info they were handed at join time, so a
+        host changing patch mid-session left everyone silently mismatched -
+        which is exactly the case the patch check exists to catch.
+
+        Returns True if anything actually changed, so the caller can avoid
+        logging a change that did not happen.
+        """
+        new_info = dict(room_info or {})
+
+        with self._lock:
+            if new_info == self.room_info:
+                return False
+            self.room_info = new_info
+
+        message = protocol.make_message(protocol.T_ROOM_INFO, dict(new_info))
+        for participant in self.clients():
+            if participant.connection is not None:
+                participant.connection.send(message)
+
+        self._emit('room_info', {'room_info': dict(new_info)})
+        return True
+
     def _next_color(self):
         with self._lock:
             color = DEFAULT_NICK_COLORS[self._color_cursor % len(DEFAULT_NICK_COLORS)]
@@ -418,8 +445,9 @@ class HostSession:
             'room_info': dict(self.room_info),
         })
 
-        if self.room_info:
-            connection.send_type(protocol.T_ROOM_INFO, dict(self.room_info))
+        # No T_ROOM_INFO here: auth_ok above already carried room_info, and a
+        # second copy is indistinguishable from the host *changing* the
+        # settings, so every client announced a change it had not seen.
 
         self.broadcast_roster()
         self.system_notice('%s joined.' % participant.nick)
@@ -574,9 +602,16 @@ class HostSession:
         })
         return True
 
-    def system_notice(self, text):
+    def system_notice(self, text, echo_local=False):
         """
         Broadcasts a host-generated notice (joins, kicks, role changes).
+
+        `echo_local` is off by default because every internal caller pairs this
+        with a lifecycle event ('join', 'kick', ...) that the UI already turns
+        into a log line. Echoing as well put every such notice in the host's log
+        twice - the duplicate messages Zement saw in the first live test. The
+        clients need the wire message because they see no lifecycle event; the
+        host does not.
         """
         clean = protocol.sanitize_text(str(text or ''), protocol.MAX_CHAT_CHARS)
         if not clean:
@@ -591,11 +626,12 @@ class HostSession:
             if participant.connection is not None:
                 participant.connection.send(message)
 
-        self._emit('chat', {
-            'participant': None,
-            'text': clean,
-            'kind': protocol.CHAT_KIND_SYSTEM,
-        })
+        if echo_local:
+            self._emit('chat', {
+                'participant': None,
+                'text': clean,
+                'kind': protocol.CHAT_KIND_SYSTEM,
+            })
 
     # -- presence -----------------------------------------------------------
 

@@ -563,13 +563,21 @@ class TransferSession:
 # Deciding how to satisfy a patch requirement (client side)
 # ---------------------------------------------------------------------------
 
-def patch_requirement(room_info, catalog=None, allow_host_transfer=True):
+def patch_requirement(room_info, catalog=None, allow_host_transfer=True,
+                      base_dir='', extra_dirs=()):
     """
     Works out whether the client can join, and how the patch should be obtained.
 
     `room_info` is the host's room_info payload; `catalog` is a CatalogManager
     (or anything with the same three methods), passed in rather than constructed
     so this stays testable without touching the network.
+
+    Whether a patch is *installed* is answered from the filesystem, by
+    find_installed_patch, not from the catalog: CatalogManager searches only
+    reggiedata/patches, so a patch installed by the Patch Manager into
+    assets/mods, or added as an external patch, would be reported missing on a
+    machine that has it. The catalog is still authoritative for the different
+    question of whether a patch is *available* to install.
 
     Returns {'source', 'patch_id', 'patch_version', 'reason', 'message'}, where
     `source` is one of SOURCE_LOCAL / SOURCE_CATALOG / SOURCE_HOST /
@@ -591,7 +599,14 @@ def patch_requirement(room_info, catalog=None, allow_host_transfer=True):
     installed = False
     installed_version = None
 
-    if catalog is not None:
+    local = find_installed_patch(patch_id, base_dir, extra_dirs)
+    if local is not None:
+        installed = True
+        installed_version = local.get('version') or None
+
+    if not installed and catalog is not None:
+        # Fall back to the catalog's own view. It searches fewer places, so it
+        # can only ever add a patch this missed, never contradict one it found.
         try:
             installed = bool(catalog.is_patch_installed(patch_id))
             if installed:
@@ -697,6 +712,128 @@ def plugin_state_hash(enabled_names):
     """
     names = sorted({str(name).strip() for name in (enabled_names or ()) if str(name).strip()})
     return sha256_bytes('\n'.join(names).encode('utf-8'))
+
+
+# ---------------------------------------------------------------------------
+# Finding an installed patch
+# ---------------------------------------------------------------------------
+
+# Reggie can have a patch installed in three different places, and a peer that
+# has one in a place we do not search looks exactly like a peer that does not
+# have it at all. That is not hypothetical: it is the bug Zement hit in the
+# first live test, where two machines both running the retail game could not
+# agree that they matched.
+#
+#   1. reggiedata/patches - the classic location.
+#   2. assets/mods        - where the Patch Manager installs.
+#   3. anywhere on disk   - "Add external patch", recorded in QSettings under
+#                           PatchPath_<gamepath>.
+#
+# CatalogManager.get_installed_patches() only ever looks at (1), so it is not
+# usable as the collab answer to "do I have this patch".
+PATCH_SEARCH_DIRS = (
+    os.path.join('reggiedata', 'patches'),
+    os.path.join('assets', 'mods'),
+)
+
+
+def _read_patch_main_xml(main_xml):
+    """
+    The (name, version) a patch declares, or None if this is not a patch.
+
+    Deliberately tolerant: a malformed main.xml somewhere in the search path
+    must not stop a join, it just means that directory is not the patch we are
+    looking for.
+    """
+    try:
+        from xml.etree import ElementTree as etree
+
+        root = etree.parse(main_xml).getroot()
+    except Exception:
+        return None
+
+    name = root.get('name')
+    if not name:
+        return None
+
+    return str(name), (root.get('version') or '')
+
+
+def installed_patches(base_dir='', extra_dirs=()):
+    """
+    Every installed patch, as {name: {'path', 'version'}}.
+
+    Keyed on the *name* declared in main.xml, never on the folder name. The two
+    are not the same and cannot be made the same: the identical patch ships as
+    'NewerSMBW' under reggiedata/patches and as 'Newer Super Mario Bros. Wii'
+    under assets/mods, and an external patch can sit in a folder called
+    anything at all. Only the declared name is a patch's identity.
+
+    `extra_dirs` carries the external patch paths, which live in QSettings and
+    therefore have to be passed in - this module stays Qt-free.
+
+    Earlier search directories win, so a patch present in both directories
+    resolves to reggiedata/patches, matching what CatalogManager reports.
+    """
+    found = {}
+
+    roots = [os.path.join(str(base_dir), relative) if base_dir else relative
+             for relative in PATCH_SEARCH_DIRS]
+
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+
+        try:
+            entries = sorted(os.listdir(root))
+        except OSError:
+            continue
+
+        for entry in entries:
+            directory = os.path.join(root, entry)
+            main_xml = os.path.join(directory, 'main.xml')
+            if not os.path.isfile(main_xml):
+                continue
+
+            declared = _read_patch_main_xml(main_xml)
+            if declared is None:
+                continue
+
+            name, version = declared
+            found.setdefault(name, {'path': directory, 'version': version})
+
+    # External patches are listed last so an explicitly installed copy takes
+    # precedence over one the user merely pointed at.
+    for directory in (extra_dirs or ()):
+        if not directory:
+            continue
+
+        main_xml = os.path.join(str(directory), 'main.xml')
+        if not os.path.isfile(main_xml):
+            continue
+
+        declared = _read_patch_main_xml(main_xml)
+        if declared is None:
+            continue
+
+        name, version = declared
+        found.setdefault(name, {'path': str(directory), 'version': version})
+
+    return found
+
+
+def find_installed_patch(patch_id, base_dir='', extra_dirs=()):
+    """
+    The installed patch declaring `patch_id`, or None.
+
+    This is the collab answer to "do I have the host's patch", and it is
+    deliberately not CatalogManager's, which searches one of the three
+    locations.
+    """
+    if not patch_id:
+        return None
+
+    return installed_patches(base_dir, extra_dirs).get(str(patch_id))
 
 
 # ---------------------------------------------------------------------------

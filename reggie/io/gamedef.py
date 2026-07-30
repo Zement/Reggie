@@ -1106,11 +1106,38 @@ def LoadGameDef(name=None, dlg=None):
 
 
     if dlg: setSetting('LastGameDef', name)
-    
+
     if sprite_images_enabled and globals_.mainWindow is not None and hasattr(globals_.mainWindow, 'sprPicker'):
         globals_.mainWindow.sprPicker.show_sprite_images = True
-    
+
+    # Tell a running collaboration session that the patch changed, so joined
+    # clients can re-check whether they still have what the host is using. Only
+    # on the success path: announcing a patch we failed to load would be a lie.
+    NotifyCollabGameDefChanged()
+
     return True
+
+
+def NotifyCollabGameDefChanged():
+    """
+    Pushes the new patch to collaboration clients, if a session is hosting.
+
+    Isolated and fully guarded because it runs at the end of patch switching,
+    which must succeed whether or not collaboration is available: a networking
+    problem here would otherwise look like a broken patch.
+    """
+    window = getattr(globals_, 'mainWindow', None)
+
+    # _collab is created lazily by HandleCollaborate, so None here is the normal
+    # case: the user has never opened the collaboration dialog.
+    controller = getattr(window, '_collab', None)
+    if controller is None:
+        return
+
+    try:
+        controller.notifyRoomInfoChanged()
+    except Exception:
+        pass
 
 @functools.lru_cache(maxsize=None)
 def FindGameDef(name, skip=None):

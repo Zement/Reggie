@@ -78,6 +78,7 @@ class CollabController(QtCore.QObject):
         self.signals.snapshotReceived.connect(self._onSnapshot)
         self.signals.operationRejected.connect(self._onOperationRejected)
         self.signals.connected.connect(self._onConnected)
+        self.signals.roomInfoChanged.connect(self._onRoomInfoChanged)
         self.signals.disconnected.connect(self._onDisconnected)
         self.signals.rejected.connect(self._onRejected)
         self.signals.roleChanged.connect(self._onRoleChanged)
@@ -102,11 +103,10 @@ class CollabController(QtCore.QObject):
 
         # A window left over from a finished session has the wrong controls for
         # the next one (a host's buttons for a client, or vice versa) and a stale
-        # chat log, so start fresh.
-        if self.status_window is not None:
-            self.status_window.close()
-            self.status_window.deleteLater()
-            self.status_window = None
+        # chat log, so start fresh. leave() already does this; the case that
+        # reaches here is a session ended by the *other* side, where the window
+        # is kept on purpose so the reason stays readable.
+        self._closeStatusWindow()
 
         dialog = collab_dialogs.CollabSetupDialog(self.window)
         dialog.startDiscovery()
@@ -328,6 +328,11 @@ class CollabController(QtCore.QObject):
     def leave(self):
         """
         Ends the session, telling the other side why.
+
+        Deliberate leaving closes the status window, unlike a remote disconnect:
+        the user already knows why it ended, so leaving a dead lobby on screen
+        only makes it look like the session is still running. Reopening
+        File > Collaborate then correctly offers the host/join dialog again.
         """
         if not self.is_active:
             return
@@ -340,7 +345,21 @@ class CollabController(QtCore.QObject):
             self.client.close('left the session')
 
         self._teardown()
-        self._appendStatus('Session ended.')
+        self._closeStatusWindow()
+
+    def _closeStatusWindow(self):
+        if self.status_window is None:
+            return
+
+        window = self.status_window
+
+        # Cleared before closing so a stale roster cannot be seen, and dropped
+        # immediately so the next session builds a fresh window rather than
+        # inheriting this one's controls and chat log.
+        self.status_window = None
+        window.setRoster([])
+        window.close()
+        window.deleteLater()
 
     def _teardown(self):
         if self.responder is not None:
@@ -395,6 +414,25 @@ class CollabController(QtCore.QObject):
             self.client.send(protocol.make_message(
                 protocol.T_CHAT, {'text': text,
                                   'kind': protocol.CHAT_KIND_USER}))
+
+    def notifyRoomInfoChanged(self):
+        """
+        Republishes the room info after the host switched patch or level.
+
+        A no-op for a client, which does not own the room info, and for the host
+        when nothing actually changed.
+        """
+        if self.host_session is None:
+            return False
+
+        changed = self.host_session.set_room_info(self._roomInfo())
+        if changed:
+            patch = self._patchId()
+            self._appendStatus(
+                'You are now using: %s. Clients have been told.'
+                % (patch or 'the retail game'))
+
+        return changed
 
     def _kick(self, session_id):
         if self.host_session is not None:
@@ -452,6 +490,16 @@ class CollabController(QtCore.QObject):
             self.client.send(protocol.make_message(
                 protocol.T_SNAPSHOT_REQUEST,
                 {'area': int(room_info.get('area', 1) or 1)}))
+
+    def _onRoomInfoChanged(self, room_info):
+        """
+        The host switched patch or level. Re-run the patch check, since what the
+        client needs may have changed since it joined.
+        """
+        patch = str(room_info.get('patch_id', '') or '')
+        self._appendStatus(
+            'The host is now using: %s.' % (patch or 'the retail game'))
+        self._checkPatch(room_info)
 
     def _onDisconnected(self, reason):
         self._appendStatus(reason or 'Disconnected.')
@@ -553,7 +601,8 @@ class CollabController(QtCore.QObject):
                       == collab_dialogs.PATCH_SOURCE_HOST)
 
         requirement = files.patch_requirement(room_info, catalog,
-                                              allow_host_transfer=allow_host)
+                                              allow_host_transfer=allow_host,
+                                              extra_dirs=_external_patch_dirs())
 
         if requirement['source'] != files.SOURCE_LOCAL:
             self._appendStatus(requirement['message'])
@@ -564,7 +613,8 @@ class CollabController(QtCore.QObject):
         return {
             'game_id': self._gameId(),
             'game_name': self._gameName(),
-            'patch_id': self._gameName(),
+            'patch_id': self._patchId(),
+            'patch_version': self._patchVersion(),
             'level_name': str(getattr(globals_, 'levelName', '') or ''),
             'area': 1,
         }
@@ -578,6 +628,35 @@ class CollabController(QtCore.QObject):
     def _gameName():
         gamedef = getattr(globals_, 'gamedef', None)
         return str(getattr(gamedef, 'name', '') or 'New Super Mario Bros. Wii')
+
+    @staticmethod
+    def _patchId():
+        """
+        The patch this session uses, or '' for the retail game.
+
+        The base game is not a patch. A retail gamedef has custom=False and a
+        *translated* display name ('New Super Mario Bros. Wii'), so sending that
+        name as a patch id made every retail session claim to need a patch that
+        by definition cannot be installed - which is what blocked Zement's first
+        two-machine test even though both sides matched exactly.
+
+        A custom gamedef's identity for this purpose is the name declared in its
+        main.xml, since that is what identifies it across machines; the folder
+        name differs between install locations for the same patch.
+        """
+        gamedef = getattr(globals_, 'gamedef', None)
+        if gamedef is None or not getattr(gamedef, 'custom', False):
+            return ''
+
+        return str(getattr(gamedef, 'name', '') or '')
+
+    @staticmethod
+    def _patchVersion():
+        gamedef = getattr(globals_, 'gamedef', None)
+        if gamedef is None or not getattr(gamedef, 'custom', False):
+            return ''
+
+        return str(getattr(gamedef, 'version', '') or '')
 
     @staticmethod
     def _enabledPlugins():
@@ -650,6 +729,39 @@ def _sprite_format():
     from reggie.core.raw_data import RawData
 
     return RawData.Format.Vanilla
+
+
+def _external_patch_dirs():
+    """
+    Patch directories added with "Add external patch".
+
+    These live in QSettings under PatchPath_<gamepath>, so reggie/collab cannot
+    read them itself without importing Qt. Handles both the grouped
+    ('GamePaths/PatchPath_X') and flat key layouts, exactly as
+    gamedef.getAvailableGameDefs does - the two forms both occur in the wild.
+    """
+    settings = getattr(globals_, 'settings', None)
+    if settings is None:
+        return []
+
+    try:
+        from reggie.io.gamedef import setting
+
+        directories = []
+        for key in settings.allKeys():
+            name = key.split('/')[-1] if '/' in key else key
+            if not name.startswith('PatchPath_'):
+                continue
+
+            value = setting(name)
+            if value:
+                directories.append(os.path.normpath(str(value)))
+
+        return directories
+    except Exception:
+        # A patch we cannot enumerate is reported as missing, which is
+        # recoverable; an exception here would stop the join entirely.
+        return []
 
 
 def _catalog_manager():

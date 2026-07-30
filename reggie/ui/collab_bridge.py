@@ -34,6 +34,7 @@ class CollabSignals(QtCore.QObject):
 
     # Session lifecycle
     connected = QtCore.pyqtSignal(dict)          # room_info
+    roomInfoChanged = QtCore.pyqtSignal(dict)    # room_info, after a host change
     disconnected = QtCore.pyqtSignal(str)        # reason
     rejected = QtCore.pyqtSignal(str)            # reason
     hostingStarted = QtCore.pyqtSignal(str, int)  # join code, port
@@ -176,7 +177,11 @@ class CollabBridge(QtCore.QObject):
             self.signals.roleChanged.emit(data.get('role', ''))
 
         elif kind == 'room_info':
-            self.signals.statusMessage.emit('The host changed the room settings.')
+            # Carries the payload, because the patch the host is using can
+            # change mid-session and the client has to re-check it. A bare
+            # notice would tell the user something changed without telling
+            # anyone which patch is now required.
+            self.signals.roomInfoChanged.emit(dict(data or {}))
 
         elif kind == 'removed':
             self.signals.disconnected.emit(
