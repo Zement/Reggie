@@ -50,6 +50,59 @@ _PERMISSION_HINT = ('Not available during this collaboration session: the host '
                     'decides which level and patch everyone is editing.')
 
 
+class _BusyIndicator:
+    """
+    Says what the editor is doing while it cannot repaint.
+
+    Applying a snapshot builds one real Qt item per object in the level, which
+    measured at roughly 0.85 ms each - about 0.7 s for an 800-item area, and
+    all of it on the main thread. It has to be: touching the scene from a
+    reader thread corrupts it, which is the rule this whole file enforces.
+
+    So the wait is not removable here, only explainable. Without this the
+    window simply stopped responding and looked crashed - Zement's report that
+    the other machine "becomes unresponsive for a moment".
+
+    Deliberately not a QProgressDialog: a modal dialog during a scene rebuild
+    can deliver events while the scene is half-populated. A status message and
+    a wait cursor tell the user what is happening without pumping the event
+    loop mid-mutation.
+    """
+
+    def __init__(self, window, message):
+        self.window = window
+        self.message = message
+        self._label = None
+
+    def __enter__(self):
+        QtWidgets.QApplication.setOverrideCursor(
+            QtCore.Qt.CursorShape.WaitCursor)
+        try:
+            status = self.window.statusBar()
+        except Exception:
+            return self
+
+        self._label = QtWidgets.QLabel(self.message)
+        status.insertWidget(0, self._label)
+
+        # One repaint so the message is actually on screen before the work
+        # starts. Restricted to painting: processEvents() with input allowed
+        # would let a click reach a scene we are about to rebuild.
+        QtWidgets.QApplication.processEvents(
+            QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        QtWidgets.QApplication.restoreOverrideCursor()
+        if self._label is not None:
+            try:
+                self.window.statusBar().removeWidget(self._label)
+            finally:
+                self._label.deleteLater()
+                self._label = None
+        return False
+
+
 class CollabController(QtCore.QObject):
     """
     Owns one collaboration session at a time.
@@ -737,9 +790,12 @@ class CollabController(QtCore.QObject):
         be blocked wherever it is called from. Cleared in a finally, so a failed
         load cannot leave the session permanently mute.
         """
+        label = os.path.basename(str(name)) if name else 'the level'
         self._suppress_level_notify = True
         try:
-            return bool(self.window.LoadLevel(name, is_full_path, area))
+            with _BusyIndicator(self.window,
+                                'Loading %s from the session...' % label):
+                return bool(self.window.LoadLevel(name, is_full_path, area))
         except Exception as exc:
             self._appendStatus('That level could not be loaded: %s' % exc)
             return False
@@ -787,7 +843,9 @@ class CollabController(QtCore.QObject):
             return False
 
         try:
-            payload = sync.build_snapshot(self.refmap, area_number=self._areaNumber())
+            with _BusyIndicator(self.window, 'Sharing the level...'):
+                payload = sync.build_snapshot(
+                    self.refmap, area_number=self._areaNumber())
         except sync.SyncError as exc:
             self._appendStatus('The level could not be shared: %s' % exc)
             return False
@@ -987,6 +1045,12 @@ class CollabController(QtCore.QObject):
         except broadcast.BroadcastError as exc:
             # Our view of the level and the ref map have drifted. Resyncing is
             # the honest answer; carrying on would diverge silently.
+            #
+            # Logged because this path used to be silent: a client's QPT stroke
+            # failed here on every tile, and the log showed only the resulting
+            # resync with no hint of what had caused it.
+            debuglog.log('op-out', 'command could not be encoded',
+                         command=type(command).__name__, error=str(exc))
             self._appendStatus('A change could not be shared: %s' % exc)
             self._requestResync()
             return False
@@ -1025,9 +1089,14 @@ class CollabController(QtCore.QObject):
         if self.refmap is None:
             return
 
+        count = len(payload.get('items') or []) if isinstance(payload, dict) else 0
+
         try:
-            sync.apply_snapshot(payload, self.refmap,
-                                sprite_format=_sprite_format())
+            with _BusyIndicator(
+                    self.window,
+                    'Loading the level from the host (%d items)...' % count):
+                sync.apply_snapshot(payload, self.refmap,
+                                    sprite_format=_sprite_format())
         except sync.SyncError as exc:
             QtWidgets.QMessageBox.warning(
                 self.window, 'Collaboration',

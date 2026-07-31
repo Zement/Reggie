@@ -104,8 +104,16 @@ class RefMap:
     scene may still be referenced by a later undo, and a weak map would drop it
     exactly when a peer's undo needs it.
 
-    Both host and client keep one. The host mints references; a client only ever
-    learns them, so `mint` on a client is a bug and raises.
+    Both host and client keep one. Either may mint a reference for an item it
+    just created, because a peer that cannot name its own new item cannot
+    describe it to anybody - that is what stopped a client from painting. Refs
+    carry the minting peer's `origin` as a prefix, so two peers creating items
+    at the same moment cannot collide.
+
+    `is_authority` is therefore not about minting. It marks the peer whose copy
+    of the level wins a disagreement, which is what `seed` uses: rebuilding
+    references for a whole area is the host redefining shared state, and a
+    client doing it would silently renumber items the host already named.
     """
 
     def __init__(self, origin='host', is_authority=True):
@@ -118,11 +126,14 @@ class RefMap:
 
     def mint(self, item):
         """
-        Assigns a new reference to an item. Host only.
-        """
-        if not self.is_authority:
-            raise SyncError('only the host may assign item references')
+        Assigns a new reference to an item that this peer has just created.
 
+        Allowed on a client: the reference is prefixed with this peer's origin,
+        so it cannot collide with one the host assigned, and the host validates
+        and relays it like any other. Without this a client could not broadcast
+        an `add` at all - every painted tile failed to encode and triggered a
+        resync, which then deleted the tiles the client had just painted.
+        """
         if item is None:
             raise SyncError('cannot reference None')
 
@@ -156,7 +167,16 @@ class RefMap:
 
         Returns the number of items now referenced. Idempotent: mint() returns
         the existing reference for an item it already knows.
+
+        Host only, and checked here rather than in mint(): naming one item you
+        just created is every peer's business, but renaming a whole area is the
+        authority redefining shared state. A client doing it would give new
+        references to items the host has already named, so every later op for
+        them would arrive with a reference the host cannot resolve.
         """
+        if not self.is_authority:
+            raise SyncError('only the host may seed references for an area')
+
         if area is None:
             return 0
 

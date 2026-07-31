@@ -890,7 +890,7 @@ class ObjectItem(LevelEditorItem):
                 # collaboration, whose ops are built from pushed commands.
                 # Imported here because undo imports this module.
                 from reggie.core import undo
-                undo.record_clone(new_item)
+                undo.record_created_item(new_item)
 
                 globals_.mainWindow.scene.clearSelection()
                 self.setSelected(True)
@@ -2339,7 +2339,7 @@ class SpriteItem(LevelEditorItem):
         # See ObjectItem.mousePressEvent: the clone needs its own command, or
         # it exists only on this machine and cannot be undone.
         from reggie.core import undo
-        undo.record_clone(new_item)
+        undo.record_created_item(new_item)
 
         globals_.mainWindow.scene.clearSelection()
         self.setSelected(True)
