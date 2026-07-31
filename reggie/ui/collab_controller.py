@@ -325,21 +325,32 @@ class CollabController(QtCore.QObject):
         address = local[0] if local else '127.0.0.1'
 
         if not upnp_enabled:
+            debuglog.log('upnp', 'not enabled; advertising the local address',
+                         address=address)
             return address
 
         try:
             self.mapping = upnp.PortMapping.create(port, address)
         except upnp.UPnPError as exc:
+            # Logged as well as shown: the status window closes when a session
+            # ends, so a user debugging a failed connection afterwards has
+            # nothing to read. This is exactly how a router that silently does
+            # not run UPnP stayed invisible.
+            debuglog.log('upnp', 'port forwarding failed',
+                         port=port, error=str(exc))
             self._appendStatus('Automatic port forwarding failed: %s' % exc)
             return address
 
+        debuglog.log('upnp', 'port forwarded', port=port)
         self._appendStatus('Port %d forwarded via UPnP.' % port)
 
         external = upnp.external_ip_address(self.mapping.control_url,
                                             self.mapping.service_type)
         if external:
+            debuglog.log('upnp', 'router reported a public address')
             return external
 
+        debuglog.log('upnp', 'router reported no usable public address')
         self._appendStatus(
             'The router did not report a usable public address; the join code '
             'uses your local address, which only works on this network.')

@@ -26,7 +26,7 @@ things are load-bearing rather than cosmetic:
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from reggie.collab import discovery, files, identity, protocol, session
+from reggie.collab import discovery, files, identity, protocol, session, upnp
 from reggie.core import globals_
 from reggie.core.dirty import setSetting, setting
 
@@ -1005,13 +1005,35 @@ def show_join_code(parent, join_code):
     """
     display = identity.format_join_code_for_display(join_code)
 
+    # Whether this code can work outside the local network. A private address
+    # in a join code is the single most confusing failure this feature has:
+    # everything reports success, the code looks perfectly valid, and the peer
+    # gets a bare timeout or connection-refused with no hint of the cause.
+    # Better to say so here, while the host still has the code in front of them.
+    reach = ''
+    try:
+        parsed = identity.decode_join_code(join_code)
+        host = parsed.get('host', '')
+        if host and upnp.is_private_address(host):
+            reach = (
+                '\n\nNote: this code contains %s, a local network address. It '
+                'works for people on your own network, but NOT over the '
+                'internet - they would see a timeout or a refused connection.'
+                '\n\nFor internet play the router has to forward port %d to '
+                'this computer. Enable UPnP in the collaboration settings, or '
+                'forward the port by hand and share your public address.'
+                % (host, int(parsed.get('port', 0))))
+    except Exception:
+        # Never let a display nicety stop the host seeing their own code.
+        reach = ''
+
     box = QtWidgets.QMessageBox(parent)
     box.setWindowTitle(_tr(0))
     box.setIcon(QtWidgets.QMessageBox.Icon.Information)
     box.setText('Your session is running.')
     box.setInformativeText(
         'Send this join code to the people you want to invite. It contains the '
-        'session password, so share it only with them:\n\n%s' % display)
+        'session password, so share it only with them:\n\n%s%s' % (display, reach))
 
     copyButton = box.addButton('Copy join code',
                                QtWidgets.QMessageBox.ButtonRole.ActionRole)

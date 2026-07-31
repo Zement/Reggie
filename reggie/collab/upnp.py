@@ -177,14 +177,63 @@ def validate_control_url(url):
 # SSDP discovery
 # ---------------------------------------------------------------------------
 
-def discover_gateways(timeout=SSDP_TIMEOUT):
+def _preferred_local_address():
+    """
+    The LAN address this machine would use to reach the internet.
+
+    Asks the routing table with a UDP connect; no packet is sent. Kept here
+    rather than imported from transport so this module stays self-contained,
+    and returns '' rather than raising - discovery must degrade, not fail.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(('203.0.113.1', 9))   # RFC 5737 documentation range
+        address = probe.getsockname()[0]
+    except OSError:
+        return ''
+    finally:
+        probe.close()
+
+    if not address or address.startswith('127.'):
+        return ''
+    return address
+
+
+def discover_gateways(timeout=SSDP_TIMEOUT, local_address=None):
     """
     Multicasts M-SEARCH and returns validated device description URLs.
 
     Deduplicated, order preserved. An empty list means no gateway answered,
     which is normal on networks with UPnP disabled.
+
+    The socket is bound to a real LAN address rather than left on the wildcard,
+    and that is load-bearing rather than tidiness. An unbound UDP socket on
+    Windows sends the search from 0.0.0.0; the router's unicast reply is then
+    delivered to whichever interface Windows decides owns the wildcard binding,
+    and on a machine with more than one adapter - a Bluetooth PAN with a
+    link-local address is enough - the replies are silently lost. Measured on
+    Zement's machine: unbound received 0 replies, bound to the LAN address
+    received 4, from the same router in the same minute.
+
+    `local_address` overrides the interface, for a host that knows which one it
+    is advertising.
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    bind_address = local_address or _preferred_local_address()
+    if bind_address:
+        try:
+            sock.bind((bind_address, 0))
+            # Send the multicast out of that interface too, rather than letting
+            # the routing table pick one that may not reach the gateway.
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
+                            socket.inet_aton(bind_address))
+        except OSError:
+            # An address that cannot be bound is not worth failing over: fall
+            # back to the wildcard, which still works on single-homed machines.
+            pass
+
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
     sock.settimeout(0.5)
 
