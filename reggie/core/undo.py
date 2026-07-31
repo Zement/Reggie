@@ -1091,6 +1091,38 @@ def notify_item_created(item):
         _bulk_session.created.append(item)
 
 
+def record_clone(item):
+    """
+    Records an item created by a Ctrl+drag clone as its own undo command.
+
+    Cloning is the one interactive way to create an item that does not already
+    push a command of its own: the item is built directly and the drag that
+    follows records a *move of the original*, which is a different object. So
+    without this the clone was absent from the history entirely, and undoing
+    the move left the duplicate behind with no way to remove it.
+
+    That absence also hid the clone from collaboration, which builds its
+    operations from pushed commands - a peer saw the original move and never
+    heard that a second item existed.
+
+    A bulk edit session takes precedence: it is already collecting created
+    items and will push one command for the whole stroke.
+    """
+    if item is None or is_recording_blocked():
+        return
+
+    if _bulk_session is not None:
+        _bulk_session.created.append(item)
+        return
+
+    window = getattr(globals_, 'mainWindow', None)
+    stack = getattr(window, 'undoStack', None)
+    if stack is None:
+        return
+
+    stack.push(AddItemsCommand([item], already_applied=True))
+
+
 def bulk_remove_object(item):
     """
     Detaches a level item from the scene and all bookkeeping lists (the

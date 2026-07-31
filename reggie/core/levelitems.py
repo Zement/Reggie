@@ -884,6 +884,14 @@ class ObjectItem(LevelEditorItem):
                 new_item.setZValue(self.zValue())
                 self.setZValue(newZ)
 
+                # The clone is a level edit in its own right: without this it
+                # is invisible to undo (the following drag records a move of
+                # the *original*, which is a different item) and to
+                # collaboration, whose ops are built from pushed commands.
+                # Imported here because undo imports this module.
+                from reggie.core import undo
+                undo.record_clone(new_item)
+
                 globals_.mainWindow.scene.clearSelection()
                 self.setSelected(True)
 
@@ -2326,7 +2334,13 @@ class SpriteItem(LevelEditorItem):
 
             return
 
-        globals_.mainWindow.CreateSprite(self.objx, self.objy, self.type, self.spritedata)
+        new_item = globals_.mainWindow.CreateSprite(self.objx, self.objy, self.type, self.spritedata)
+
+        # See ObjectItem.mousePressEvent: the clone needs its own command, or
+        # it exists only on this machine and cannot be undone.
+        from reggie.core import undo
+        undo.record_clone(new_item)
+
         globals_.mainWindow.scene.clearSelection()
         self.setSelected(True)
 
