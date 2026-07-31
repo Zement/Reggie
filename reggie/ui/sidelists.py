@@ -141,6 +141,69 @@ class LevelOverviewWidget(QtWidgets.QWidget):
             scalar * self.Wlocator, scalar * self.Hlocator
         ))
 
+        self._paintPeerViews(painter)
+
+    def setPeerViews(self, views):
+        """
+        The rectangles other collaborators are looking at.
+
+        `views` is [{'x', 'y', 'w', 'h', 'color', 'nick'}] in scene
+        coordinates. Held as plain data rather than as widget state, so the
+        overview needs to know nothing about sessions and simply draws what it
+        was last given.
+        """
+        self._peer_views = list(views or ())
+        self.update()
+
+    def _paintPeerViews(self, painter):
+        """
+        Draws each collaborator's viewport in their own colour.
+
+        Dashed, so a peer's rectangle is never mistaken for your own solid one
+        even when the two overlap almost exactly - which is the normal case
+        when two people are working on the same part of a level.
+
+        Drawn twice: a white dashed rectangle just outside, then the peer's
+        colour just inside it. The overview is a dense, mostly-pale picture of
+        the level, and a single thin coloured line disappeared into it. The
+        white outline gives the colour something constant to sit against
+        whatever it happens to cross, which a heavier line would not - that
+        would only cover more of the map.
+        """
+        views = getattr(self, '_peer_views', None)
+        if not views:
+            return
+
+        # The pen is not scaled by the painter's transform, so the two outlines
+        # are one *device* pixel apart at any zoom. In overview units that is
+        # 1/scale, which is what keeps them adjacent rather than overlapping.
+        offset = 1.0 / self.scale if self.scale else 1.0
+
+        # The same 1/24 scene-to-overview conversion the local box uses, but
+        # without mainWindowScale: a peer's rectangle already arrives in scene
+        # coordinates, so their zoom is baked in.
+        for view in views:
+            try:
+                rect = QtCore.QRectF(
+                    view['x'] / 24.0, view['y'] / 24.0,
+                    view['w'] / 24.0, view['h'] / 24.0)
+            except (KeyError, TypeError, ZeroDivisionError):
+                continue
+
+            if rect.width() <= 0 or rect.height() <= 0:
+                continue
+
+            color = QtGui.QColor(str(view.get('color') or ''))
+            if not color.isValid():
+                color = QtGui.QColor('#3daee9')
+
+            painter.setPen(QtGui.QPen(QtGui.QColor('#ffffff'), 1,
+                                      QtCore.Qt.PenStyle.DashLine))
+            painter.drawRect(rect.adjusted(-offset, -offset, offset, offset))
+
+            painter.setPen(QtGui.QPen(color, 1, QtCore.Qt.PenStyle.DashLine))
+            painter.drawRect(rect)
+
     def CalcSize(self):
         """
         Calculates self.maxX and self.maxY.
@@ -1397,6 +1460,16 @@ class SpriteList(QtWidgets.QWidget):
         self.table.setSortingEnabled(False)
         row = self.getRowFor(sprite)
 
+        # A sprite with no row here has nothing to update. getRowFor returns -1,
+        # and table.item(-1, column) returns None, so the loop below would raise
+        # AttributeError on setText - which is what a collaboration client saw
+        # for every property edit before synced sprites were registered with
+        # this table. Guarding here as well keeps a bookkeeping gap from turning
+        # an edit into a traceback.
+        if row < 0:
+            self.table.setSortingEnabled(True)
+            return
+
         # Skip the first columns (the id and name)
         for i in range(2, self.table.columnCount()):
             id_values = ids.get(self.idtypes[i - 2], [""])
@@ -1405,6 +1478,9 @@ class SpriteList(QtWidgets.QWidget):
                 id_values = id_values[0]
 
             item = self.table.item(row, i)
+            if item is None:
+                continue
+
             item.setText(str(id_values))
 
         # re-enable sorting

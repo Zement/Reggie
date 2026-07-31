@@ -402,8 +402,33 @@ class LevelIO:
         # reset it (Block C - A1: history resets on level load & area switch)
         self.win.undoStack.clear()
 
+        # Tell a running collaboration session, for the same reason the undo
+        # stack is cleared: every peer's view now refers to a different level or
+        # area. A host re-publishes the room info and pushes a fresh snapshot;
+        # without this the clients kept editing the previous level and neither
+        # side was told (Block C - B1).
+        self._NotifyCollabLevelChanged()
+
         # If we got this far, everything worked! Return True.
         return True
+
+    def _NotifyCollabLevelChanged(self):
+        """
+        Republishes the level to collaboration peers after a load or area
+        switch.
+
+        Fully guarded and lazy: the collab package is only imported when a
+        session exists, and a networking problem must never turn a successful
+        level load into a failure.
+        """
+        controller = getattr(self.win, '_collab', None)
+        if controller is None:
+            return
+
+        try:
+            controller.notifyLevelChanged()
+        except Exception:
+            pass
     def newLevel(self):
         # Create the new level object
         globals_.Level = Level_NSMBW()

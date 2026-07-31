@@ -121,6 +121,13 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
     PositionHover = QtCore.pyqtSignal(int, int)
     FrameSize = QtCore.pyqtSignal(int, int)
     repaint = QtCore.pyqtSignal()
+
+    # Emitted for every press on the canvas, in scene coordinates, before the
+    # button is dispatched. A signal rather than a hook inside the handler
+    # below: that handler is long and branches per button, so a listener added
+    # there would have to be repeated and would eventually be missed.
+    PositionClicked = QtCore.pyqtSignal(int, int)
+
     dragstamp = False
 
     def __init__(self, scene, parent):
@@ -264,6 +271,12 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
             print(f"[misc2] QPT press error: {e}")
             import traceback
             traceback.print_exc()
+
+        # After the QPT check, so a press QPT consumed is not reported twice,
+        # but before the per-button branches, which return early.
+        clicked_pos = self.mapToScene(event.pos())
+        self.PositionClicked.emit(int(max(0, clicked_pos.x())),
+                                  int(max(0, clicked_pos.y())))
 
         if event.button() == QtCore.Qt.MouseButton.BackButton:
             self.xButtonScrollTimer = QtCore.QTimer()
@@ -490,6 +503,15 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
         """
         Overrides mouse movement events if needed
         """
+        # Where the pointer is, reported before anything can consume the event.
+        # QPT returns early below, so a stroke used to suppress this entirely -
+        # which is why a peer's cursor froze for the whole of a Quick Paint
+        # stroke. Where the mouse is belongs to no one tool.
+        pos = self.mapToScene(event.pos())
+        if pos.x() < 0: pos.setX(0)
+        if pos.y() < 0: pos.setY(0)
+        self.PositionHover.emit(int(pos.x()), int(pos.y()))
+
         # Check if Quick Paint Tool should handle this event
         try:
             qpt_funcs = getattr(globals_, 'qpt_functions', None)
@@ -498,11 +520,6 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
                 return
         except Exception as e:
             pass
-
-        pos = self.mapToScene(event.pos())
-        if pos.x() < 0: pos.setX(0)
-        if pos.y() < 0: pos.setY(0)
-        self.PositionHover.emit(int(pos.x()), int(pos.y()))
 
         if ((event.buttons() & (QtCore.Qt.MouseButton.LeftButton | QtCore.Qt.MouseButton.RightButton))
                 and not self.cursorEdgeScrollTimer):

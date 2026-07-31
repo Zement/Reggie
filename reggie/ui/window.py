@@ -741,6 +741,20 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         dlg.exec()
 
+    def HandleCollaborate(self):
+        """
+        Opens the collaboration setup dialog, or the status window if a session
+        is already running (Block C - B1).
+
+        The controller is created lazily: it pulls in the whole collab package,
+        and a user who never collaborates should not pay for that at startup.
+        """
+        if getattr(self, '_collab', None) is None:
+            from reggie.ui.collab_controller import CollabController
+            self._collab = CollabController(self)
+
+        self._collab.showSetupDialog()
+
     # Cut/Copy/Paste + ReggieClip encode/decode/place extracted to
     # reggie.ui.clipboard.ClipboardController (Phase 2 — see
     # _docs/plan/REFACTORING_ANALYSIS.md). Thin delegators keep the QAction
@@ -1384,6 +1398,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         setSetting('UndoLimit', globals_.UndoLimit)
         if self.undoStack.count() == 0:
             self.undoStack.setUndoLimit(globals_.UndoLimit)
+
+        # Collaboration settings (Block C - B1). The tab persists its own values,
+        # since they are read straight from QSettings by the collab layer rather
+        # than mirrored into globals_.
+        dlg.collabTab.apply()
 
         # Update window title
         if self.fileSavePath:

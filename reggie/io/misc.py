@@ -1684,6 +1684,7 @@ def LoadDefaultKeybinds():
         'savecopyas':     (None,                                  globals_.trans.string('MenuItems', 128)),
         'metainfo':       ('Ctrl+Alt+I',                          globals_.trans.string('MenuItems', 12)),
         'undohistory':    ('Ctrl+H',                              globals_.trans.string('Undo', 2)),
+        'collaborate':    (None,                                  'Collaborate'),
         'screenshot':     ('Ctrl+Alt+S',                          globals_.trans.string('MenuItems', 14)),
         'changegamepath': ('Ctrl+Alt+G',                          globals_.trans.string('MenuItems', 16)),
         'preferences':    ('Ctrl+Alt+P',                          globals_.trans.string('MenuItems', 18)),
@@ -1838,12 +1839,14 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.infoLabel = QtWidgets.QLabel()
         self.generalTab = self.getGeneralTab()
         self.undoTab = self.getUndoTab()
+        self.collabTab = self.getCollabTab()
         self.toolbarTab = self.getToolbarTab()
         self.keybindsTab = self.getKeybindsTab()
         self.interfaceTab = self.getInterfaceTab()
         self.appearanceTab = self.getAppearanceTab(QtWidgets.QWidget)()
         self.tabWidget.addTab(self.generalTab, globals_.trans.string('PrefsDlg', 1))
         self.tabWidget.addTab(self.undoTab, globals_.trans.string('MenuItems', 124))
+        self.tabWidget.addTab(self.collabTab, 'Collaboration')
         self.tabWidget.addTab(self.toolbarTab, globals_.trans.string('PrefsDlg', 2))
         self.tabWidget.addTab(self.keybindsTab, globals_.trans.string('PrefsDlg', 56))
         self.tabWidget.addTab(self.interfaceTab, globals_.trans.string('PrefsDlg', 42))
@@ -1897,6 +1900,14 @@ class PreferencesDialog(QtWidgets.QDialog):
                 self.setLayout(L)
 
         return UndoTab()
+
+    def getCollabTab(self):
+        """
+        Returns the Collaboration Tab (Block C - B1)
+        """
+        from reggie.ui.collab_dialogs import CollabSettingsTab
+
+        return CollabSettingsTab()
 
     def getGeneralTab(self):
         """

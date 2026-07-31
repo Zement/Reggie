@@ -74,16 +74,66 @@ class UndoStack(QtGui.QUndoStack):
         self.setUndoLimit(getattr(globals_, 'UndoLimit', 500))
 
     def undo(self):
+        # Captured before the stack moves: afterwards `command(index())` is a
+        # different command, and on an empty stack there is nothing to read.
+        command = self.command(self.index() - 1) if self.index() > 0 else None
+
         with _ApplyGuard():
             super().undo()
 
+        # Undo is local and per-user, but the *level* must still converge, so
+        # the peer is told about the resulting edit. See broadcast.encode_undo:
+        # this is "the item moved back to there", not "undo your last step".
+        _broadcast_command(command, undone=True)
+
     def redo(self):
+        command = self.command(self.index()) if self.index() < self.count() else None
+
         with _ApplyGuard():
             super().redo()
+
+        _broadcast_command(command)
 
     def push(self, cmd):
         with _ApplyGuard():
             super().push(cmd)
+
+        # Broadcast after the command has been applied, so a peer never hears
+        # about an edit that failed locally. Outside the guard because the guard
+        # is what marks an edit as *remote*, and this one is ours.
+        #
+        # Every local edit funnels through here, which is why the collaboration
+        # hook lives at this one point rather than at each call site: a command
+        # type added later is broadcast without anyone remembering to wire it.
+        # Remote edits are applied inside the guard and never pushed, so they
+        # cannot reach this line and echo back to their sender.
+        _broadcast_command(cmd)
+
+
+def _broadcast_command(cmd, undone=False):
+    """
+    Hands a command to a running collaboration session.
+
+    `undone` sends the inverse edit instead of the forward one, for a command
+    that has just been reverted.
+
+    Fully guarded: the edit has already been applied locally and is correct, so
+    a collaboration problem must never surface as a failed edit. A peer that
+    misses an operation can resync; a local edit rolled back by a network error
+    is data loss.
+    """
+    if cmd is None:
+        return
+
+    window = getattr(globals_, 'mainWindow', None)
+    controller = getattr(window, '_collab', None)
+    if controller is None:
+        return
+
+    try:
+        controller.broadcastCommand(cmd, undone=undone)
+    except Exception:
+        pass
 
 
 ###############################################################################
@@ -1058,6 +1108,39 @@ def notify_item_created(item):
     """
     if _bulk_session is not None and not is_recording_blocked() and item is not None:
         _bulk_session.created.append(item)
+
+
+def record_created_item(item, text=None):
+    """
+    Records an item created outside any command as its own undo command.
+
+    For the creation paths that build an item directly rather than through a
+    command: a Ctrl+drag clone, and the sprite editor's "place this sprite"
+    buttons. Each was absent from the history entirely, so it could not be
+    undone - and for the clone the drag that followed recorded a *move of the
+    original*, a different object, which made the duplicate look recorded when
+    it was not.
+
+    That absence also hid these items from collaboration, which builds its
+    operations from pushed commands: a peer saw the original move and never
+    heard that a second item existed.
+
+    A bulk edit session takes precedence: it is already collecting created
+    items and will push one command for the whole stroke.
+    """
+    if item is None or is_recording_blocked():
+        return
+
+    if _bulk_session is not None:
+        _bulk_session.created.append(item)
+        return
+
+    window = getattr(globals_, 'mainWindow', None)
+    stack = getattr(window, 'undoStack', None)
+    if stack is None:
+        return
+
+    stack.push(AddItemsCommand([item], text=text, already_applied=True))
 
 
 def bulk_remove_object(item):

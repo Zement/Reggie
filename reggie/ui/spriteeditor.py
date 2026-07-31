@@ -2667,12 +2667,17 @@ class SpriteEditorWidget(QtWidgets.QWidget):
 
             x_ = mw.selObj.objx + 16
             y_ = mw.selObj.objy
-            globals_.mainWindow.CreateSprite(
+            placed = globals_.mainWindow.CreateSprite(
                 x_,
                 y_,
                 id_,
                 data = RawData.from_sprite_id(id_)
             )
+
+            # Recorded like any other creation: placing a dependency sprite is
+            # a level edit, so it must be undoable and must reach a peer.
+            from reggie.core import undo
+            undo.record_created_item(placed)
 
             # remove this dependency, because it is now fulfilled.
             # get row of button
@@ -3341,7 +3346,12 @@ class ResizeChoiceDialog(QtWidgets.QDialog):
         y = globals_.mainWindow.selObj.objy
         special_event_id = self._getSpecialEventID()
 
-        if globals_.mainWindow.CreateSprite(x, y, special_event_id, RawData(bytes(data), format = RawData.Format.Vanilla)) is not None:
+        placed = globals_.mainWindow.CreateSprite(x, y, special_event_id, RawData(bytes(data), format = RawData.Format.Vanilla))
+        if placed is not None:
+            # See HandleSpritePlaced: created directly, so it needs its own
+            # command to be undoable and to reach a peer.
+            from reggie.core import undo
+            undo.record_created_item(placed)
             globals_.mainWindow.scene.update()
 
     def _getSpecialEventID(self):
