@@ -229,7 +229,7 @@ class CollabController(QtCore.QObject):
     # -- hosting ------------------------------------------------------------
 
     def host(self, nick='Host', port=identity.DEFAULT_HOST_PORT,
-             discoverable=False, upnp_enabled=False, **_extra):
+             discoverable=False, upnp=False, **_extra):
         """
         Starts hosting. Returns True on success; failures are reported to the
         user and leave nothing running.
@@ -291,7 +291,7 @@ class CollabController(QtCore.QObject):
 
         # The port may differ from the request (0 means "any free port").
         actual_port = self.server.port
-        address = self._advertisedAddress(upnp_enabled, actual_port)
+        address = self._advertisedAddress(upnp, actual_port)
 
         self.join_code = identity.encode_join_code(
             address, actual_port, fingerprint, secret)
