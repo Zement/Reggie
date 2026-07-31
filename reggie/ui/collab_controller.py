@@ -1275,38 +1275,68 @@ class CollabController(QtCore.QObject):
             except Exception:
                 pass
 
-    def _broadcastLiveDrag(self):
+    def _liveDragItems(self):
         """
-        Sends the in-progress positions of items being dragged or resized.
+        The items whose geometry is changing under the mouse right now.
 
-        Without this a peer sees nothing until the mouse is released and the
-        undo command is pushed, so a long drag looks frozen and then jumps.
+        Two sources, because the editor has two gestures that change geometry
+        live:
 
-        These are ordinary move/resize ops, so a peer applies them through the
-        normal path and needs no concept of a drag. They are *not* pushed onto
-        anyone's undo stack: the sender records one command on release, and the
-        receiver applies remote ops inside the guard as always. So a drag
-        remains one undo step for the person who made it, however many
-        intermediate frames were sent.
+        - the selection, for a left-button drag or a corner-grabber resize;
+        - view.currentobj, for right-button painting, where the item is created
+          on press and then stretched as the pointer moves. A painted item is
+          not selected, so the selection alone misses it entirely.
+
+        QPT is deliberately excluded. Its stroke is a bulk edit that produces
+        one command covering many objects, and streaming each tile as it
+        appears would send a stream of adds that its own single command then
+        re-sends on commit.
         """
-        if not self.is_active or self.refmap is None:
-            return
-
         window = self.window
         scene = getattr(window, 'scene', None)
         if scene is None:
+            return []
+
+        items = [item for item in scene.selectedItems() if hasattr(item, 'objx')]
+
+        view = getattr(window, 'view', None)
+        current = getattr(view, 'currentobj', None)
+        if current is not None:
+            painted = current if isinstance(current, (list, tuple)) else (current,)
+            for item in painted:
+                if item is not None and hasattr(item, 'objx'):
+                    if not any(item is existing for existing in items):
+                        items.append(item)
+
+        return items
+
+    def _broadcastLiveDrag(self):
+        """
+        Sends the in-progress geometry of items being dragged, resized or
+        painted.
+
+        Without this a peer sees nothing until the mouse is released and the
+        undo command is pushed, so a long gesture looks frozen and then jumps.
+
+        These are ordinary add/move/resize ops, so a peer applies them through
+        the normal path and needs no concept of a gesture. They are *not*
+        pushed onto anyone's undo stack: the sender records one command on
+        release, and the receiver applies remote ops inside the guard as
+        always. So a gesture remains one undo step for the person who made it,
+        however many intermediate frames were sent.
+        """
+        if not self.is_active or self.refmap is None:
             return
 
         if QtWidgets.QApplication.mouseButtons() == QtCore.Qt.MouseButton.NoButton:
             self._live_drag_sent = {}
             return
 
+        created = []
         moves = []
         resizes = []
-        for item in scene.selectedItems():
-            if not hasattr(item, 'objx'):
-                continue
 
+        for item in self._liveDragItems():
             key = id(item)
             has_size = hasattr(item, 'width') and hasattr(item, 'height')
             state = ((item.objx, item.objy, item.width, item.height) if has_size
@@ -1319,6 +1349,10 @@ class CollabController(QtCore.QObject):
             self._live_drag_sent[key] = state
 
             if self.refmap.ref_for(item) is None:
+                # A painted item the peer has never heard of. It has to be
+                # announced before it can be moved, or every following frame
+                # references an item that does not exist there yet.
+                created.append(item)
                 continue
 
             if has_size:
@@ -1327,6 +1361,8 @@ class CollabController(QtCore.QObject):
                 moves.append((item, state, state))
 
         try:
+            if created:
+                self._sendLiveOp(sync.encode_add(self.refmap, created))
             if moves:
                 self._sendLiveOp(sync.encode_move(self.refmap, moves))
             if resizes:

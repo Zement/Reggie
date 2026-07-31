@@ -162,10 +162,22 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         Dashed, so a peer's rectangle is never mistaken for your own solid one
         even when the two overlap almost exactly - which is the normal case
         when two people are working on the same part of a level.
+
+        Drawn twice: a white dashed rectangle just outside, then the peer's
+        colour just inside it. The overview is a dense, mostly-pale picture of
+        the level, and a single thin coloured line disappeared into it. The
+        white outline gives the colour something constant to sit against
+        whatever it happens to cross, which a heavier line would not - that
+        would only cover more of the map.
         """
         views = getattr(self, '_peer_views', None)
         if not views:
             return
+
+        # The pen is not scaled by the painter's transform, so the two outlines
+        # are one *device* pixel apart at any zoom. In overview units that is
+        # 1/scale, which is what keeps them adjacent rather than overlapping.
+        offset = 1.0 / self.scale if self.scale else 1.0
 
         # The same 1/24 scene-to-overview conversion the local box uses, but
         # without mainWindowScale: a peer's rectangle already arrives in scene
@@ -185,8 +197,11 @@ class LevelOverviewWidget(QtWidgets.QWidget):
             if not color.isValid():
                 color = QtGui.QColor('#3daee9')
 
-            pen = QtGui.QPen(color, 1, QtCore.Qt.PenStyle.DashLine)
-            painter.setPen(pen)
+            painter.setPen(QtGui.QPen(QtGui.QColor('#ffffff'), 1,
+                                      QtCore.Qt.PenStyle.DashLine))
+            painter.drawRect(rect.adjusted(-offset, -offset, offset, offset))
+
+            painter.setPen(QtGui.QPen(color, 1, QtCore.Qt.PenStyle.DashLine))
             painter.drawRect(rect)
 
     def CalcSize(self):
