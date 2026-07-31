@@ -245,6 +245,15 @@ class CollabSetupDialog(QtWidgets.QDialog):
 
     @staticmethod
     def _describeAddresses():
+        """
+        The address peers on this network would use.
+
+        Deliberately says *on this network*: the public address is not known
+        until hosting starts and the router has been asked, so naming this one
+        "your address" invites the reading that it is the one to share. Zement
+        hit exactly that confusion - a join code correctly carrying the public
+        address, next to a dialog still showing 192.168.1.100.
+        """
         from reggie.collab import transport
 
         try:
@@ -253,9 +262,12 @@ class CollabSetupDialog(QtWidgets.QDialog):
             addresses = []
 
         if not addresses:
-            return 'Your local address could not be determined.'
+            return 'Your address on this network could not be determined.'
 
-        return 'Your local address: %s' % ', '.join(addresses)
+        return ('Your address on this network: %s\n'
+                'For play over the internet the join code will use your public '
+                'address instead, once the router has been asked.'
+                % ', '.join(addresses))
 
     def _checkHostingPossible(self):
         """

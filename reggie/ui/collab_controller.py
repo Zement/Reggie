@@ -32,8 +32,11 @@ from PyQt6 import QtCore, QtWidgets
 
 from reggie.collab import (
     broadcast, debuglog, discovery, files, identity, protocol, session, sync,
-    transport, upnp,
+    transport,
 )
+# Aliased because host() takes a parameter called `upnp` - the key the setup
+# dialog sends - which would otherwise shadow the module inside that method.
+from reggie.collab import upnp as upnp_module
 from reggie.core import globals_
 from reggie.ui import collab_dialogs, collab_presence
 from reggie.ui.collab_bridge import CollabBridge
@@ -298,6 +301,20 @@ class CollabController(QtCore.QObject):
 
         self.mode = 'host'
         self.applyEditingPermissions()
+
+        # Say which address the code actually carries. The setup dialog can
+        # only show the local one - the public address is not known until the
+        # router has been asked, which happens above - so this is the first
+        # point at which the answer exists, and the code itself no longer
+        # shows it.
+        if upnp_module.is_private_address(address):
+            self._appendStatus(
+                'Hosting on %s:%d. That is a local address, so this code works '
+                'on your network only.' % (address, actual_port))
+        else:
+            self._appendStatus(
+                'Hosting on %s:%d, reachable from the internet.'
+                % (address, actual_port))
         self._startPresence()
 
         if discoverable:
@@ -330,8 +347,8 @@ class CollabController(QtCore.QObject):
             return address
 
         try:
-            self.mapping = upnp.PortMapping.create(port, address)
-        except upnp.UPnPError as exc:
+            self.mapping = upnp_module.PortMapping.create(port, address)
+        except upnp_module.UPnPError as exc:
             # Logged as well as shown: the status window closes when a session
             # ends, so a user debugging a failed connection afterwards has
             # nothing to read. This is exactly how a router that silently does
@@ -344,7 +361,7 @@ class CollabController(QtCore.QObject):
         debuglog.log('upnp', 'port forwarded', port=port)
         self._appendStatus('Port %d forwarded via UPnP.' % port)
 
-        external = upnp.external_ip_address(self.mapping.control_url,
+        external = upnp_module.external_ip_address(self.mapping.control_url,
                                             self.mapping.service_type)
         if external:
             debuglog.log('upnp', 'router reported a public address')
