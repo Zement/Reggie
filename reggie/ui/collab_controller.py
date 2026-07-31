@@ -44,6 +44,11 @@ from reggie.ui.collab_bridge import CollabBridge
 # reference produces a request per edit.
 RESYNC_INTERVAL_SECONDS = 5.0
 
+# Shown on a control the current session does not allow. Explains *why* it is
+# unavailable, since a greyed-out menu item with no reason reads as a bug.
+_PERMISSION_HINT = ('Not available during this collaboration session: the host '
+                    'decides which level and patch everyone is editing.')
+
 
 class CollabController(QtCore.QObject):
     """
@@ -72,6 +77,10 @@ class CollabController(QtCore.QObject):
         self.refmap = None
         self.join_code = ''
         self._last_resync = 0.0
+
+        # Tooltips as they were before a session restricted anything, so they
+        # can be put back exactly rather than cleared.
+        self._original_tooltips = {}
         self.settings = collab_dialogs.load_collab_settings()
 
         self._connect_signals()
@@ -204,6 +213,7 @@ class CollabController(QtCore.QObject):
             address, actual_port, fingerprint, secret)
 
         self.mode = 'host'
+        self.applyEditingPermissions()
 
         if discoverable:
             self._startDiscovery(actual_port, nick)
@@ -306,6 +316,7 @@ class CollabController(QtCore.QObject):
             return False
 
         self.mode = 'join'
+        self.applyEditingPermissions()
         debuglog.log('controller', 'joined', host=host, port=port,
                      fp=debuglog.short_fingerprint(self.client.cert_fingerprint))
         self.showStatusWindow()
@@ -426,6 +437,12 @@ class CollabController(QtCore.QObject):
         self.join_code = ''
         self.mode = ''
 
+        # Restore every control the session had restricted. Doing this here
+        # rather than in leave() covers a session that ended because the *other*
+        # side hung up, which would otherwise leave the editor permanently
+        # unable to open a level.
+        self.applyEditingPermissions()
+
         debuglog.log('controller', 'session torn down')
 
     # -- status window ------------------------------------------------------
@@ -459,6 +476,156 @@ class CollabController(QtCore.QObject):
             self.client.send(protocol.make_message(
                 protocol.T_CHAT, {'text': text,
                                   'kind': protocol.CHAT_KIND_USER}))
+
+    def applyEditingPermissions(self):
+        """
+        Enables or disables the controls that change what everybody is editing.
+
+        Zement's rules, and the reasoning behind each:
+
+        - **Patch**: host only, always. A client switching patch would reload
+          spritedata and tilesets under a level the host still owns, and the
+          host cannot see or prevent it. Greyed out rather than hidden, so it is
+          obvious the option exists and why it is unavailable.
+        - **Level**: host only, and by name rather than by file. "Open by file"
+          can reach a level outside the patch's stage folder, which a client
+          could not resolve from the name alone - so the host is restricted to
+          what a client can actually follow.
+        - **Area**: either side, but a client needs the Full role, since an area
+          switch moves everyone.
+
+        This is a UI convenience, not enforcement. A client that bypasses it
+        still has its operations checked host-side by authorize_op - the same
+        division as ClientSession.may_send_op, and for the same reason.
+        """
+        window = self.window
+        actions = getattr(window, 'actions', None)
+        if not isinstance(actions, dict):
+            return
+
+        active = self.is_active
+        host = self.is_host
+        may_change_area = (not active) or host or self._clientHasFullRole()
+
+        def enable(name, allowed):
+            action = actions.get(name)
+            if action is None:
+                return
+
+            action.setEnabled(allowed)
+
+            # Remember the original tooltip once, so restoring it later does not
+            # depend on Qt's fallback behaviour: setToolTip('') makes
+            # QAction.toolTip() return the action *text*, which would silently
+            # replace a real tooltip with the menu label.
+            if name not in self._original_tooltips:
+                self._original_tooltips[name] = action.toolTip()
+
+            action.setToolTip(self._original_tooltips[name] if allowed
+                              else _PERMISSION_HINT)
+
+        # Level loading: the host decides, and only by name.
+        enable('newlevel', not active or host)
+        enable('openfromname', not active or host)
+        enable('openfromfile', not active)
+        enable('openrecent', not active or host)
+
+        # Game patch: host only.
+        enable('changegamedef', not active or host)
+
+        self._setWidgetAllowed(getattr(window, 'patchComboBox', None),
+                               'patchComboBox', not active or host)
+        self._setWidgetAllowed(getattr(window, 'areaComboBox', None),
+                               'areaComboBox', may_change_area)
+
+        for name in ('addarea', 'importarea', 'deletearea'):
+            enable(name, may_change_area)
+
+    def _setWidgetAllowed(self, widget, key, allowed):
+        if widget is None:
+            return
+
+        widget.setEnabled(allowed)
+
+        if key not in self._original_tooltips:
+            self._original_tooltips[key] = widget.toolTip()
+
+        widget.setToolTip(self._original_tooltips[key] if allowed
+                          else _PERMISSION_HINT)
+
+    def _clientHasFullRole(self):
+        session_object = self.client_session
+        if session_object is None:
+            return False
+        return getattr(session_object, 'role', '') == protocol.ROLE_FULL
+
+    def notifyLevelChanged(self):
+        """
+        Republishes the level after the host loaded another one or switched area.
+
+        The clients' references all point at items that no longer exist, so this
+        rebuilds the map and pushes a fresh snapshot rather than trying to
+        reconcile: every item changed identity at once, which is a resync by any
+        other name.
+
+        A client that loads a different level locally is a different situation -
+        it has diverged from the session, and the host is still the authority -
+        so it only reports the fact and asks for the host's level back.
+        """
+        if not self.is_active:
+            return False
+
+        if not self.is_host:
+            self._appendStatus(
+                'You changed level or area locally; reloading the host\'s.')
+            self._requestResync(force=True)
+            return False
+
+        # The old references are meaningless now.
+        self.refmap = sync.RefMap(origin='host', is_authority=True)
+        self._seedRefMap()
+
+        self.host_session.set_room_info(self._roomInfo())
+        self._broadcastSnapshot()
+
+        level = str(getattr(globals_, 'levelName', '') or 'the level')
+        self._appendStatus('Shared %s with everyone.' % level)
+        debuglog.log('controller', 'level changed', level=level,
+                     refs=self.refmap.size())
+        return True
+
+    def _broadcastSnapshot(self, session_id=''):
+        """
+        Sends the current level to one peer, or to all of them when no session
+        id is given.
+        """
+        if not self.is_host or self.refmap is None or self.server is None:
+            return False
+
+        try:
+            payload = sync.build_snapshot(self.refmap, area_number=self._areaNumber())
+        except sync.SyncError as exc:
+            self._appendStatus('The level could not be shared: %s' % exc)
+            return False
+
+        message = protocol.make_message(protocol.T_SNAPSHOT, payload)
+        sent = 0
+        for connection in self.server.authenticated_connections():
+            if not session_id or connection.session_id == session_id:
+                connection.send(message)
+                sent += 1
+
+        debuglog.log('op-out', 'snapshot sent', peers=sent,
+                     items=len(payload.get('items') or []))
+        return sent > 0
+
+    @staticmethod
+    def _areaNumber():
+        area = getattr(globals_, 'Area', None)
+        try:
+            return max(1, min(4, int(getattr(area, 'areanum', 1) or 1)))
+        except (TypeError, ValueError):
+            return 1
 
     def notifyRoomInfoChanged(self):
         """
@@ -569,6 +736,10 @@ class CollabController(QtCore.QObject):
         self._appendStatus(
             'Your access level is now: %s.'
             % ('full access' if role == protocol.ROLE_FULL else 'canvas editing'))
+
+        # Promotion and demotion change what a client may switch, so the
+        # controls follow the role rather than only the session.
+        self.applyEditingPermissions()
 
     def _onOperationRejected(self, reason):
         # The client's optimistic edit was refused. Ask for a fresh snapshot
@@ -717,22 +888,17 @@ class CollabController(QtCore.QObject):
 
         Host only, and on the main thread: build_snapshot walks the scene, which
         is exactly what must not happen on a reader thread.
+
+        The requested `area` is deliberately ignored. The host can only share
+        the area it currently has open - serving a different one would mean
+        loading it here, which would yank the host's own editor to another area
+        because a client asked. The snapshot names the area it actually
+        contains, so a client that wanted another one can see that it did not
+        get it.
         """
-        if not self.is_host or self.refmap is None or self.server is None:
-            return
+        self._broadcastSnapshot(session_id)
 
-        try:
-            payload = sync.build_snapshot(self.refmap, area_number=int(area or 1))
-        except sync.SyncError as exc:
-            self._appendStatus('The level could not be shared: %s' % exc)
-            return
-
-        message = protocol.make_message(protocol.T_SNAPSHOT, payload)
-        for connection in self.server.authenticated_connections():
-            if not session_id or connection.session_id == session_id:
-                connection.send(message)
-
-    def _requestResync(self):
+    def _requestResync(self, force=False):
         """
         Asks the host for a fresh copy of the level.
 
@@ -740,12 +906,16 @@ class CollabController(QtCore.QObject):
         thing that makes the next edit fail too: without this, one broken
         reference produced a snapshot request per edit, which is the flood of
         "client is loading the level" lines in Zement's log.
+
+        `force` bypasses the limit for a deliberate user action - loading
+        another level locally - where the request is not a symptom of a failure
+        loop and the user is waiting for it.
         """
         if self.client is None:
             return False
 
         now = time.monotonic()
-        if now - self._last_resync < RESYNC_INTERVAL_SECONDS:
+        if not force and now - self._last_resync < RESYNC_INTERVAL_SECONDS:
             return False
 
         self._last_resync = now
