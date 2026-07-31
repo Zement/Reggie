@@ -605,6 +605,11 @@ class CollabStatusWindow(QtWidgets.QDialog):
             item.setData(QtCore.Qt.ItemDataRole.UserRole,
                          entry.get('session_id', ''))
 
+            # The role rides along so the host controls can tell a participant
+            # apart from the host itself. Parsing it back out of the label would
+            # break the moment the label is translated.
+            item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, role)
+
             color = entry.get('color', '')
             if color:
                 item.setForeground(QtGui.QColor(color))
@@ -638,10 +643,26 @@ class CollabStatusWindow(QtWidgets.QDialog):
             return ''
         return item.data(QtCore.Qt.ItemDataRole.UserRole) or ''
 
+    def _selectedRole(self):
+        item = self.roster.currentItem()
+        if item is None:
+            return ''
+        return item.data(QtCore.Qt.ItemDataRole.UserRole + 1) or ''
+
     def _updateHostButtons(self, _row=-1):
-        enabled = bool(self._selectedSessionId())
+        """
+        None of the per-participant controls apply to the host itself.
+
+        Promoting the host is meaningless - it already has every permission -
+        and kicking or banning it would mean ending the session by disconnecting
+        oneself, and adding one's own address to the ban list. Greyed out rather
+        than silently ignored, so the reason is visible before the click.
+        """
+        selectable = (bool(self._selectedSessionId())
+                      and self._selectedRole() != protocol.ROLE_HOST)
+
         for button in (self.roleButton, self.kickButton, self.banButton):
-            button.setEnabled(enabled)
+            button.setEnabled(selectable)
 
     def _sendChat(self):
         text = self.chatEntry.text().strip()

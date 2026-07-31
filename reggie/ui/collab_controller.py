@@ -646,11 +646,38 @@ class CollabController(QtCore.QObject):
         """
         return {
             'area': self._areaNumber(),
-            'level': str(getattr(globals_, 'levelName', '') or ''),
+            'level': self._currentLevelName(),
         }
 
+    @staticmethod
+    def _currentLevelName():
+        """
+        The bare level name, as LoadLevel(name, isFullPath=False) expects.
+
+        Derived from mainWindow.fileSavePath rather than a global: there is no
+        globals_.levelName - reading one returned '' every time, which made
+        every level change arrive as LoadLevel(None), and a None name means
+        "new level". That is the 'untitled [unsaved]' Zement saw on the other
+        instance.
+
+        Every known extension is stripped, not just the last: '.arc.LH' would
+        otherwise leave a trailing '.arc' that no stage folder contains.
+        """
+        window = getattr(globals_, 'mainWindow', None)
+        path = str(getattr(window, 'fileSavePath', '') or '')
+        if not path:
+            return ''
+
+        name = os.path.basename(path)
+        for extension in sorted(getattr(globals_, 'FileExtentions', ()),
+                                key=len, reverse=True):
+            if name.endswith(extension):
+                return name[:-len(extension)]
+
+        return name
+
     def _describeCurrentLevel(self):
-        level = str(getattr(globals_, 'levelName', '') or '')
+        level = self._currentLevelName()
         area = self._areaNumber()
         if level:
             return '%s (area %d)' % (level, area)
@@ -667,37 +694,65 @@ class CollabController(QtCore.QObject):
         if not self.is_active:
             return False
 
-        current_level = str(getattr(globals_, 'levelName', '') or '')
-        if level == current_level and area == self._areaNumber():
+        if level == self._currentLevelName() and area == self._areaNumber():
             return False
 
         window = self.window
         if not hasattr(window, 'LoadLevel'):
             return False
 
-        self._appendStatus('Loading %s from the session.'
-                           % (level or 'area %d' % area))
+        if not level:
+            # An empty name would mean LoadLevel(None), which creates a *new*
+            # untitled level rather than loading anything - so a peer with an
+            # unsaved level would silently blank everyone else's. Switch area
+            # within the level we already have instead.
+            current = str(getattr(window, 'fileSavePath', '') or '')
+            if not current:
+                self._appendStatus(
+                    'The session moved to a level that has never been saved, '
+                    'so it cannot be opened here.')
+                return False
 
-        # The suppression flag, not a parameter, because LoadLevel is reached
-        # through several handlers and the recursion has to be blocked wherever
-        # it is called from.
+            self._appendStatus('Switching to area %d.' % area)
+            if not self._loadLevelQuietly(current, True, area):
+                return False
+            return self._afterSessionLoad()
+
+        self._appendStatus('Loading %s from the session.' % level)
+
+        if not self._loadLevelQuietly(level, False, area):
+            self._appendStatus(
+                'Could not load %s - check that you have the same patch.'
+                % level)
+            return False
+
+        return self._afterSessionLoad()
+
+    def _loadLevelQuietly(self, name, is_full_path, area):
+        """
+        Loads a level without announcing it back to the session.
+
+        The suppression flag is a flag rather than a parameter because
+        LoadLevel is reached through several handlers, and the recursion has to
+        be blocked wherever it is called from. Cleared in a finally, so a failed
+        load cannot leave the session permanently mute.
+        """
         self._suppress_level_notify = True
         try:
-            loaded = window.LoadLevel(level or None, False, area)
+            return bool(self.window.LoadLevel(name, is_full_path, area))
         except Exception as exc:
             self._appendStatus('That level could not be loaded: %s' % exc)
             return False
         finally:
             self._suppress_level_notify = False
 
-        if not loaded:
-            self._appendStatus(
-                'Could not load %s - check that you have the same patch.'
-                % (level or 'the area'))
-            return False
+    def _afterSessionLoad(self):
+        """
+        Rebuilds the shared state after loading what the session moved to.
 
-        # A client now needs the items for the area it just loaded; the host
-        # redistributes to everybody else.
+        A host redistributes; a client asks for the items belonging to the area
+        it has just opened.
+        """
         if self.is_host:
             self.refmap = sync.RefMap(origin='host', is_authority=True)
             self._seedRefMap()
