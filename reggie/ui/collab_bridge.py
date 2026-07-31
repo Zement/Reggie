@@ -223,8 +223,14 @@ class CollabBridge(QtCore.QObject):
         elif kind == protocol.T_OP:
             self.signals.operationReceived.emit(dict(data or {}), '')
 
-        elif kind == protocol.T_PRESENCE:
-            self.signals.presenceReceived.emit(dict(data or {}), '')
+        elif kind == 'presence':
+            # ClientSession gives presence its own event so the sender survives
+            # (see its handle_message). Keyed on 'presence' rather than
+            # T_PRESENCE because it no longer falls through the generic branch
+            # that emits raw message types.
+            self.signals.presenceReceived.emit(
+                dict((data or {}).get('payload') or {}),
+                str((data or {}).get('sender', '') or ''))
 
         elif kind == protocol.T_SNAPSHOT:
             self.signals.snapshotReceived.emit(dict(data or {}))

@@ -396,6 +396,12 @@ def _v_client_auth(p):
         'app_version': _get_str(p, 'app_version', 64, required=False),
         'nick': sanitize_text(_get_str(p, 'nick', MAX_NICK_CHARS, required=False),
                               MAX_NICK_CHARS),
+
+        # The colour the peer picked for itself. Length-capped here and parsed
+        # as a colour by the UI, which falls back if it is not one - it is
+        # drawn, never executed, so a bad value costs nothing but a default.
+        'color': _get_str(p, 'color', 32, required=False),
+
         'game_id': _get_str(p, 'game_id', 128, required=False),
         'plugin_state_hash': _get_str(p, 'plugin_state_hash', 64, required=False),
     }
@@ -574,11 +580,22 @@ def _v_area_switch(p):
 
 def _v_presence(p):
     kind = _get_str(p, 'kind', 16)
-    _require(kind in ('cursor', 'click', 'selection'), 'unknown presence kind %r' % kind)
+    _require(kind in ('cursor', 'click', 'selection', 'view'),
+             'unknown presence kind %r' % kind)
     return {
         'kind': kind,
         'x': _get_int(p, 'x', minimum=-(1 << 24), maximum=1 << 24, required=False),
         'y': _get_int(p, 'y', minimum=-(1 << 24), maximum=1 << 24, required=False),
+
+        # Cursor: whether the sender is dragging. The "only while moving items"
+        # preference is about the *sender's* activity, but it is applied by the
+        # receiver (each machine decides what it draws), so it has to travel.
+        'dragging': _get_bool(p, 'dragging', required=False),
+
+        # View: the sender's visible rectangle, for the Level Overview map.
+        'w': _get_int(p, 'w', minimum=0, maximum=1 << 24, required=False),
+        'h': _get_int(p, 'h', minimum=0, maximum=1 << 24, required=False),
+
         'refs': _get_list(p, 'refs', 512, required=False),
     }
 

@@ -1788,12 +1788,27 @@ def apply_snapshot(snapshot, refmap, sprite_format=None, area=None):
 # Presence
 # ---------------------------------------------------------------------------
 
-def encode_presence_cursor(x, y):
-    return {'kind': 'cursor', 'x': int(x), 'y': int(y)}
+def encode_presence_cursor(x, y, dragging=False):
+    """
+    `dragging` travels because the "cursors: only while moving items"
+    preference describes the *sender's* activity but is applied by the
+    receiver, which cannot otherwise know.
+    """
+    return {'kind': 'cursor', 'x': int(x), 'y': int(y),
+            'dragging': bool(dragging)}
 
 
 def encode_presence_click(x, y):
     return {'kind': 'click', 'x': int(x), 'y': int(y)}
+
+
+def encode_presence_view(x, y, width, height):
+    """
+    The sender's visible rectangle in scene coordinates, for the Level
+    Overview map.
+    """
+    return {'kind': 'view', 'x': int(x), 'y': int(y),
+            'w': max(0, int(width)), 'h': max(0, int(height))}
 
 
 def encode_presence_selection(refmap, items):
@@ -1814,7 +1829,7 @@ def decode_presence(payload, refmap):
     the payload is still useful.
     """
     kind = payload.get('kind')
-    if kind not in ('cursor', 'click', 'selection'):
+    if kind not in ('cursor', 'click', 'selection', 'view'):
         raise SyncError('unknown presence kind %r' % (kind,))
 
     if kind == 'selection':
@@ -1822,8 +1837,16 @@ def decode_presence(payload, refmap):
         items = [refmap.item_for(ref) for ref in refs]
         return {'kind': kind, 'items': [item for item in items if item is not None]}
 
-    return {
+    decoded = {
         'kind': kind,
         'x': check_coord(payload.get('x', 0), 'x'),
         'y': check_coord(payload.get('y', 0), 'y'),
     }
+
+    if kind == 'cursor':
+        decoded['dragging'] = bool(payload.get('dragging'))
+    elif kind == 'view':
+        decoded['w'] = check_coord(payload.get('w', 0), 'w')
+        decoded['h'] = check_coord(payload.get('h', 0), 'h')
+
+    return decoded

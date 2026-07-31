@@ -157,6 +157,13 @@ class CollabController(QtCore.QObject):
         self._presence_timer = None
         self._presence_connected = False
 
+        # id(item) -> the geometry last sent for it during a drag, so a
+        # stationary selection is not streamed continuously.
+        self._live_drag_sent = {}
+
+        # The viewport rectangle last reported, for the same reason.
+        self._last_view_rect = None
+
         self._connect_signals()
 
     # -- signal wiring ------------------------------------------------------
@@ -252,6 +259,7 @@ class CollabController(QtCore.QObject):
             secret=secret,
             cert_fingerprint=fingerprint,
             host_nick=nick,
+            host_color=str(self.settings.get('color', '') or ''),
             app_version=str(getattr(globals_, 'ReggieVersionShort', '')),
             room_info=self._roomInfo(),
             on_event=self.bridge.on_host_event,
@@ -433,6 +441,9 @@ class CollabController(QtCore.QObject):
                 'protocol': protocol.PROTOCOL_VERSION,
                 'app_version': str(getattr(globals_, 'ReggieVersionShort', '')),
                 'nick': self.client_session.nick,
+                # The colour this user picked. Advisory: the host assigns the
+                # final colour and falls back if it is unusable or taken.
+                'color': str(self.settings.get('color', '') or ''),
                 'game_id': self._gameId(),
                 'plugin_state_hash': files.plugin_state_hash(self._enabledPlugins()),
             })
@@ -1149,6 +1160,7 @@ class CollabController(QtCore.QObject):
             return
 
         self.presence = collab_presence.PresenceOverlay(scene)
+        self.presence.setOverview(getattr(window, 'levelOverview', None))
         self._applyPresencePreferences()
 
         self._cursor_coalescer = transport.PresenceCoalescer(
@@ -1156,9 +1168,16 @@ class CollabController(QtCore.QObject):
 
         # A held cursor position would otherwise be stranded when the pointer
         # stops: the last movement is exactly the one worth showing.
+        self._live_drag_sent = {}
+        self._last_view_rect = None
+
+        # One timer drives all three periodic jobs: flushing a held cursor,
+        # streaming an in-progress drag, and reporting the visible rectangle.
+        # Three timers at the same interval would only be three ways to forget
+        # to stop one.
         self._presence_timer = QtCore.QTimer(window)
         self._presence_timer.setInterval(PRESENCE_FLUSH_MS)
-        self._presence_timer.timeout.connect(self._flushCursor)
+        self._presence_timer.timeout.connect(self._onPresenceTick)
         self._presence_timer.start()
 
         if view is not None and not self._presence_connected:
@@ -1191,11 +1210,12 @@ class CollabController(QtCore.QObject):
 
     def _applyPresencePreferences(self):
         """
-        Applies the local cursor/click display choices.
+        Applies this machine's cursor/click display choices.
 
-        Receiving-side only: turning cursors off hides other people, it does
-        not stop us reporting our own position. Making it do both would mean a
-        user who dislikes the clutter silently disappears for everyone else.
+        Purely local, and purely about display: each machine decides what it
+        shows, and every machine always broadcasts. Making the preference
+        suppress sending would mean a user who dislikes the clutter silently
+        disappears for everyone else, which is not what the setting says.
         """
         if self.presence is None:
             return
@@ -1203,25 +1223,35 @@ class CollabController(QtCore.QObject):
         mode = self.settings.get('cursors', collab_dialogs.CURSORS_ON_MOVE)
         self.presence.setPreferences(
             show_cursors=(mode != collab_dialogs.CURSORS_NEVER),
+            cursors_while_dragging_only=(mode == collab_dialogs.CURSORS_ON_MOVE),
             show_clicks=bool(self.settings.get('clicks', True)))
+
+    def reloadPresencePreferences(self):
+        """
+        Re-reads the preferences after the settings dialog was accepted, so a
+        change takes effect without restarting the session.
+        """
+        self.settings = collab_dialogs.load_collab_settings()
+        self._applyPresencePreferences()
+        self._configureDebugLog()
 
     def _onLocalCursorMoved(self, x, y):
         if not self.is_active:
             return
 
-        # 'onmove' means "only while dragging something", which is what
-        # distinguishes it from 'always'. Reading the mouse buttons rather than
-        # a drag flag keeps this independent of which tool is active.
-        if self.settings.get('cursors') == collab_dialogs.CURSORS_ON_MOVE:
-            buttons = QtWidgets.QApplication.mouseButtons()
-            if buttons == QtCore.Qt.MouseButton.NoButton:
-                return
-
+        # Always sent, whatever this machine displays: 'on move' and 'never'
+        # are display choices for what *we* draw, and honouring them here would
+        # make this machine invisible to everyone else.
         if self._cursor_coalescer is None:
             return
 
+        # Reading the mouse buttons rather than a per-tool drag flag keeps this
+        # correct whichever tool is active.
+        dragging = (QtWidgets.QApplication.mouseButtons()
+                    != QtCore.Qt.MouseButton.NoButton)
+
         payload = self._cursor_coalescer.offer(
-            sync.encode_presence_cursor(x, y))
+            sync.encode_presence_cursor(x, y, dragging=dragging))
         if payload is not None:
             self._sendPresence(payload)
 
@@ -1233,10 +1263,124 @@ class CollabController(QtCore.QObject):
         if payload is not None:
             self._sendPresence(payload)
 
+    def _onPresenceTick(self):
+        """
+        The periodic presence work. Individually guarded, because one of these
+        failing must not stop the other two.
+        """
+        for job in (self._flushCursor, self._broadcastLiveDrag,
+                    self._broadcastViewRect):
+            try:
+                job()
+            except Exception:
+                pass
+
+    def _broadcastLiveDrag(self):
+        """
+        Sends the in-progress positions of items being dragged or resized.
+
+        Without this a peer sees nothing until the mouse is released and the
+        undo command is pushed, so a long drag looks frozen and then jumps.
+
+        These are ordinary move/resize ops, so a peer applies them through the
+        normal path and needs no concept of a drag. They are *not* pushed onto
+        anyone's undo stack: the sender records one command on release, and the
+        receiver applies remote ops inside the guard as always. So a drag
+        remains one undo step for the person who made it, however many
+        intermediate frames were sent.
+        """
+        if not self.is_active or self.refmap is None:
+            return
+
+        window = self.window
+        scene = getattr(window, 'scene', None)
+        if scene is None:
+            return
+
+        if QtWidgets.QApplication.mouseButtons() == QtCore.Qt.MouseButton.NoButton:
+            self._live_drag_sent = {}
+            return
+
+        moves = []
+        resizes = []
+        for item in scene.selectedItems():
+            if not hasattr(item, 'objx'):
+                continue
+
+            key = id(item)
+            has_size = hasattr(item, 'width') and hasattr(item, 'height')
+            state = ((item.objx, item.objy, item.width, item.height) if has_size
+                     else (item.objx, item.objy))
+
+            # Only what actually changed since the last frame: a stationary
+            # selection would otherwise stream its position continuously.
+            if self._live_drag_sent.get(key) == state:
+                continue
+            self._live_drag_sent[key] = state
+
+            if self.refmap.ref_for(item) is None:
+                continue
+
+            if has_size:
+                resizes.append((item, state, state))
+            else:
+                moves.append((item, state, state))
+
+        try:
+            if moves:
+                self._sendLiveOp(sync.encode_move(self.refmap, moves))
+            if resizes:
+                self._sendLiveOp(sync.encode_resize(self.refmap, resizes))
+        except sync.SyncError:
+            # Mid-drag is the worst moment to interrupt the user. The release
+            # will send the authoritative positions anyway.
+            pass
+
+    def _sendLiveOp(self, payload):
+        try:
+            if self.is_host:
+                message = protocol.make_message(protocol.T_OP, payload)
+                for connection in self.server.authenticated_connections():
+                    connection.send(message)
+            elif self.client is not None:
+                self.client.send(protocol.make_message(protocol.T_OP, payload))
+        except Exception:
+            pass
+
     def _onLocalClick(self, x, y):
         if not self.is_active:
             return
         self._sendPresence(sync.encode_presence_click(x, y))
+
+    def _broadcastViewRect(self):
+        """
+        Reports which part of the level this machine is looking at, so the
+        others can draw it on their Level Overview.
+
+        Polled rather than driven by a scroll signal: the visible rectangle
+        also changes on zoom and on resize, and polling one rectangle at the
+        presence rate is cheaper than being right about every source of change.
+        Only sent when it actually differs from the last one.
+        """
+        if not self.is_active:
+            return
+
+        view = getattr(self.window, 'view', None)
+        if view is None:
+            return
+
+        try:
+            rect = view.mapToScene(view.viewport().rect()).boundingRect()
+        except Exception:
+            return
+
+        current = (int(rect.x()), int(rect.y()),
+                   int(rect.width()), int(rect.height()))
+        if current == self._last_view_rect:
+            return
+        self._last_view_rect = current
+
+        self._sendPresence(sync.encode_presence_view(*current))
 
     def _sendPresence(self, payload):
         """
@@ -1275,9 +1419,13 @@ class CollabController(QtCore.QObject):
 
         kind = decoded.get('kind')
         if kind == 'cursor':
-            self.presence.showCursor(sender_id, decoded['x'], decoded['y'])
+            self.presence.showCursor(sender_id, decoded['x'], decoded['y'],
+                                     dragging=decoded.get('dragging', False))
         elif kind == 'click':
             self.presence.showClick(sender_id, decoded['x'], decoded['y'])
+        elif kind == 'view':
+            self.presence.showView(sender_id, decoded['x'], decoded['y'],
+                                   decoded['w'], decoded['h'])
 
     def _isOwnSessionId(self, session_id):
         if self.client_session is not None:

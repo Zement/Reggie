@@ -927,6 +927,17 @@ class CollabSettingsTab(QtWidgets.QWidget):
         values.update(self.values())
         save_collab_settings(values)
 
+        # A running session must pick the display choices up now. Otherwise
+        # turning cursors off appears to do nothing until the session is
+        # restarted, which reads as a broken setting.
+        window = getattr(globals_, 'mainWindow', None)
+        controller = getattr(window, '_collab', None)
+        if controller is not None:
+            try:
+                controller.reloadPresencePreferences()
+            except Exception:
+                pass
+
 
 def _colorSwatch(color, size=12):
     """

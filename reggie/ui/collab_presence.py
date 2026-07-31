@@ -30,9 +30,14 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 PRESENCE_Z = 60000
 
 # How long a click flash stays visible, and how often it is redrawn while
-# fading. 450 ms is long enough to notice without lingering over the canvas.
-CLICK_FADE_MS = 450
+# fading.
+CLICK_FADE_MS = 900
 CLICK_FRAME_MS = 40
+
+# Ring geometry: where it starts, how far it grows, and how heavy the line is.
+CLICK_RADIUS_START = 8
+CLICK_RADIUS_GROWTH = 20
+CLICK_LINE_WIDTH = 4
 
 # A cursor disappears if its owner stops sending. Comfortably longer than the
 # presence send interval, so an idle peer does not flicker.
@@ -166,7 +171,10 @@ class ClickFlash(QtWidgets.QGraphicsItem):
         self._timer.start()
 
     def boundingRect(self):
-        return QtCore.QRectF(-16, -16, 32, 32)
+        # The full grown ring plus its line width, or the tail of the animation
+        # is clipped.
+        extent = CLICK_RADIUS_START + CLICK_RADIUS_GROWTH + CLICK_LINE_WIDTH
+        return QtCore.QRectF(-extent, -extent, extent * 2, extent * 2)
 
     def _advance(self):
         self._step += 1
@@ -190,11 +198,11 @@ class ClickFlash(QtWidgets.QGraphicsItem):
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
 
-        radius = 4 + 10 * self._progress
+        radius = CLICK_RADIUS_START + CLICK_RADIUS_GROWTH * self._progress
         color = QtGui.QColor(self._color)
         color.setAlphaF(max(0.0, 1.0 - self._progress))
 
-        painter.setPen(QtGui.QPen(color, 2))
+        painter.setPen(QtGui.QPen(color, CLICK_LINE_WIDTH))
         painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
         painter.drawEllipse(QtCore.QPointF(0, 0), radius, radius)
 
@@ -213,8 +221,11 @@ class PresenceOverlay:
         self.scene = scene
         self._cursors = {}     # session_id -> PeerCursor
         self._flashes = []
+        self._views = {}       # session_id -> {'x','y','w','h'}
+        self._overview = None
         self._roster = {}      # session_id -> {'nick', 'color'}
         self._show_cursors = True
+        self._cursors_while_dragging_only = False
         self._show_clicks = True
 
         # Drops cursors whose owner has gone quiet - a peer that crashes or
@@ -227,13 +238,17 @@ class PresenceOverlay:
 
     # -- configuration ------------------------------------------------------
 
-    def setPreferences(self, show_cursors, show_clicks):
+    def setPreferences(self, show_cursors, show_clicks,
+                       cursors_while_dragging_only=False):
         """
-        Applies the local display preferences. These are the *receiving* side's
-        choice and deliberately do not stop anything being sent, so turning
-        cursors off does not make you invisible to everyone else.
+        Applies this machine's display preferences.
+
+        Every machine decides for itself what it draws, and every machine
+        always broadcasts. So these govern drawing only: turning cursors off
+        hides other people here without making this machine invisible to them.
         """
         self._show_cursors = bool(show_cursors)
+        self._cursors_while_dragging_only = bool(cursors_while_dragging_only)
         self._show_clicks = bool(show_clicks)
 
         if not self._show_cursors:
@@ -261,14 +276,30 @@ class PresenceOverlay:
             cursor.setNick(info['nick'])
             cursor.setColor(info['color'])
 
+        for session_id in list(self._views):
+            if session_id not in self._roster:
+                self._views.pop(session_id, None)
+
+        # Nicknames and colours may have changed, and a departed peer's
+        # rectangle must stop being drawn.
+        self._publishViews()
+
     # -- incoming presence --------------------------------------------------
 
-    def showCursor(self, session_id, x, y):
+    def showCursor(self, session_id, x, y, dragging=False):
         if not self._show_cursors or self.scene is None:
             return
 
         session_id = str(session_id or '')
         if not session_id:
+            return
+
+        # "Only while moving items": the sender tells us whether it is
+        # dragging, because that is its state, not ours. An idle peer's cursor
+        # is dropped rather than merely left in place, so it does not linger
+        # wherever it happened to stop.
+        if self._cursors_while_dragging_only and not dragging:
+            self._removeCursor(session_id)
             return
 
         cursor = self._cursors.get(session_id)
@@ -304,8 +335,54 @@ class PresenceOverlay:
         self.scene.addItem(flash)
         self._flashes.append(flash)
 
+    def showView(self, session_id, x, y, width, height):
+        """
+        Records where a peer is looking, for the Level Overview map.
+
+        Kept here rather than pushed straight at the overview widget so that
+        one object owns everything presence-related, and so the widget is only
+        told about peers it should currently be drawing.
+        """
+        session_id = str(session_id or '')
+        if not session_id or width <= 0 or height <= 0:
+            return
+
+        self._views[session_id] = {'x': x, 'y': y, 'w': width, 'h': height}
+        self._publishViews()
+
+    def setOverview(self, overview):
+        """
+        The Level Overview widget to draw peer viewports on, or None.
+        """
+        self._overview = overview
+        self._publishViews()
+
+    def _publishViews(self):
+        if self._overview is None:
+            return
+
+        views = []
+        for session_id, rect in self._views.items():
+            info = self._roster.get(session_id)
+            if info is None:
+                # Someone who has left. Their rectangle is dropped rather than
+                # drawn in a default colour, which would look like a peer.
+                continue
+            entry = dict(rect)
+            entry['color'] = info.get('color')
+            entry['nick'] = info.get('nick', '')
+            views.append(entry)
+
+        try:
+            self._overview.setPeerViews(views)
+        except RuntimeError:
+            # The widget was destroyed (shutdown races a repaint).
+            self._overview = None
+
     def peerLeft(self, session_id):
         self._removeCursor(str(session_id or ''))
+        self._views.pop(str(session_id or ''), None)
+        self._publishViews()
 
     # -- teardown -----------------------------------------------------------
 
@@ -324,6 +401,14 @@ class PresenceOverlay:
     def shutdown(self):
         self._idle_timer.stop()
         self.clear()
+
+        # Peer rectangles are the one thing that lives outside the scene, so
+        # they survive clear() and have to be revoked explicitly - otherwise
+        # the overview keeps drawing them after the session has ended.
+        self._views = {}
+        self._publishViews()
+        self._overview = None
+
         self.scene = None
 
     # -- internals ----------------------------------------------------------

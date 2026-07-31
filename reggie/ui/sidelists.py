@@ -141,6 +141,54 @@ class LevelOverviewWidget(QtWidgets.QWidget):
             scalar * self.Wlocator, scalar * self.Hlocator
         ))
 
+        self._paintPeerViews(painter)
+
+    def setPeerViews(self, views):
+        """
+        The rectangles other collaborators are looking at.
+
+        `views` is [{'x', 'y', 'w', 'h', 'color', 'nick'}] in scene
+        coordinates. Held as plain data rather than as widget state, so the
+        overview needs to know nothing about sessions and simply draws what it
+        was last given.
+        """
+        self._peer_views = list(views or ())
+        self.update()
+
+    def _paintPeerViews(self, painter):
+        """
+        Draws each collaborator's viewport in their own colour.
+
+        Dashed, so a peer's rectangle is never mistaken for your own solid one
+        even when the two overlap almost exactly - which is the normal case
+        when two people are working on the same part of a level.
+        """
+        views = getattr(self, '_peer_views', None)
+        if not views:
+            return
+
+        # The same 1/24 scene-to-overview conversion the local box uses, but
+        # without mainWindowScale: a peer's rectangle already arrives in scene
+        # coordinates, so their zoom is baked in.
+        for view in views:
+            try:
+                rect = QtCore.QRectF(
+                    view['x'] / 24.0, view['y'] / 24.0,
+                    view['w'] / 24.0, view['h'] / 24.0)
+            except (KeyError, TypeError, ZeroDivisionError):
+                continue
+
+            if rect.width() <= 0 or rect.height() <= 0:
+                continue
+
+            color = QtGui.QColor(str(view.get('color') or ''))
+            if not color.isValid():
+                color = QtGui.QColor('#3daee9')
+
+            pen = QtGui.QPen(color, 1, QtCore.Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawRect(rect)
+
     def CalcSize(self):
         """
         Calculates self.maxX and self.maxY.

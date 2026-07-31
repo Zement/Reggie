@@ -185,7 +185,7 @@ class HostSession:
     """
 
     def __init__(self, secret, cert_fingerprint, host_nick='Host',
-                 app_version='', room_info=None,
+                 app_version='', room_info=None, host_color='',
                  on_event=None, on_op=None, on_roster_changed=None):
         self.secret = secret
         self.cert_fingerprint = cert_fingerprint
@@ -211,7 +211,9 @@ class HostSession:
         self.host_participant = Participant(
             session_id='host',
             nick=host_nick or 'Host',
-            color=DEFAULT_NICK_COLORS[0],
+            # The host picked a colour in its own preferences too, and expects
+            # to be recognised by it like anybody else.
+            color=str(host_color or '').strip() or DEFAULT_NICK_COLORS[0],
             role=protocol.ROLE_HOST,
             app_version=app_version,
         )
@@ -315,6 +317,33 @@ class HostSession:
             color = DEFAULT_NICK_COLORS[self._color_cursor % len(DEFAULT_NICK_COLORS)]
             self._color_cursor += 1
         return color
+
+    def _pick_color(self, requested):
+        """
+        Honours the colour a peer chose, falling back to the next unused one.
+
+        The peer's own choice matters: it is how that person expects to be
+        recognised, in the roster and on the canvas. It is only a preference
+        though - an unusable value, or one already taken by somebody else,
+        falls back rather than being refused, since a colour clash is a
+        cosmetic problem and rejecting a join over one would not be.
+        """
+        requested = str(requested or '').strip()
+
+        # A conservative shape check rather than a colour parse: this module is
+        # deliberately Qt-free, and #rrggbb is what the picker produces.
+        looks_like_a_colour = (
+            len(requested) == 7
+            and requested.startswith('#')
+            and all(c in '0123456789abcdefABCDEF' for c in requested[1:]))
+
+        if looks_like_a_colour:
+            with self._lock:
+                taken = {p.color.lower() for p in self._participants.values()}
+            if requested.lower() not in taken:
+                return requested
+
+        return self._next_color()
 
     def _unique_nick(self, requested):
         """
@@ -436,7 +465,7 @@ class HostSession:
         participant = Participant(
             session_id=session_id,
             nick=self._unique_nick(payload.get('nick', '')),
-            color=self._next_color(),
+            color=self._pick_color(payload.get('color', '')),
             role=protocol.ROLE_EDITOR,     # least privilege by default
             connection=connection,
             app_version=peer_version,
@@ -981,6 +1010,18 @@ class ClientSession:
 
         elif msg_type == protocol.T_OP_REJECT:
             self._emit('op_reject', payload)
+
+        elif msg_type == protocol.T_PRESENCE:
+            # Presence needs its sender, and the generic branch below drops it:
+            # the host relays every peer's presence through one connection, so
+            # without 'from' a client cannot tell two peers apart and draws
+            # them all as one cursor. It is carried alongside the payload
+            # rather than merged into it, so a peer cannot claim to be someone
+            # else by putting a 'from' in its own payload.
+            self._emit('presence', {
+                'payload': payload,
+                'sender': str(message.get('from', '') or ''),
+            })
 
         else:
             self._emit(msg_type, payload)
