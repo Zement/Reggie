@@ -2317,7 +2317,17 @@ class SpriteItem(LevelEditorItem):
             newobjx += self.ImageObj.xOffset
             newobjy += self.ImageObj.yOffset
 
-        self.setPos(newobjx * 1.5, newobjy * 1.5)
+        # ChangingPos suppresses itemChange's grid snapping, which exists for
+        # interactive dragging and must not apply here: the caller has already
+        # decided the exact position. Without it an undo, or a move arriving
+        # from a peer, was re-snapped to the nearest 8/16th of a block on
+        # arrival - so an Alt-drag (1/16th precision) was rounded away and a
+        # small move appeared not to transfer at all.
+        self.ChangingPos = True
+        try:
+            self.setPos(newobjx * 1.5, newobjy * 1.5)
+        finally:
+            self.ChangingPos = False
 
     def mousePressEvent(self, event):
         """

@@ -1030,18 +1030,26 @@ class CollabController(QtCore.QObject):
 
     # -- outbound operations ------------------------------------------------
 
-    def broadcastCommand(self, command):
+    def broadcastCommand(self, command, undone=False):
         """
         Sends a locally pushed undo command to the other peers.
 
-        Called from UndoStack.push, so this is the main thread and the edit has
-        already been applied. Returns True if anything was sent.
+        Called from UndoStack.push/undo/redo, so this is the main thread and the
+        edit has already been applied. Returns True if anything was sent.
+
+        `undone` sends the inverse edit, for a command that was just reverted.
+        Peers apply it as an ordinary operation: undo stays local and per-user,
+        but the level has to converge either way.
         """
         if not self.is_active or self.refmap is None:
             return False
 
         try:
-            payload = broadcast.encode_command(command, self.refmap)
+            if undone:
+                payload = broadcast.encode_undo(command, self.refmap)
+                self._rebindResurrectedItems(command, payload)
+            else:
+                payload = broadcast.encode_command(command, self.refmap)
         except broadcast.BroadcastError as exc:
             # Our view of the level and the ref map have drifted. Resyncing is
             # the honest answer; carrying on would diverge silently.
@@ -1084,6 +1092,36 @@ class CollabController(QtCore.QObject):
 
         self.client.send(protocol.make_message(protocol.T_OP, payload))
         return True
+
+    def _rebindResurrectedItems(self, command, payload):
+        """
+        Re-registers items brought back by undoing a removal.
+
+        Encoding a removal forgets its references, since the items are gone. A1
+        then restores *the same objects* on undo, so the references have to come
+        back too - and specifically the original ones, because peers still know
+        those items by them and the inverse op we are about to send recreates
+        them under exactly those references.
+
+        Without this the resurrected items are unreferenced locally, and the
+        next edit to one of them fails to encode and triggers a resync.
+        """
+        if payload is None or payload.get('kind') != 'add':
+            return
+
+        items = [item for item in getattr(command, 'items', None) or []
+                 if item is not None]
+        targets = payload.get('targets') or []
+        if len(items) != len(targets):
+            # Shapes disagree, so pairing them up would bind references to the
+            # wrong objects. A resync is recoverable; a mis-bound ref is not.
+            raise broadcast.BroadcastError(
+                'could not match restored items to their references')
+
+        for item, target in zip(items, targets):
+            ref = target.get('ref')
+            if ref:
+                self.refmap.bind(ref, item)
 
     def _onSnapshot(self, payload):
         if self.refmap is None:

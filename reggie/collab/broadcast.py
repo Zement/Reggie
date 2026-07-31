@@ -18,11 +18,26 @@ The design follows from one decision made in A1 and one made here:
   is applied inside the guard, and pushes nothing onto the stack, so it cannot
   reach this module and echo back to its sender.
 
-Deliberately NOT sent: undo and redo. Undo is local and per-user - the settled
-A1 decision - so a user undoing their own change broadcasts the resulting edit
-as a fresh operation, not as an instruction for other peers to undo. That falls
-out of the design rather than needing a special case: UndoStack.undo() does not
-call push().
+Undo and redo are sent, but never as *instructions to undo*. Undo stays local
+and per-user - the settled A1 decision - so pressing Ctrl+Z tells a peer "this
+item moved back to there", exactly as if the move had been made by hand. The
+peer's own history is untouched.
+
+This is the distinction that matters, because the alternative is tempting and
+wrong. Peers do not share one history: each stack holds only that user's own
+commands, interleaved differently against the other user's. So there is no
+"the same step" to locate on the far side, and no shared order to truncate
+against - and both repair strategies that assume otherwise destroy work.
+Truncating a peer's later steps discards the *other* user's edits; clearing a
+peer's history strips their ability to undo work they did themselves, as a
+side effect of somebody else pressing Ctrl+Z.
+
+The invariant is narrower than "the histories agree", and it is the only one
+we need: **the levels must converge; the histories need not.** Sending the
+inverse edit satisfies it and leaves every user in charge of their own history.
+
+encode_undo() therefore re-encodes a command with its before/after swapped,
+reusing the same encoders as the forward direction so the two cannot drift.
 
 Qt-free, like the rest of reggie/collab: it receives command objects and returns
 payload dicts, and knows nothing about widgets or threads.
@@ -159,6 +174,82 @@ _HANDLERS = {
     'PathSettingCommand': _path_setting,
     'PathNodeOrderCommand': _path_order,
 }
+
+
+def encode_undo(command, refmap):
+    """
+    Encodes the edit an undo *produces*, so peers follow the level back.
+
+    Not an instruction to undo: see the module docstring. The peer applies this
+    as an ordinary operation and its own history is untouched.
+
+    Built by inverting the forward payload rather than by a second set of
+    encoders, so the two directions cannot drift apart as command types are
+    added. Every payload has the same shape - targets carrying `before` and
+    `after` - so undoing is swapping them.
+
+    Returns None for a command that has nothing to say, exactly as
+    encode_command does.
+    """
+    payload = encode_command(command, refmap)
+    if payload is None:
+        return None
+
+    return invert_payload(payload)
+
+
+def encode_redo(command, refmap):
+    """
+    Encodes the edit a redo produces: the command's forward direction again.
+    """
+    return encode_command(command, refmap)
+
+
+def invert_payload(payload):
+    """
+    Turns an operation into the operation that reverses it.
+
+    `add` and `remove` invert into each other rather than by swapping fields,
+    because their payloads are not symmetric: an add carries the description
+    needed to build the item, and a remove carries only what is needed to find
+    it. Undoing an add must therefore delete, and undoing a remove must
+    recreate from the description the remove recorded.
+    """
+    kind = payload.get('kind')
+    targets = payload.get('targets') or []
+
+    if kind == 'add':
+        # Deleting what was added. The refs stay valid until the peer applies
+        # this and forgets them.
+        return {
+            'kind': 'remove',
+            'targets': [{'ref': t.get('ref'), 'before': t.get('after')}
+                        for t in targets],
+        }
+
+    if kind == 'remove':
+        # Recreating what was removed, as an ordinary add: _apply_add already
+        # builds an item from a description and binds its reference, and it is
+        # idempotent, so this needs no new op kind and no new role-matrix
+        # entry. Reusing the original ref matters - a later op for that item
+        # must still resolve on every peer.
+        rebuilt = []
+        for target in targets:
+            ref = target.get('ref')
+            description = target.get('before')
+            if not ref or description is None:
+                raise BroadcastError(
+                    'cannot undo a removal that recorded no description')
+            rebuilt.append({'ref': ref, 'after': description})
+        return {'kind': 'add', 'targets': rebuilt}
+
+    inverted = []
+    for target in targets:
+        entry = dict(target)
+        entry['before'], entry['after'] = target.get('after'), target.get('before')
+        inverted.append(entry)
+
+    return {'kind': kind, 'targets': inverted}
 
 
 def op_kind_of(command):

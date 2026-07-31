@@ -74,12 +74,25 @@ class UndoStack(QtGui.QUndoStack):
         self.setUndoLimit(getattr(globals_, 'UndoLimit', 500))
 
     def undo(self):
+        # Captured before the stack moves: afterwards `command(index())` is a
+        # different command, and on an empty stack there is nothing to read.
+        command = self.command(self.index() - 1) if self.index() > 0 else None
+
         with _ApplyGuard():
             super().undo()
 
+        # Undo is local and per-user, but the *level* must still converge, so
+        # the peer is told about the resulting edit. See broadcast.encode_undo:
+        # this is "the item moved back to there", not "undo your last step".
+        _broadcast_command(command, undone=True)
+
     def redo(self):
+        command = self.command(self.index()) if self.index() < self.count() else None
+
         with _ApplyGuard():
             super().redo()
+
+        _broadcast_command(command)
 
     def push(self, cmd):
         with _ApplyGuard():
@@ -97,22 +110,28 @@ class UndoStack(QtGui.QUndoStack):
         _broadcast_command(cmd)
 
 
-def _broadcast_command(cmd):
+def _broadcast_command(cmd, undone=False):
     """
-    Hands a freshly pushed command to a running collaboration session.
+    Hands a command to a running collaboration session.
+
+    `undone` sends the inverse edit instead of the forward one, for a command
+    that has just been reverted.
 
     Fully guarded: the edit has already been applied locally and is correct, so
     a collaboration problem must never surface as a failed edit. A peer that
     misses an operation can resync; a local edit rolled back by a network error
     is data loss.
     """
+    if cmd is None:
+        return
+
     window = getattr(globals_, 'mainWindow', None)
     controller = getattr(window, '_collab', None)
     if controller is None:
         return
 
     try:
-        controller.broadcastCommand(cmd)
+        controller.broadcastCommand(cmd, undone=undone)
     except Exception:
         pass
 
