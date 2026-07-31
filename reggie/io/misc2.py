@@ -121,6 +121,13 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
     PositionHover = QtCore.pyqtSignal(int, int)
     FrameSize = QtCore.pyqtSignal(int, int)
     repaint = QtCore.pyqtSignal()
+
+    # Emitted for every press on the canvas, in scene coordinates, before the
+    # button is dispatched. A signal rather than a hook inside the handler
+    # below: that handler is long and branches per button, so a listener added
+    # there would have to be repeated and would eventually be missed.
+    PositionClicked = QtCore.pyqtSignal(int, int)
+
     dragstamp = False
 
     def __init__(self, scene, parent):
@@ -264,6 +271,12 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
             print(f"[misc2] QPT press error: {e}")
             import traceback
             traceback.print_exc()
+
+        # After the QPT check, so a press QPT consumed is not reported twice,
+        # but before the per-button branches, which return early.
+        clicked_pos = self.mapToScene(event.pos())
+        self.PositionClicked.emit(int(max(0, clicked_pos.x())),
+                                  int(max(0, clicked_pos.y())))
 
         if event.button() == QtCore.Qt.MouseButton.BackButton:
             self.xButtonScrollTimer = QtCore.QTimer()

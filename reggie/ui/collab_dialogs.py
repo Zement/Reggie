@@ -520,6 +520,8 @@ class CollabStatusWindow(QtWidgets.QDialog):
         self.chatRequested = _ignore
         self.leaveRequested = _ignore
 
+        self._join_code = ''
+
         self.roster = QtWidgets.QListWidget()
         self.roster.setMinimumWidth(200)
 
@@ -561,10 +563,20 @@ class CollabStatusWindow(QtWidgets.QDialog):
             self.roster.currentRowChanged.connect(self._updateHostButtons)
             self._updateHostButtons(-1)
 
-        # Ending the session must always be reachable. Separated from the
-        # per-participant controls above, since it acts on the session rather
-        # than on whoever happens to be selected.
+        # Session-level actions, separated from the per-participant controls
+        # above because they act on the session rather than on whoever happens
+        # to be selected.
         rosterColumn.addSpacing(8)
+
+        if self.is_host:
+            # The join code is otherwise unrecoverable: it is shown once when
+            # hosting starts, and a host who dismissed that dialog without
+            # copying it had no way to invite anybody afterwards.
+            self.copyCodeButton = QtWidgets.QPushButton('Copy join code')
+            self.copyCodeButton.clicked.connect(self._copyJoinCode)
+            self.copyCodeButton.setEnabled(False)
+            rosterColumn.addWidget(self.copyCodeButton)
+
         self.leaveButton = QtWidgets.QPushButton(
             'End session' if self.is_host else 'Leave session')
         self.leaveButton.clicked.connect(self._leave)
@@ -719,8 +731,35 @@ class CollabStatusWindow(QtWidgets.QDialog):
         self.leaveButton.setEnabled(False)
 
         if self.is_host:
-            for button in (self.roleButton, self.kickButton, self.banButton):
+            for button in (self.roleButton, self.kickButton, self.banButton,
+                           self.copyCodeButton):
                 button.setEnabled(False)
+
+    def setJoinCode(self, join_code):
+        """
+        Gives the window the code to copy. Host only.
+
+        Held here rather than fetched on demand so the window has no reference
+        to the session, and so the button can be disabled until there is
+        actually something to copy.
+        """
+        self._join_code = str(join_code or '')
+        if self.is_host:
+            self.copyCodeButton.setEnabled(bool(self._join_code))
+
+    def _copyJoinCode(self):
+        code = getattr(self, '_join_code', '')
+        if not code:
+            return
+
+        clipboard = QtWidgets.QApplication.clipboard()
+        if clipboard is None:
+            return
+
+        clipboard.setText(code)
+        # Confirmed in the chat log rather than a dialog: copying is a small
+        # action and a modal box for it would be in the way.
+        self.appendStatus('Join code copied to the clipboard.')
 
     def _kick(self):
         session_id = self._selectedSessionId()
@@ -966,6 +1005,10 @@ def show_join_code(parent, join_code):
     copyButton = box.addButton('Copy join code',
                                QtWidgets.QMessageBox.ButtonRole.ActionRole)
     box.addButton(QtWidgets.QMessageBox.StandardButton.Ok)
+
+    # Copying is what the dialog is for, and it is what the user almost always
+    # wants next - dismissing without copying means retyping a long code.
+    box.setDefaultButton(copyButton)
     box.exec()
 
     if box.clickedButton() is copyButton:

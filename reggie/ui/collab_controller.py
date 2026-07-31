@@ -35,8 +35,17 @@ from reggie.collab import (
     transport, upnp,
 )
 from reggie.core import globals_
-from reggie.ui import collab_dialogs
+from reggie.ui import collab_dialogs, collab_presence
 from reggie.ui.collab_bridge import CollabBridge
+
+
+# Cursor updates per second. Fast enough to look continuous, slow enough that a
+# moving pointer is a trickle rather than a flood; transport caps it too.
+PRESENCE_UPDATES_PER_SECOND = 20.0
+
+# How often a held cursor position is flushed, so the final position of a
+# gesture is never left stranded when the pointer stops.
+PRESENCE_FLUSH_MS = 100
 
 
 # Minimum gap between snapshot requests. A resync is usually triggered by a
@@ -140,6 +149,14 @@ class CollabController(QtCore.QObject):
         self._suppress_level_notify = False
         self.settings = collab_dialogs.load_collab_settings()
 
+        # Presence: the canvas overlay, the send-side throttle, and the view
+        # signals we listen to while a session is running. All created lazily,
+        # because none of it exists outside a session.
+        self.presence = None
+        self._cursor_coalescer = None
+        self._presence_timer = None
+        self._presence_connected = False
+
         self._connect_signals()
 
     # -- signal wiring ------------------------------------------------------
@@ -159,6 +176,7 @@ class CollabController(QtCore.QObject):
         self.signals.disconnected.connect(self._onDisconnected)
         self.signals.rejected.connect(self._onRejected)
         self.signals.roleChanged.connect(self._onRoleChanged)
+        self.signals.presenceReceived.connect(self._onPresence)
 
     @property
     def is_active(self):
@@ -272,6 +290,7 @@ class CollabController(QtCore.QObject):
 
         self.mode = 'host'
         self.applyEditingPermissions()
+        self._startPresence()
 
         if discoverable:
             self._startDiscovery(actual_port, nick)
@@ -460,6 +479,8 @@ class CollabController(QtCore.QObject):
         window.deleteLater()
 
     def _teardown(self):
+        self._stopPresence()
+
         if self.responder is not None:
             self.responder.stop()
             self.responder = None
@@ -515,6 +536,12 @@ class CollabController(QtCore.QObject):
                 window.banRequested = self._ban
                 window.roleRequested = self._setRole
             self.status_window = window
+
+        if self.is_host:
+            # Set every time rather than only on creation: the code is the
+            # host's only way to invite anyone after dismissing the dialog that
+            # showed it once, so a stale or missing one is a dead end.
+            self.status_window.setJoinCode(self.join_code)
 
         self.status_window.show()
         self.status_window.raise_()
@@ -791,6 +818,12 @@ class CollabController(QtCore.QObject):
         load cannot leave the session permanently mute.
         """
         label = os.path.basename(str(name)) if name else 'the level'
+
+        # Loading replaces the scene's contents, so cursors drawn against the
+        # old level must go rather than linger over the new one.
+        if self.presence is not None:
+            self.presence.clear()
+
         self._suppress_level_notify = True
         try:
             with _BusyIndicator(self.window,
@@ -919,6 +952,11 @@ class CollabController(QtCore.QObject):
         if self.status_window is not None:
             self.status_window.setRoster(participants)
 
+        # The overlay needs it too: nicknames and colours come from the roster,
+        # and a peer that left must lose its cursor.
+        if self.presence is not None:
+            self.presence.setRoster(participants)
+
     def _onChat(self, nick, text, kind):
         if self.status_window is None:
             return
@@ -938,6 +976,7 @@ class CollabController(QtCore.QObject):
 
     def _onConnected(self, room_info):
         self._appendStatus('Connected.')
+        self._startPresence()
         self._checkPatch(room_info)
 
         if self.client is not None:
@@ -1092,6 +1131,161 @@ class CollabController(QtCore.QObject):
 
         self.client.send(protocol.make_message(protocol.T_OP, payload))
         return True
+
+    # -- presence -----------------------------------------------------------
+
+    def _startPresence(self):
+        """
+        Begins showing other people on the canvas, and reporting where we are.
+
+        Everything here is per-session: the overlay, the throttle, and the two
+        view connections. Built on start rather than kept alive permanently so
+        that outside a session there is nothing to leak and nothing to draw.
+        """
+        window = self.window
+        scene = getattr(window, 'scene', None)
+        view = getattr(window, 'view', None)
+        if scene is None:
+            return
+
+        self.presence = collab_presence.PresenceOverlay(scene)
+        self._applyPresencePreferences()
+
+        self._cursor_coalescer = transport.PresenceCoalescer(
+            rate=PRESENCE_UPDATES_PER_SECOND)
+
+        # A held cursor position would otherwise be stranded when the pointer
+        # stops: the last movement is exactly the one worth showing.
+        self._presence_timer = QtCore.QTimer(window)
+        self._presence_timer.setInterval(PRESENCE_FLUSH_MS)
+        self._presence_timer.timeout.connect(self._flushCursor)
+        self._presence_timer.start()
+
+        if view is not None and not self._presence_connected:
+            view.PositionHover.connect(self._onLocalCursorMoved)
+            view.PositionClicked.connect(self._onLocalClick)
+            self._presence_connected = True
+
+    def _stopPresence(self):
+        if self._presence_timer is not None:
+            self._presence_timer.stop()
+            self._presence_timer = None
+
+        view = getattr(self.window, 'view', None)
+        if view is not None and self._presence_connected:
+            # Disconnect explicitly: the view outlives the session, so a
+            # connection left behind would keep sending on a dead transport
+            # and would be duplicated by the next session.
+            try:
+                view.PositionHover.disconnect(self._onLocalCursorMoved)
+                view.PositionClicked.disconnect(self._onLocalClick)
+            except TypeError:
+                pass
+        self._presence_connected = False
+
+        if self.presence is not None:
+            self.presence.shutdown()
+            self.presence = None
+
+        self._cursor_coalescer = None
+
+    def _applyPresencePreferences(self):
+        """
+        Applies the local cursor/click display choices.
+
+        Receiving-side only: turning cursors off hides other people, it does
+        not stop us reporting our own position. Making it do both would mean a
+        user who dislikes the clutter silently disappears for everyone else.
+        """
+        if self.presence is None:
+            return
+
+        mode = self.settings.get('cursors', collab_dialogs.CURSORS_ON_MOVE)
+        self.presence.setPreferences(
+            show_cursors=(mode != collab_dialogs.CURSORS_NEVER),
+            show_clicks=bool(self.settings.get('clicks', True)))
+
+    def _onLocalCursorMoved(self, x, y):
+        if not self.is_active:
+            return
+
+        # 'onmove' means "only while dragging something", which is what
+        # distinguishes it from 'always'. Reading the mouse buttons rather than
+        # a drag flag keeps this independent of which tool is active.
+        if self.settings.get('cursors') == collab_dialogs.CURSORS_ON_MOVE:
+            buttons = QtWidgets.QApplication.mouseButtons()
+            if buttons == QtCore.Qt.MouseButton.NoButton:
+                return
+
+        if self._cursor_coalescer is None:
+            return
+
+        payload = self._cursor_coalescer.offer(
+            sync.encode_presence_cursor(x, y))
+        if payload is not None:
+            self._sendPresence(payload)
+
+    def _flushCursor(self):
+        if not self.is_active or self._cursor_coalescer is None:
+            return
+
+        payload = self._cursor_coalescer.flush()
+        if payload is not None:
+            self._sendPresence(payload)
+
+    def _onLocalClick(self, x, y):
+        if not self.is_active:
+            return
+        self._sendPresence(sync.encode_presence_click(x, y))
+
+    def _sendPresence(self, payload):
+        """
+        Sends a presence payload. Never fatal: presence is decoration, so a
+        failure here must not disturb editing.
+        """
+        try:
+            if self.is_host:
+                if self.host_session is not None:
+                    self.host_session.broadcast_presence(payload)
+            elif self.client is not None:
+                self.client.send(
+                    protocol.make_message(protocol.T_PRESENCE, payload))
+        except Exception:
+            pass
+
+    def _onPresence(self, payload, sender_id):
+        """
+        Draws a peer's cursor or click. Main thread, via the bridge.
+        """
+        if self.presence is None or self.refmap is None:
+            return
+
+        # The host relays a client's presence to the others, so a peer can see
+        # its own payload come back. Drawing it would put a second cursor under
+        # the user's real one.
+        if sender_id and self._isOwnSessionId(sender_id):
+            return
+
+        try:
+            decoded = sync.decode_presence(payload, self.refmap)
+        except sync.SyncError:
+            # A malformed payload from a peer is not worth reporting: it cannot
+            # hurt anything, and presence arrives constantly.
+            return
+
+        kind = decoded.get('kind')
+        if kind == 'cursor':
+            self.presence.showCursor(sender_id, decoded['x'], decoded['y'])
+        elif kind == 'click':
+            self.presence.showClick(sender_id, decoded['x'], decoded['y'])
+
+    def _isOwnSessionId(self, session_id):
+        if self.client_session is not None:
+            return session_id == getattr(self.client_session, 'session_id', None)
+        if self.host_session is not None:
+            host = getattr(self.host_session, 'host_participant', None)
+            return session_id == getattr(host, 'session_id', None)
+        return False
 
     def _rebindResurrectedItems(self, command, payload):
         """
