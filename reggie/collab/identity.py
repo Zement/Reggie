@@ -192,9 +192,18 @@ def generate_secret():
 # Join codes
 # ---------------------------------------------------------------------------
 
-def encode_join_code(host, port, fingerprint_hex, secret):
+def encode_endpoint(host, port):
     """
-    Builds the join code string: REGGIE1:<host>:<port>:<pin>:<secret>
+    Packs host and port into one base32 field.
+
+    **This is obfuscation, not protection, and the distinction matters.** The
+    address is recoverable by anyone who decodes the field, and both peers can
+    read each other's address off the socket the moment they connect. What it
+    buys is that a join code pasted into a chat window or a screenshot does not
+    put a bare public IP in front of everyone who happens to read it.
+
+    Nothing security-relevant rests on this: the certificate pin and the
+    session secret are the parts that matter, and both are unchanged.
     """
     host = str(host or '').strip()
     if not host or ':' in host:
@@ -204,13 +213,70 @@ def encode_join_code(host, port, fingerprint_hex, secret):
     if not (1 <= port <= 65535):
         raise JoinCodeError('port out of range')
 
+    payload = host.encode('utf-8')
+    if len(payload) > 255:
+        raise JoinCodeError('host is too long for a join code')
+
+    # port big-endian, then the host bytes. Length-prefixed so trailing base32
+    # padding cannot be mistaken for part of the address.
+    raw = bytes((len(payload),)) + port.to_bytes(2, 'big') + payload
+    return b32_encode(raw)
+
+
+def decode_endpoint(field):
+    """
+    Unpacks encode_endpoint(). Returns (host, port).
+    """
+    cleaned = str(field or '').strip().replace('-', '').replace(' ', '').upper()
+    if not cleaned:
+        raise JoinCodeError('join code is missing the address')
+
+    try:
+        raw = b32_decode(cleaned)
+    except ValueError:
+        raise JoinCodeError('join code address is not valid base32')
+
+    if len(raw) < 4:
+        raise JoinCodeError('join code address is too short')
+
+    length = raw[0]
+    port = int.from_bytes(raw[1:3], 'big')
+    payload = raw[3:3 + length]
+
+    if len(payload) != length:
+        raise JoinCodeError('join code address is truncated')
+    if not (1 <= port <= 65535):
+        raise JoinCodeError('join code port is out of range')
+
+    try:
+        host = payload.decode('utf-8')
+    except UnicodeDecodeError:
+        raise JoinCodeError('join code address is not valid text')
+
+    host = host.strip()
+    if not host:
+        raise JoinCodeError('join code is missing the host')
+
+    return host, port
+
+
+def encode_join_code(host, port, fingerprint_hex, secret):
+    """
+    Builds the join code string: REGGIE1:<endpoint>:<pin>:<secret>
+
+    The endpoint packs host and port into one base32 field so the code does not
+    display a bare IP address - see encode_endpoint for what that is and is not
+    worth.
+    """
+    endpoint = encode_endpoint(host, port)
+
     pin = pin_from_fingerprint(fingerprint_hex)
 
     secret = str(secret or '').strip().upper()
     if not secret or not _BASE32_ALPHABET.match(secret):
         raise JoinCodeError('secret must be base32')
 
-    return ':'.join((JOIN_CODE_TAG, host, str(port), pin, secret))
+    return ':'.join((JOIN_CODE_TAG, endpoint, pin, secret))
 
 
 def decode_join_code(code):
@@ -229,25 +295,15 @@ def decode_join_code(code):
         raise JoinCodeError('join code is empty')
 
     parts = text.split(':')
-    if len(parts) != 5:
-        raise JoinCodeError('join code must have 5 colon-separated parts')
+    if len(parts) != 4:
+        raise JoinCodeError('join code must have 4 colon-separated parts')
 
-    tag, host, port_text, pin, secret = parts
+    tag, endpoint, pin, secret = parts
 
     if tag.strip().upper() != JOIN_CODE_TAG:
         raise JoinCodeError('unrecognised join code format')
 
-    host = host.strip()
-    if not host:
-        raise JoinCodeError('join code is missing the host')
-
-    try:
-        port = int(port_text.strip())
-    except ValueError:
-        raise JoinCodeError('join code has a non-numeric port')
-
-    if not (1 <= port <= 65535):
-        raise JoinCodeError('join code port is out of range')
+    host, port = decode_endpoint(endpoint)
 
     pin = pin.strip().replace('-', '').replace(' ', '').upper()
     try:
@@ -276,14 +332,18 @@ def format_join_code_for_display(code, group=5):
     retyped. decode_join_code() strips them again.
     """
     parts = str(code).split(':')
-    if len(parts) != 5:
-        return code
 
     def chunk(value):
         return '-'.join(value[i:i + group] for i in range(0, len(value), group))
 
+    if len(parts) != 4:
+        return code
+
+    # tag:endpoint:pin:secret - every field after the tag is base32, so all
+    # three are chunked for readability.
+    parts[1] = chunk(parts[1])
+    parts[2] = chunk(parts[2])
     parts[3] = chunk(parts[3])
-    parts[4] = chunk(parts[4])
     return ':'.join(parts)
 
 
