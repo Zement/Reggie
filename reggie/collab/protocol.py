@@ -225,6 +225,11 @@ _CLIENT_SENDABLE = frozenset({
     T_CLIENT_AUTH, T_CHAT, T_PING, T_PONG, T_BYE,
     T_SNAPSHOT_REQUEST, T_OP, T_PRESENCE,
     T_PATCH_NEED, T_FILE_REQ, T_FILE_DONE,
+
+    # A Full-role client may ask the host to move everyone to another level or
+    # area. Being *allowed to send* it is not being allowed to do it: the host
+    # checks the sender's role before acting, exactly as it does for an op.
+    T_AREA_SWITCH,
 })
 _HOST_SENDABLE = frozenset({
     T_SERVER_HELLO, T_AUTH_OK, T_AUTH_FAILED, T_ROSTER, T_ROLE_CHANGED,
@@ -553,7 +558,18 @@ def _v_op_reject(p):
 
 
 def _v_area_switch(p):
-    return {'area': _get_int(p, 'area', minimum=1, maximum=4)}
+    """
+    A move to another area, and optionally another level.
+
+    `level` is the level's *name*, never a path: the peers resolve it inside
+    their own patch's stage folder. A path would be both unusable (the other
+    machine's layout differs) and a way to point a peer at an arbitrary file.
+    `full_path` therefore has no place here by design.
+    """
+    return {
+        'area': _get_int(p, 'area', minimum=1, maximum=4),
+        'level': _get_str(p, 'level', 128, required=False),
+    }
 
 
 def _v_presence(p):

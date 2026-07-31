@@ -504,6 +504,7 @@ class HostSession:
             protocol.T_OP: self._handle_op,
             protocol.T_PRESENCE: self._handle_presence,
             protocol.T_SNAPSHOT_REQUEST: self._handle_snapshot_request,
+            protocol.T_AREA_SWITCH: self._handle_area_switch,
         }.get(msg_type)
 
         if handler is None:
@@ -708,6 +709,41 @@ class HostSession:
         if participant.connection is not None:
             participant.connection.close_after_flush('peer said goodbye')
         self._emit('bye', {'participant': participant, 'reason': reason})
+
+    def _handle_area_switch(self, participant, message):
+        """
+        A client asking to move everyone to another level or area.
+
+        Role-checked here rather than trusted from the UI, like every other
+        client request: the greyed-out controls are a convenience, and a peer
+        that ignores them must still be refused. Only Full may do this, because
+        it moves every participant, not just the sender.
+
+        The host does not act on it directly - it reports it, and the owner
+        decides. That keeps the "load a level" decision on the main thread with
+        the editor, where it belongs.
+        """
+        if participant.role != protocol.ROLE_FULL:
+            connection = participant.connection
+            if connection is not None:
+                # op_id is required by the schema; an area switch has no
+                # operation id, so it names the request type instead. Omitting
+                # it would fail validation on the way out and the client would
+                # be refused in silence.
+                connection.send_type(protocol.T_OP_REJECT, {
+                    'op_id': protocol.T_AREA_SWITCH,
+                    'reason': 'your access level does not allow changing the '
+                              'level or area',
+                })
+            self._emit('op_denied', {'participant': participant,
+                                     'kind': protocol.T_AREA_SWITCH})
+            return
+
+        self._emit('area_switch', {
+            'participant': participant,
+            'area': message['p'].get('area', 1),
+            'level': message['p'].get('level', ''),
+        })
 
     def _handle_snapshot_request(self, participant, message):
         # sync.py builds and sends the snapshot; this module only reports the

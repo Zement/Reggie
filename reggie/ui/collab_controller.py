@@ -81,6 +81,10 @@ class CollabController(QtCore.QObject):
         # Tooltips as they were before a session restricted anything, so they
         # can be put back exactly rather than cleared.
         self._original_tooltips = {}
+
+        # Set while loading a level *because* a peer asked, so the load does not
+        # announce itself straight back to the session it came from.
+        self._suppress_level_notify = False
         self.settings = collab_dialogs.load_collab_settings()
 
         self._connect_signals()
@@ -95,6 +99,7 @@ class CollabController(QtCore.QObject):
         self.signals.operationReceived.connect(self._onOperation)
         self.signals.snapshotReceived.connect(self._onSnapshot)
         self.signals.snapshotRequested.connect(self._onSnapshotRequested)
+        self.signals.levelSwitchRequested.connect(self._onLevelSwitchRequested)
         self.signals.operationRejected.connect(self._onOperationRejected)
         self.signals.connected.connect(self._onConnected)
         self.signals.roomInfoChanged.connect(self._onRoomInfoChanged)
@@ -505,7 +510,12 @@ class CollabController(QtCore.QObject):
 
         active = self.is_active
         host = self.is_host
-        may_change_area = (not active) or host or self._clientHasFullRole()
+
+        # A Full client is trusted with the session's level and area, exactly
+        # like the host. The role is what the distinction rests on, not being
+        # the host: an Editor client may change neither.
+        may_lead = (not active) or host or self._clientHasFullRole()
+        may_change_area = may_lead
 
         def enable(name, allowed):
             action = actions.get(name)
@@ -524,13 +534,17 @@ class CollabController(QtCore.QObject):
             action.setToolTip(self._original_tooltips[name] if allowed
                               else _PERMISSION_HINT)
 
-        # Level loading: the host decides, and only by name.
-        enable('newlevel', not active or host)
-        enable('openfromname', not active or host)
+        # Level loading: anyone trusted to lead, and only by name. "Open by
+        # file" stays disabled for everybody in a session, including the host,
+        # because a path outside the patch's stage folder cannot be resolved
+        # from a name on another machine.
+        enable('newlevel', may_lead)
+        enable('openfromname', may_lead)
         enable('openfromfile', not active)
-        enable('openrecent', not active or host)
+        enable('openrecent', may_lead)
 
-        # Game patch: host only.
+        # Game patch: host only, whatever the client's role. Switching patch
+        # reloads spritedata and tilesets under a level the host owns.
         enable('changegamedef', not active or host)
 
         self._setWidgetAllowed(getattr(window, 'patchComboBox', None),
@@ -568,30 +582,145 @@ class CollabController(QtCore.QObject):
         reconcile: every item changed identity at once, which is a resync by any
         other name.
 
-        A client that loads a different level locally is a different situation -
-        it has diverged from the session, and the host is still the authority -
-        so it only reports the fact and asks for the host's level back.
+        A client with the Full role is allowed to do this too, per the agreed
+        permissions, so it announces the change and lets the host redistribute
+        it rather than being pulled back. Asking for a resync here was wrong:
+        the host would answer with a snapshot of the area *it* still had open,
+        which loaded the client's new area and then immediately replaced it -
+        the "switches back" Zement saw.
+
+        A client without that role should not have got here at all, since the
+        controls are disabled; if it does, the host's state still wins.
         """
         if not self.is_active:
             return False
 
-        if not self.is_host:
-            self._appendStatus(
-                'You changed level or area locally; reloading the host\'s.')
-            self._requestResync(force=True)
+        # We are loading this level *because* a peer asked us to. Announcing it
+        # again would bounce it straight back to the sender.
+        if self._suppress_level_notify:
             return False
+
+        if not self.is_host:
+            if not self._clientHasFullRole():
+                self._appendStatus(
+                    'You changed level or area locally; reloading the host\'s.')
+                self._requestResync(force=True)
+                return False
+
+            # Tell the host what to switch everyone to. The host owns
+            # redistribution, so this asks rather than broadcasts.
+            self.client.send(protocol.make_message(
+                protocol.T_AREA_SWITCH, self._levelChangePayload()))
+
+            self._appendStatus('Asked the host to switch to %s.'
+                               % self._describeCurrentLevel())
+            debuglog.log('client', 'requested level change',
+                         level=self._describeCurrentLevel())
+            return True
 
         # The old references are meaningless now.
         self.refmap = sync.RefMap(origin='host', is_authority=True)
         self._seedRefMap()
 
         self.host_session.set_room_info(self._roomInfo())
+
+        # Name the level before sending its contents: a client that receives a
+        # snapshot without knowing which level it belongs to cannot update its
+        # own title bar or file path.
+        self._broadcastLevelChange()
         self._broadcastSnapshot()
 
         level = str(getattr(globals_, 'levelName', '') or 'the level')
         self._appendStatus('Shared %s with everyone.' % level)
         debuglog.log('controller', 'level changed', level=level,
                      refs=self.refmap.size())
+        return True
+
+    def _levelChangePayload(self):
+        """
+        The level and area everyone should move to.
+
+        The level travels as a *name*, never a path: the peers resolve it inside
+        their own patch's stage folder, and a path from another machine is both
+        unusable and a way to point a peer at an arbitrary file.
+        """
+        return {
+            'area': self._areaNumber(),
+            'level': str(getattr(globals_, 'levelName', '') or ''),
+        }
+
+    def _describeCurrentLevel(self):
+        level = str(getattr(globals_, 'levelName', '') or '')
+        area = self._areaNumber()
+        if level:
+            return '%s (area %d)' % (level, area)
+        return 'area %d' % area
+
+    def _onLevelSwitchRequested(self, level, area):
+        """
+        Loads the level and area a peer moved the session to.
+
+        Runs on the main thread. Guarded against loading what we already have,
+        which would otherwise recurse: LoadLevel calls notifyLevelChanged, which
+        is what sent or received this in the first place.
+        """
+        if not self.is_active:
+            return False
+
+        current_level = str(getattr(globals_, 'levelName', '') or '')
+        if level == current_level and area == self._areaNumber():
+            return False
+
+        window = self.window
+        if not hasattr(window, 'LoadLevel'):
+            return False
+
+        self._appendStatus('Loading %s from the session.'
+                           % (level or 'area %d' % area))
+
+        # The suppression flag, not a parameter, because LoadLevel is reached
+        # through several handlers and the recursion has to be blocked wherever
+        # it is called from.
+        self._suppress_level_notify = True
+        try:
+            loaded = window.LoadLevel(level or None, False, area)
+        except Exception as exc:
+            self._appendStatus('That level could not be loaded: %s' % exc)
+            return False
+        finally:
+            self._suppress_level_notify = False
+
+        if not loaded:
+            self._appendStatus(
+                'Could not load %s - check that you have the same patch.'
+                % (level or 'the area'))
+            return False
+
+        # A client now needs the items for the area it just loaded; the host
+        # redistributes to everybody else.
+        if self.is_host:
+            self.refmap = sync.RefMap(origin='host', is_authority=True)
+            self._seedRefMap()
+            self.host_session.set_room_info(self._roomInfo())
+            self._broadcastLevelChange()
+            self._broadcastSnapshot()
+        else:
+            self._requestResync(force=True)
+
+        return True
+
+    def _broadcastLevelChange(self):
+        """
+        Tells every client which level and area the session is now on.
+        """
+        if not self.is_host or self.server is None:
+            return False
+
+        message = protocol.make_message(protocol.T_AREA_SWITCH,
+                                        self._levelChangePayload())
+        for connection in self.server.authenticated_connections():
+            connection.send(message)
+
         return True
 
     def _broadcastSnapshot(self, session_id=''):

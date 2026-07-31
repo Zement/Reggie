@@ -50,6 +50,7 @@ class CollabSignals(QtCore.QObject):
     presenceReceived = QtCore.pyqtSignal(dict, str)    # presence payload, sender
     snapshotReceived = QtCore.pyqtSignal(dict)
     snapshotRequested = QtCore.pyqtSignal(str, int)    # session id, area
+    levelSwitchRequested = QtCore.pyqtSignal(str, int)  # level name, area
     operationRejected = QtCore.pyqtSignal(str)         # reason
 
     # Anything worth showing in the status window that is not chat.
@@ -128,6 +129,15 @@ class CollabBridge(QtCore.QObject):
                 getattr(participant, 'session_id', ''),
                 int(data.get('area', 1) or 1))
 
+        elif kind == 'area_switch':
+            # Loading a level touches the whole editor, so this must reach the
+            # main thread before anything happens.
+            self.signals.statusMessage.emit(
+                '%s is changing the level or area.' % nick)
+            self.signals.levelSwitchRequested.emit(
+                str(data.get('level', '') or ''),
+                int(data.get('area', 1) or 1))
+
         elif kind == 'op_error':
             self.signals.errorOccurred.emit(
                 'A change from %s could not be applied: %s'
@@ -202,6 +212,13 @@ class CollabBridge(QtCore.QObject):
         elif kind == 'op_reject':
             self.signals.operationRejected.emit(
                 data.get('reason', 'The host rejected a change.'))
+
+        elif kind == protocol.T_AREA_SWITCH:
+            # The host moved everyone. Same signal as the host-side request, so
+            # the controller has one place that loads a level.
+            self.signals.levelSwitchRequested.emit(
+                str((data or {}).get('level', '') or ''),
+                int((data or {}).get('area', 1) or 1))
 
         elif kind == protocol.T_OP:
             self.signals.operationReceived.emit(dict(data or {}), '')
