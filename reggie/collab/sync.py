@@ -814,10 +814,12 @@ def _apply_zones(payload, refmap, sprite_format, area):
     attribute dicts in zone order (see encode_zones), and applying means
     updating the existing zones in place.
 
-    Zone *count* changes (adding or deleting a zone) are deliberately not applied
-    remotely: creating a ZoneItem correctly requires the Zones dialog's own
-    bookkeeping, and a half-created zone is worse than a refused op. The host is
-    the only peer that adds or removes zones, and clients resync afterwards.
+    Zone *count* changes are applied too, so a peer adding or deleting a zone is
+    reflected rather than refused. This was deferred in phase 5 on the grounds
+    that building a ZoneItem needs the Zones dialog's own bookkeeping - which is
+    true, and is why _create_zone goes through the editor's CreateZone factory
+    instead of calling the constructor. Refusing was the safe placeholder; it
+    left a client silently holding a different zone set from the host.
     """
     from reggie.core import globals_
 
@@ -829,20 +831,36 @@ def _apply_zones(payload, refmap, sprite_format, area):
     if not isinstance(entries, list):
         raise SyncError('a zones snapshot must be a list')
 
-    zones = list(getattr(globals_.Area, 'zones', []))
+    if len(entries) > protocol.MAX_ZONES:
+        raise SyncError('a zones operation cannot contain more than %d zones'
+                        % protocol.MAX_ZONES)
 
-    if len(entries) != len(zones):
-        raise SyncError('remote zone count differs from the local level; '
-                        'a resync is needed')
+    # Every entry is validated before anything is created or destroyed, so a
+    # malformed op cannot leave the zone set half-changed.
+    for values in entries:
+        if not isinstance(values, dict):
+            raise SyncError('each zone entry must be an object')
+
+    live = getattr(globals_.Area, 'zones', None)
+    if not isinstance(live, list):
+        raise SyncError('this level has no zone list')
+
+    while len(live) > len(entries):
+        _destroy_zone(live.pop())
+
+    while len(live) < len(entries):
+        created = _create_zone(len(live))
+        if created is None:
+            raise SyncError('a zone could not be created for this operation')
+        live.append(created)
+
+    zones = list(live)
 
     from reggie.core.undo import _ZONE_ATTRS
 
     allowed = set(_ZONE_ATTRS)
 
     for zone, values in zip(zones, entries):
-        if not isinstance(values, dict):
-            raise SyncError('each zone entry must be an object')
-
         for name, value in values.items():
             if name not in allowed:
                 raise SyncError('zone attribute %r is not editable' % (name,))
@@ -857,8 +875,7 @@ def _apply_zones(payload, refmap, sprite_format, area):
         zone.setPos(zone.objx * 1.5, zone.objy * 1.5)
         zone.UpdateTitle()
 
-    for sprite in getattr(globals_.Area, 'sprites', []):
-        sprite.ImageObj.positionChanged()
+    _refresh_after_zone_change(zones)
 
     return {'kind': 'zones', 'items': zones}
 
@@ -1503,9 +1520,23 @@ def _apply_snapshot_zones(zone_states, area=None):
     if not isinstance(zones, list):
         return False
 
-    if len(zones) != len(zone_states):
-        # Nothing sensible to do positionally. The level still loads.
-        return False
+    if len(zone_states) > protocol.MAX_ZONES:
+        raise SyncError('a snapshot cannot contain more than %d zones'
+                        % protocol.MAX_ZONES)
+
+    # Match the host's zone count before applying attributes. Previously a
+    # mismatch was skipped entirely, which left a client holding the zones of
+    # whatever level it had open - visibly wrong, and silently so.
+    while len(zones) > len(zone_states):
+        _destroy_zone(zones.pop())
+
+    while len(zones) < len(zone_states):
+        created = _create_zone(len(zones))
+        if created is None:
+            # Cannot build one here (no main window). Apply what we can to the
+            # zones that do exist rather than failing the whole snapshot.
+            break
+        zones.append(created)
 
     allowed = set(_ZONE_ATTRS)
 
@@ -1522,12 +1553,101 @@ def _apply_snapshot_zones(zone_states, area=None):
                 setattr(zone, attr, value)
 
         try:
+            zone.prepareGeometryChange()
             zone.UpdateRects()
+            zone.setPos(zone.objx * 1.5, zone.objy * 1.5)
+            zone.UpdateTitle()
             zone.update()
         except Exception:
             pass
 
+    _refresh_after_zone_change(zones)
     return True
+
+
+def _create_zone(index):
+    """
+    Builds a new ZoneItem for a snapshot, or None when there is no editor.
+
+    Uses the editor's own CreateZone factory rather than calling ZoneItem
+    directly. The constructor takes sixteen positional arguments plus three
+    lookup-table arguments (boundings/bgA/bgB) whose only purpose is to find the
+    values that _ZONE_ATTRS carries anyway - so building one by hand would mean
+    reproducing a defaults table that already exists in exactly one place.
+
+    add_to_scene=False because the caller owns the zones list; this only needs
+    the object.
+    """
+    from reggie.core import globals_
+
+    window = getattr(globals_, 'mainWindow', None)
+    factory = getattr(window, 'CreateZone', None) if window is not None else None
+    if not callable(factory):
+        return None
+
+    try:
+        zone = factory(0, 0, id_=index + 1, add_to_scene=False)
+    except Exception:
+        return None
+
+    if zone is not None and getattr(window, 'scene', None) is not None:
+        try:
+            window.scene.addItem(zone)
+        except Exception:
+            pass
+
+    return zone
+
+
+def _destroy_zone(zone):
+    """
+    Takes a zone the host no longer has out of the scene.
+
+    The object itself is dropped: unlike an item removal, a zone that has gone
+    from a snapshot is not held by an undo command on this peer, because remote
+    work never enters the local stack.
+    """
+    from reggie.core import globals_
+
+    window = getattr(globals_, 'mainWindow', None)
+    if window is None or getattr(window, 'scene', None) is None:
+        return
+
+    try:
+        window.scene.removeItem(zone)
+    except Exception:
+        pass
+
+
+def _refresh_after_zone_change(zones):
+    """
+    Post-zone bookkeeping, mirroring ZonesSnapshotCommand._apply.
+
+    Sprite images are anchored to zones, and the Backgrounds action is only
+    meaningful when a zone exists - both go stale if a snapshot changes the zone
+    set without saying so.
+    """
+    from reggie.core import globals_
+
+    window = getattr(globals_, 'mainWindow', None)
+    if window is None:
+        return
+
+    area = getattr(globals_, 'Area', None)
+    for sprite in getattr(area, 'sprites', []) or []:
+        image = getattr(sprite, 'ImageObj', None)
+        if image is not None:
+            try:
+                image.positionChanged()
+            except Exception:
+                pass
+
+    actions = getattr(window, 'actions', None)
+    if isinstance(actions, dict) and 'backgrounds' in actions:
+        try:
+            actions['backgrounds'].setEnabled(len(zones) > 0)
+        except Exception:
+            pass
 
 
 def _clear_area_items(area=None):
