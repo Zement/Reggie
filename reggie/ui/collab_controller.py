@@ -1705,6 +1705,13 @@ class CollabController(QtCore.QObject):
         patch_id = requirement['patch_id']
 
         if source == files.SOURCE_LOCAL:
+            # Having the patch and *using* it are different questions, and only
+            # the first one patch_requirement answers. A client that owns the
+            # host's patch but has another one loaded is exactly the state
+            # SOURCE_LOCAL reports as fine, so returning here left the client
+            # sitting on the wrong game the whole session - including after a
+            # mid-session switch, where it is the only thing that had changed.
+            self._switchToPatch(patch_id)
             return
 
         self._appendStatus(requirement['message'])
@@ -1726,6 +1733,20 @@ class CollabController(QtCore.QObject):
             self._leaveOverPatch(
                 'You cannot join without the %s patch.' % patch_id
                 if patch_id else 'The required patch is not available.')
+
+    def _switchToPatch(self, patch_id):
+        """
+        Loads the patch the session uses, if it is not already loaded.
+
+        Handles the retail direction too: patch_id is '' for the base game, and
+        a host switching *back* to retail has to move the client back as well.
+        Without that the client stays on the last patch it was told about, which
+        is the same bug in the other direction.
+        """
+        if self._patchId() == patch_id:
+            return
+
+        self._reloadPatch(patch_id)
 
     def _startPatchTransfer(self, patch_id):
         """
@@ -1992,33 +2013,56 @@ class CollabController(QtCore.QObject):
 
         self._failTransfer(error or 'The host stopped the transfer.')
 
-    def _reloadPatch(self, patch_id):
+    def _reloadPatch(self, patch_id, folder=''):
         """
-        Switches the editor to the patch that was just installed.
+        Switches the editor to a patch, or to retail when patch_id is ''.
 
-        LoadGameDef takes the gamedef *folder* name, not the patch id - the id
-        is the name declared inside main.xml, and the two are routinely
+        loadNewGameDef takes the gamedef *folder* name, not the patch id - the
+        id is the name declared inside main.xml, and the two are routinely
         different ('Newer Super Mario Bros. Wii' lives in NewerSMBW). Passing
         the id would find no such folder and silently fall back to retail, which
-        looks like the transfer having done nothing.
+        looks like nothing having happened. `folder` may be given explicitly;
+        None means retail, which is what a gamedef of None loads.
 
-        Best-effort and non-fatal: the files are on disk either way, so a reload
+        Best-effort and non-fatal: the files are on disk either way, so a load
         that does not take is a restart away from being right, and killing the
         session over it would throw away the user's work.
-        """
-        folder = self._patchFolderName(patch_id)
 
-        if folder:
+        Loading a gamedef reloads tilesets and sprite data, so this must run on
+        the main thread - it does, because every caller is a slot.
+        """
+        retail = not patch_id
+        if folder == '':
+            folder = None if retail else self._patchFolderName(patch_id)
+
+        name = 'the retail game' if retail else '%s patch' % patch_id
+
+        if retail or folder:
             try:
-                from reggie.io.gamedef import LoadGameDef
-                LoadGameDef(folder)
-                self._appendStatus('Switched to the %s patch.' % patch_id)
-                return
+                from reggie.io.gamedef import loadNewGameDef
+                with _BusyIndicator(self.window, 'Loading %s...' % name):
+                    # A gamedef of None is retail; see ReggieGameDefinition's
+                    # NoneTypes check.
+                    loaded = loadNewGameDef(folder)
+
+                if loaded:
+                    self._appendStatus('Switched to %s.' % name)
+                    return
+
+                debuglog.log('client', 'gamedef load refused',
+                             patch_id=patch_id, folder=str(folder))
             except Exception as exc:
                 debuglog.log('client', 'patch reload failed', error=str(exc))
 
+        if retail:
+            self._appendStatus(
+                'Could not switch to the retail game. Switch manually to stay '
+                'in sync with the host.')
+            return
+
         self._appendStatus(
-            'The %s patch is installed. Restart Reggie to use it.' % patch_id)
+            'The %s patch is installed but could not be loaded. Switch to it '
+            'manually to stay in sync with the host.' % patch_id)
 
     @staticmethod
     def _patchFolderName(patch_id):
