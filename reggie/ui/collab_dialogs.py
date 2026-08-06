@@ -37,6 +37,16 @@ CURSORS_ALWAYS = 'always'
 CURSORS_ON_MOVE = 'onmove'
 CURSORS_NEVER = 'never'
 
+# Where a client may get a patch it does not have. Read on the CLIENT only -
+# the host never consults it, because it is the client deciding what it is
+# willing to accept.
+#
+# PATCH_SOURCE_AUTO is the default and the sensible behaviour: try the catalog,
+# fall back to the host. The original two values read as a preference order but
+# behaved as an exclusive choice, so picking "From the Patch Manager" silently
+# forbade the host transfer entirely - which is how Zement's first data-only
+# test was refused with a message blaming the host.
+PATCH_SOURCE_AUTO = 'auto'
 PATCH_SOURCE_CATALOG = 'catalog'
 PATCH_SOURCE_HOST = 'host'
 
@@ -91,13 +101,14 @@ _FALLBACKS = {
     17: 'Remove ban',
     18: 'Show other users\' cursors',
     19: 'Show other users\' clicks',
-    20: 'Download game patches',
+    20: 'Get a missing patch (as a client)',
     21: 'Nickname colour',
     22: 'Always',
     23: 'Only while moving items',
     24: 'Never',
-    25: 'From the Patch Manager',
-    26: 'From the host (data files only)',
+    25: 'Only from the Patch Manager',
+    26: 'Only from the host (data files only)',
+    27: 'Patch Manager, then the host (recommended)',
 }
 
 
@@ -115,8 +126,7 @@ def load_collab_settings():
                  or session.DEFAULT_NICK_COLORS[0],
         'cursors': str(setting('CollabCursors', '') or '') or CURSORS_ON_MOVE,
         'clicks': bool(setting('CollabClicks', True)),
-        'patch_source': str(setting('CollabPatchSource', '') or '')
-                        or PATCH_SOURCE_CATALOG,
+        'patch_source': _patch_source_setting(),
         'discoverable': bool(setting('CollabDiscoverable', False)),
         'upnp': bool(setting('CollabUPnP', False)),
         'port': int(setting('CollabPort', identity.DEFAULT_HOST_PORT) or
@@ -126,13 +136,36 @@ def load_collab_settings():
     }
 
 
+def _patch_source_setting():
+    """
+    The stored patch source, migrating the value the old two-way choice wrote.
+
+    'catalog' used to be the default and meant "prefer the catalog", but it was
+    read as an exclusive choice and forbade a host transfer even for a patch the
+    catalog does not have. Anyone who never touched the setting therefore has
+    'catalog' stored while having chosen nothing, so it is migrated to AUTO,
+    which is what that default was meant to mean. A deliberate choice is kept:
+    it is only distinguishable from the default by having been written since,
+    which is why the migration is one-way and the new values are never rewritten.
+    """
+    stored = str(setting('CollabPatchSource', '') or '')
+
+    if stored == PATCH_SOURCE_CATALOG and not setting('CollabPatchSourceV2', False):
+        return PATCH_SOURCE_AUTO
+
+    return stored or PATCH_SOURCE_AUTO
+
+
 def save_collab_settings(values):
     setSetting('CollabNick', values.get('nick', DEFAULT_NICK))
     setSetting('CollabColor', values.get('color', ''))
     setSetting('CollabCursors', values.get('cursors', CURSORS_ON_MOVE))
     setSetting('CollabClicks', bool(values.get('clicks', True)))
     setSetting('CollabPatchSource', values.get('patch_source',
-                                               PATCH_SOURCE_CATALOG))
+                                               PATCH_SOURCE_AUTO))
+    # Marks the stored value as written by the three-way control, so a
+    # deliberate "Only from the Patch Manager" is never migrated to AUTO.
+    setSetting('CollabPatchSourceV2', True)
     setSetting('CollabDiscoverable', bool(values.get('discoverable', False)))
     setSetting('CollabUPnP', bool(values.get('upnp', False)))
     setSetting('CollabPort', int(values.get('port', identity.DEFAULT_HOST_PORT)))
@@ -869,16 +902,18 @@ class CollabSettingsTab(QtWidgets.QWidget):
         self.clicks.setChecked(values['clicks'])
 
         self.patchSource = QtWidgets.QComboBox()
+        self.patchSource.addItem(_tr(27), PATCH_SOURCE_AUTO)
         self.patchSource.addItem(_tr(25), PATCH_SOURCE_CATALOG)
         self.patchSource.addItem(_tr(26), PATCH_SOURCE_HOST)
         self.patchSource.setCurrentIndex(
             max(0, self.patchSource.findData(values['patch_source'])))
 
         patchHint = QtWidgets.QLabel(
-            'The Patch Manager is preferred: its files come from the catalog, '
-            'not from another player. A host transfer is only offered for '
-            'patches the catalog does not have, always asks first, and never '
-            'accepts program code.')
+            'This is your own choice as a client - it has no effect while you '
+            'are hosting. The Patch Manager is preferred where it has the '
+            'patch: its files come from the catalog rather than from another '
+            'player. A host transfer always asks first and never accepts '
+            'program code, so custom sprite previews are not included.')
         patchHint.setWordWrap(True)
 
         self.banList = QtWidgets.QListWidget()
@@ -946,7 +981,7 @@ class CollabSettingsTab(QtWidgets.QWidget):
             'color': self.color.currentData() or session.DEFAULT_NICK_COLORS[0],
             'cursors': self.cursors.currentData() or CURSORS_ON_MOVE,
             'clicks': self.clicks.isChecked(),
-            'patch_source': self.patchSource.currentData() or PATCH_SOURCE_CATALOG,
+            'patch_source': self.patchSource.currentData() or PATCH_SOURCE_AUTO,
             'debug_log': self.debugLog.isChecked(),
             'firewall_prompt': self.firewallPrompt.isChecked(),
         }

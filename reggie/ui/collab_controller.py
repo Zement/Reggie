@@ -1694,11 +1694,20 @@ class CollabController(QtCore.QObject):
             return
 
         catalog = _catalog_manager()
-        allow_host = (self.settings.get('patch_source')
-                      == collab_dialogs.PATCH_SOURCE_HOST)
+
+        # The client's own choice of where a missing patch may come from. AUTO
+        # permits both and is the default; the other two are exclusive. The
+        # host never consults this - it is the client deciding what it accepts.
+        source_setting = (self.settings.get('patch_source')
+                          or collab_dialogs.PATCH_SOURCE_AUTO)
+        allow_catalog = source_setting in (collab_dialogs.PATCH_SOURCE_AUTO,
+                                           collab_dialogs.PATCH_SOURCE_CATALOG)
+        allow_host = source_setting in (collab_dialogs.PATCH_SOURCE_AUTO,
+                                        collab_dialogs.PATCH_SOURCE_HOST)
 
         requirement = files.patch_requirement(room_info, catalog,
                                               allow_host_transfer=allow_host,
+                                              allow_catalog=allow_catalog,
                                               extra_dirs=_external_patch_dirs())
 
         source = requirement['source']

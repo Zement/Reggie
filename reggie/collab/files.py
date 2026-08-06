@@ -564,7 +564,7 @@ class TransferSession:
 # ---------------------------------------------------------------------------
 
 def patch_requirement(room_info, catalog=None, allow_host_transfer=True,
-                      base_dir='', extra_dirs=()):
+                      base_dir='', extra_dirs=(), allow_catalog=True):
     """
     Works out whether the client can join, and how the patch should be obtained.
 
@@ -583,6 +583,13 @@ def patch_requirement(room_info, catalog=None, allow_host_transfer=True,
     `source` is one of SOURCE_LOCAL / SOURCE_CATALOG / SOURCE_HOST /
     SOURCE_UNAVAILABLE. The preference order is the spec's: local, then the
     Patch Manager, then a consent-gated host transfer.
+
+    `allow_catalog` and `allow_host_transfer` are the client's own permissions,
+    and both default to True so the full preference order applies. They are
+    separate flags rather than one choice because the three useful settings are
+    "try both", "catalog only" and "host only" - with a single flag, choosing
+    the catalog silently forbade the host transfer even when the patch was not
+    in the catalog at all.
     """
     patch_id = str((room_info or {}).get('patch_id', '') or '')
     patch_version = str((room_info or {}).get('patch_version', '') or '')
@@ -644,9 +651,11 @@ def patch_requirement(room_info, catalog=None, allow_host_transfer=True,
                            % (patch_id, installed_version),
             }
 
-        # Version differs. Prefer the catalog, since it is the trusted source.
+        # Version differs. Prefer the catalog, since it is the trusted source -
+        # but only where the client's settings permit it.
         return {
-            'source': (SOURCE_CATALOG if _in_catalog(catalog, patch_id)
+            'source': (SOURCE_CATALOG
+                       if (allow_catalog and _in_catalog(catalog, patch_id))
                        else (SOURCE_HOST if allow_host_transfer
                              else SOURCE_UNAVAILABLE)),
             'patch_id': patch_id,
@@ -656,7 +665,7 @@ def patch_requirement(room_info, catalog=None, allow_host_transfer=True,
                         % (patch_id, installed_version, patch_version)),
         }
 
-    if _in_catalog(catalog, patch_id):
+    if allow_catalog and _in_catalog(catalog, patch_id):
         return {
             'source': SOURCE_CATALOG,
             'patch_id': patch_id,
@@ -672,19 +681,28 @@ def patch_requirement(room_info, catalog=None, allow_host_transfer=True,
             'patch_id': patch_id,
             'patch_version': patch_version,
             'reason': NEED_MISSING,
-            'message': ('You do not have the %s patch and it is not in the '
-                        'Patch Manager catalog. The host can send its data '
-                        'files, with your permission.' % patch_id),
+            'message': ('You do not have the %s patch. The host can send its '
+                        'data files, with your permission.' % patch_id),
         }
+
+    # Nothing is permitted. Say which choice caused it rather than blaming the
+    # host: the setting is the *client's*, and the first message here read as
+    # though the host had refused something it was never asked.
+    if allow_catalog:
+        message = ('You do not have the %s patch, and it is not in the Patch '
+                   'Manager catalog. To accept it from the host instead, '
+                   'change "Get a missing patch" in Preferences.' % patch_id)
+    else:
+        message = ('You do not have the %s patch, and your settings do not '
+                   'allow getting it. Change "Get a missing patch" in '
+                   'Preferences.' % patch_id)
 
     return {
         'source': SOURCE_UNAVAILABLE,
         'patch_id': patch_id,
         'patch_version': patch_version,
         'reason': NEED_MISSING,
-        'message': ('You do not have the %s patch, and downloading from the '
-                    'host is turned off. Install it from the Patch Manager or '
-                    'ask the host for it.' % patch_id),
+        'message': message,
     }
 
 
