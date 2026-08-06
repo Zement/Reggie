@@ -1006,6 +1006,55 @@ def confirm_patch_transfer(parent, entries, host_nick, patch_id):
     return box.exec() == QtWidgets.QMessageBox.StandardButton.Yes
 
 
+def confirm_catalog_install(parent, patch_id, patch_version=''):
+    """
+    The consent prompt before installing a patch from the Patch Manager catalog.
+
+    Separate from confirm_patch_transfer, and required where that one is not,
+    because the two are different acts. Accepting data files from the host means
+    trusting a peer already authenticated by the pinned join code. Installing
+    from the catalog reaches out to a *third party* the user has not vouched for
+    in this session, over the internet, and writes an unpacked archive - so it
+    is asked for explicitly even though it is the more "official" route.
+
+    Declining ends the session (the client cannot hold the same level state
+    without the patch), and the prompt says so rather than letting the
+    disconnect look like a fault.
+    """
+    box = QtWidgets.QMessageBox(parent)
+    box.setWindowTitle(_tr(0))
+    box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+    box.setText('Install the %s patch?' % patch_id)
+    box.setInformativeText(
+        'This session uses %s%s, which you do not have. It can be downloaded '
+        'and installed from the Patch Manager.\n\n'
+        'If you decline, you will leave the session.'
+        % (patch_id,
+           (' version %s' % patch_version) if patch_version else ''))
+    box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes
+                           | QtWidgets.QMessageBox.StandardButton.No)
+    box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
+
+    return box.exec() == QtWidgets.QMessageBox.StandardButton.Yes
+
+
+def report_patch_unavailable(parent, message):
+    """
+    Reports that the session's patch could not be obtained, so the session ended.
+
+    Shown as information rather than a warning: declining an install is a
+    legitimate choice, not a fault, and the common path to here is the user
+    having just clicked No.
+    """
+    box = QtWidgets.QMessageBox(parent)
+    box.setWindowTitle(_tr(0))
+    box.setIcon(QtWidgets.QMessageBox.Icon.Information)
+    box.setText('You have left the session.')
+    box.setInformativeText(message)
+    box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
+    box.exec()
+
+
 def report_pin_mismatch(parent, message):
     """
     Reports a certificate pin mismatch.

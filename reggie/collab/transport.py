@@ -83,6 +83,17 @@ PRESENCE_BURST = 80.0
 CONTROL_PER_SECOND = 20.0
 CONTROL_BURST = 60.0
 
+# File transfer. Sized for the receiving side, which is the busy one: a request
+# is one message per file, but the chunks answering it are one per 256 KiB, so a
+# 9.4 MiB patch is ~535 requests and rather more chunks. At 200/s a real patch
+# moves in a few seconds on a LAN instead of being throttled to a crawl.
+#
+# The manifest, not this bucket, is what bounds a transfer: files and total
+# bytes are both capped before the first request, so this only governs how fast
+# an already-bounded transfer may go.
+TRANSFER_PER_SECOND = 200.0
+TRANSFER_BURST = 400.0
+
 # Liveness.
 PING_INTERVAL_SECONDS = 15.0
 PEER_TIMEOUT_SECONDS = 60.0
@@ -176,6 +187,7 @@ class MessageRateLimiter:
             'op': TokenBucket(OPS_PER_SECOND, OPS_BURST, clock),
             'chat': TokenBucket(CHAT_PER_SECOND, CHAT_BURST, clock),
             'presence': TokenBucket(PRESENCE_PER_SECOND, PRESENCE_BURST, clock),
+            'transfer': TokenBucket(TRANSFER_PER_SECOND, TRANSFER_BURST, clock),
             'control': TokenBucket(CONTROL_PER_SECOND, CONTROL_BURST, clock),
         }
         self.warnings = 0
@@ -188,6 +200,21 @@ class MessageRateLimiter:
             return 'chat'
         if msg_type == protocol.T_PRESENCE:
             return 'presence'
+        if msg_type in (protocol.T_FILE_REQ, protocol.T_PATCH_NEED,
+                        protocol.T_FILE_DONE, protocol.T_MANIFEST,
+                        protocol.T_FILE_CHUNK):
+            # A transfer fetches one file per message, and a real patch is ~530
+            # files. Under the control budget (20/s, burst 60) an honest client
+            # collecting a patch as fast as it can would trip the limiter and be
+            # disconnected part-way through - the limiter would be enforcing a
+            # rate no legitimate transfer can stay under, which is a bug in the
+            # limit rather than in the client.
+            #
+            # This bucket is still a bucket: the real bound on a transfer is the
+            # manifest, which caps files and total bytes and is fixed before the
+            # first request. A peer cannot use this budget to fetch more than it
+            # was offered, only to fetch it sooner.
+            return 'transfer'
         return 'control'
 
     def check(self, msg_type):
@@ -673,6 +700,16 @@ class Connection:
                 self.close('rate limit exceeded')
                 return False
             if verdict == 'warn':
+                # Dropping a chat line or a presence update costs nothing: the
+                # next one supersedes it. Dropping a transfer message costs the
+                # whole transfer, because a chunk that never arrives is never
+                # resent and the receiver waits for it forever - a silent hang
+                # rather than a failure. So a throttled transfer is ended
+                # loudly instead.
+                if MessageRateLimiter.classify(msg_type) == 'transfer':
+                    self.close('transfer rate limit exceeded')
+                    return False
+
                 self.send_type(protocol.T_CHAT, {
                     'text': 'You are sending messages too quickly; slow down.',
                     'kind': 'system',

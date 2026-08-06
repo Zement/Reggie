@@ -203,6 +203,7 @@ class HostSession:
         self._participants = {}        # session_id -> Participant
         self._by_connection = {}       # id(connection) -> Participant
         self._nonces = {}              # id(connection) -> nonce
+        self._transfers = {}           # session_id -> offered manifest state
         self._color_cursor = 0
         self._revision = 0
 
@@ -534,11 +535,14 @@ class HostSession:
             protocol.T_PRESENCE: self._handle_presence,
             protocol.T_SNAPSHOT_REQUEST: self._handle_snapshot_request,
             protocol.T_AREA_SWITCH: self._handle_area_switch,
+            protocol.T_PATCH_NEED: self._handle_patch_need,
+            protocol.T_FILE_REQ: self._handle_file_req,
+            protocol.T_FILE_DONE: self._handle_file_done,
         }.get(msg_type)
 
         if handler is None:
-            # A known type with no host-side handler yet (patch_need, file_req,
-            # file_done - phase 6). Report it so nothing is silently swallowed.
+            # A known type the host has no handler for. Report it so nothing is
+            # silently swallowed.
             self._emit('unhandled', {'type': msg_type, 'participant': participant})
             return
 
@@ -782,6 +786,158 @@ class HostSession:
             'area': message['p'].get('area', 1),
         })
 
+    # -- patch transfer -----------------------------------------------------
+    #
+    # This module decides *whether* a file may be sent and to whom; it never
+    # touches the filesystem. Building the manifest and reading chunks is
+    # files.py, driven by the owner (the controller), exactly as ops are applied
+    # by sync.py rather than here. Two reasons: reading a patch directory from a
+    # transport reader thread would block the session's own message loop, and
+    # keeping policy free of I/O is what makes it testable without a disk.
+    #
+    # The authorisation rule is a single sentence: a participant may fetch a
+    # file only if that exact path is in the manifest the host sent *to that
+    # participant*. Everything else follows from it - the sprites.py exclusion
+    # holds because the manifest never lists it, and a path-traversal attempt
+    # cannot match a manifest entry no matter how it is spelled.
+
+    def offered_paths(self, session_id):
+        """
+        The paths currently offered to one participant, as a frozenset.
+
+        Empty when no transfer is in flight, which is the fail-closed default:
+        a file_req arriving before or after a manifest matches nothing.
+        """
+        with self._lock:
+            state = self._transfers.get(session_id)
+            return frozenset(state['paths']) if state else frozenset()
+
+    def offered_patch(self, session_id):
+        """
+        The patch id a participant's current offer was built from, or ''.
+
+        Needed because the host can switch patch mid-transfer. Serving a later
+        request from whatever patch is loaded *now* would send files that do not
+        match the manifest the client is verifying against, so it would fail on
+        a hash mismatch - a corruption error for what is really a stale offer.
+        The sender reads from the patch it offered, and the offer is what ends.
+        """
+        with self._lock:
+            state = self._transfers.get(session_id)
+            return state['patch_id'] if state else ''
+
+    def record_manifest(self, session_id, patch_id, paths):
+        """
+        Records what the host is offering a participant, so later file_reqs can
+        be checked against it. Called by the owner after it builds a manifest.
+
+        Replaces any previous offer for that participant: a peer gets one
+        transfer at a time, and a second manifest supersedes the first rather
+        than widening what the first allowed.
+        """
+        with self._lock:
+            self._transfers[session_id] = {
+                'patch_id': str(patch_id or ''),
+                'paths': set(str(p) for p in (paths or ())),
+                'started': time.monotonic(),
+                'sent': 0,
+            }
+
+    def clear_transfer(self, session_id):
+        with self._lock:
+            return self._transfers.pop(session_id, None) is not None
+
+    def _handle_patch_need(self, participant, message):
+        """
+        A client saying it does not have the host's patch.
+
+        The client names the patch it wants, and that name is checked against
+        the host's own rather than used: it selects, it does not address. If it
+        addressed anything, a client could ask for a manifest of a directory the
+        host never offered - which is the whole class of bug the fork had in
+        _GetTilesetDownloadPath.
+        """
+        payload = message['p']
+        wanted = str(payload.get('patch_id', '') or '')
+        current = str(self.room_info.get('patch_id', '') or '')
+
+        if not current:
+            self._refuse_transfer(participant,
+                                  'This session does not use a patch.')
+            return
+
+        if wanted and wanted != current:
+            # Not an error the user needs to see; it means the client is out of
+            # date about which patch the session uses, and it will re-ask when
+            # the room_info it has not processed yet arrives.
+            self._refuse_transfer(
+                participant,
+                'This session uses %s, not %s.' % (current, wanted))
+            return
+
+        debuglog.log('host', 'patch_need', nick=participant.nick,
+                     patch_id=current)
+
+        self._emit('patch_need', {
+            'participant': participant,
+            'patch_id': current,
+        })
+
+    def _handle_file_req(self, participant, message):
+        """
+        A client asking for one file from the manifest it was sent.
+        """
+        path = str(message['p'].get('path', '') or '')
+        offered = self.offered_paths(participant.session_id)
+
+        if path not in offered:
+            # Counted like a rejected op, so a peer probing for files shows up
+            # in the roster rather than only in a log nobody reads.
+            participant.rejected_ops += 1
+            debuglog.log('host', 'file_req REFUSED', nick=participant.nick,
+                         path=path, offered=len(offered))
+            self._refuse_transfer(
+                participant,
+                'That file was not offered.' if offered else
+                'No transfer is in progress.')
+            self._emit('file_denied', {'participant': participant, 'path': path})
+            return
+
+        with self._lock:
+            state = self._transfers.get(participant.session_id)
+            if state is not None:
+                state['sent'] += 1
+
+        self._emit('file_req', {'participant': participant, 'path': path})
+
+    def _handle_file_done(self, participant, message):
+        payload = message['p']
+        ok = bool(payload.get('ok', True))
+        error = str(payload.get('error', '') or '')
+
+        self.clear_transfer(participant.session_id)
+        debuglog.log('host', 'file_done', nick=participant.nick, ok=ok,
+                     error=error)
+
+        self._emit('file_done', {
+            'participant': participant,
+            'ok': ok,
+            'error': error,
+        })
+
+    def _refuse_transfer(self, participant, reason):
+        """
+        Ends a transfer attempt with a reason the client can show.
+
+        Uses T_FILE_DONE rather than a bespoke type because that is already the
+        "this transfer is over" message in both directions, and a client that
+        has to handle one terminator instead of two cannot forget the second.
+        """
+        connection = participant.connection
+        if connection is None:
+            return
+        connection.send_type(protocol.T_FILE_DONE, {'ok': False, 'error': reason})
+
     # -- host actions -------------------------------------------------------
 
     def set_role(self, session_id, role):
@@ -879,6 +1035,10 @@ class HostSession:
     def _remove(self, participant):
         with self._lock:
             self._participants.pop(participant.session_id, None)
+            # A dropped peer's offer dies with it. Leaving it would let a
+            # rejoining peer inherit an offer it never consented to, and session
+            # ids are fresh per join so the entry could never be reclaimed.
+            self._transfers.pop(participant.session_id, None)
             if participant.connection is not None:
                 self._by_connection.pop(id(participant.connection), None)
 
@@ -1010,6 +1170,22 @@ class ClientSession:
 
         elif msg_type == protocol.T_OP_REJECT:
             self._emit('op_reject', payload)
+
+        elif msg_type == protocol.T_MANIFEST:
+            # Named explicitly rather than left to the generic branch below,
+            # because the three transfer messages have to arrive under stable
+            # event names for the controller to drive a transfer at all. The
+            # generic branch would emit them under their wire type, which works
+            # by coincidence and breaks the moment a type is renamed.
+            self._emit('manifest', payload)
+
+        elif msg_type == protocol.T_FILE_CHUNK:
+            self._emit('file_chunk', payload)
+
+        elif msg_type == protocol.T_FILE_DONE:
+            # The host also uses file_done to refuse a transfer, so this is not
+            # only the success path.
+            self._emit('file_done', payload)
 
         elif msg_type == protocol.T_PRESENCE:
             # Presence needs its sender, and the generic branch below drops it:

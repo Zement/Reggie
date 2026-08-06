@@ -53,6 +53,14 @@ class CollabSignals(QtCore.QObject):
     levelSwitchRequested = QtCore.pyqtSignal(str, int)  # level name, area
     operationRejected = QtCore.pyqtSignal(str)         # reason
 
+    # Patch transfer. Host side: a peer needs the patch, or wants one file of
+    # it. Client side: the manifest arrived, a chunk arrived, the host finished.
+    patchNeeded = QtCore.pyqtSignal(str, str)          # session id, patch id
+    fileRequested = QtCore.pyqtSignal(str, str)        # session id, path
+    manifestReceived = QtCore.pyqtSignal(dict)
+    fileChunkReceived = QtCore.pyqtSignal(dict)
+    transferFinished = QtCore.pyqtSignal(bool, str)    # ok, error
+
     # Anything worth showing in the status window that is not chat.
     statusMessage = QtCore.pyqtSignal(str)
     errorOccurred = QtCore.pyqtSignal(str)
@@ -142,6 +150,37 @@ class CollabBridge(QtCore.QObject):
             self.signals.errorOccurred.emit(
                 'A change from %s could not be applied: %s'
                 % (nick, data.get('error', '')))
+
+        elif kind == 'patch_need':
+            # Building a manifest walks the patch directory, so it belongs on
+            # the main thread with the rest of the file work - the same reason
+            # snapshot_request is a signal rather than a direct call.
+            self.signals.statusMessage.emit(
+                '%s needs the %s patch.' % (nick, data.get('patch_id', '')))
+            self.signals.patchNeeded.emit(
+                getattr(participant, 'session_id', ''),
+                str(data.get('patch_id', '') or ''))
+
+        elif kind == 'file_req':
+            self.signals.fileRequested.emit(
+                getattr(participant, 'session_id', ''),
+                str(data.get('path', '') or ''))
+
+        elif kind == 'file_denied':
+            # A peer asking for something outside its manifest. Shown, not
+            # hidden: it is either a bug or a probe, and both are worth seeing.
+            self.signals.statusMessage.emit(
+                '%s asked for a file that was not offered (%s).'
+                % (nick, data.get('path', '')))
+
+        elif kind == 'file_done':
+            if data.get('ok', True):
+                self.signals.statusMessage.emit(
+                    '%s finished downloading the patch.' % nick)
+            else:
+                self.signals.statusMessage.emit(
+                    "%s could not download the patch: %s"
+                    % (nick, data.get('error', 'unknown error')))
 
     def on_host_roster(self, participants):
         self.signals.rosterChanged.emit(
@@ -234,6 +273,19 @@ class CollabBridge(QtCore.QObject):
 
         elif kind == protocol.T_SNAPSHOT:
             self.signals.snapshotReceived.emit(dict(data or {}))
+
+        elif kind == 'manifest':
+            self.signals.manifestReceived.emit(dict(data or {}))
+
+        elif kind == 'file_chunk':
+            self.signals.fileChunkReceived.emit(dict(data or {}))
+
+        elif kind == 'file_done':
+            # Sent by the host both to refuse a transfer and to end one, so the
+            # 'ok' flag is what distinguishes them, not the arrival.
+            self.signals.transferFinished.emit(
+                bool((data or {}).get('ok', True)),
+                str((data or {}).get('error', '') or ''))
 
     def on_client_disconnect(self, connection, reason):
         self.signals.disconnected.emit(reason or 'The connection closed.')

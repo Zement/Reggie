@@ -236,6 +236,12 @@ _HOST_SENDABLE = frozenset({
     T_KICK, T_BANNED, T_CHAT, T_PING, T_PONG, T_BYE,
     T_SNAPSHOT, T_OP, T_OP_REJECT, T_AREA_SWITCH, T_PRESENCE,
     T_ROOM_INFO, T_MANIFEST, T_FILE_CHUNK,
+
+    # T_FILE_DONE travels both ways: a client reports the outcome of a transfer
+    # with it, and the host uses it to end one it is refusing. Giving a refusal
+    # its own type would mean a client had two terminators to handle and could
+    # forget the second, leaving a transfer that never finishes.
+    T_FILE_DONE,
 })
 
 KNOWN_TYPES = _CLIENT_SENDABLE | _HOST_SENDABLE

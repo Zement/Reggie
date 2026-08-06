@@ -167,6 +167,15 @@ class CollabController(QtCore.QObject):
         # The viewport rectangle last reported, for the same reason.
         self._last_view_rect = None
 
+        # Patch transfer (client side). `_transfer` is a files.TransferSession
+        # while one is running; `_transfer_patch` is what it is collecting, kept
+        # separately because the session is discarded before the install and the
+        # id is still needed to report and reload.
+        self._transfer = None
+        self._transfer_patch = ''
+        self._transfer_queue = []
+        self._transfer_destination = ''
+
         self._connect_signals()
 
     # -- signal wiring ------------------------------------------------------
@@ -187,6 +196,11 @@ class CollabController(QtCore.QObject):
         self.signals.rejected.connect(self._onRejected)
         self.signals.roleChanged.connect(self._onRoleChanged)
         self.signals.presenceReceived.connect(self._onPresence)
+        self.signals.patchNeeded.connect(self._onPatchNeeded)
+        self.signals.fileRequested.connect(self._onFileRequested)
+        self.signals.manifestReceived.connect(self._onManifest)
+        self.signals.fileChunkReceived.connect(self._onFileChunk)
+        self.signals.transferFinished.connect(self._onTransferFinished)
 
     @property
     def is_active(self):
@@ -519,6 +533,11 @@ class CollabController(QtCore.QObject):
 
     def _teardown(self):
         self._stopPresence()
+
+        # A transfer cannot outlive the connection carrying it, and staged
+        # files must not survive into the next session, where a stale queue
+        # would have the client requesting files nobody offered it.
+        self._clearTransfer(abort=True)
 
         if self.responder is not None:
             self.responder.stop()
@@ -1648,12 +1667,32 @@ class CollabController(QtCore.QObject):
 
     def _checkPatch(self, room_info):
         """
-        Decides how the host's patch should be obtained, and tells the user.
+        Decides how the host's patch should be obtained, and acts on it.
 
-        Only reports here. Actually installing from the Patch Manager, or
-        accepting a host transfer, is driven by the user from the status window -
-        a join must not silently start downloading things.
+        The four outcomes of files.patch_requirement map to four behaviours:
+
+        - LOCAL       nothing to do.
+        - HOST        ask the host for its data files. No prompt: connecting to
+                      a session is consent to the data-only transfer (Zement,
+                      2026-08-06). What travels is PNG/XML/TXT and never Python,
+                      the peer is already pinned by the join code, and the caps
+                      in files.py still bound it - so the prompt would be asking
+                      permission for the thing the user just did.
+        - CATALOG     prompt. This one *is* asked, because it fetches from a
+                      third party over the internet rather than from the peer
+                      the user chose to join.
+        - UNAVAILABLE say so, and leave.
+
+        Declining, or being unable to get the patch at all, disconnects: without
+        the patch the client cannot hold the same level state, so a read-only
+        seat would be a seat looking at the wrong level.
         """
+        if self.client is None:
+            # Host side. The host defines the patch, so there is nothing to
+            # check - and running the client path here would have the host
+            # asking itself for files.
+            return
+
         catalog = _catalog_manager()
         allow_host = (self.settings.get('patch_source')
                       == collab_dialogs.PATCH_SOURCE_HOST)
@@ -1662,8 +1701,467 @@ class CollabController(QtCore.QObject):
                                               allow_host_transfer=allow_host,
                                               extra_dirs=_external_patch_dirs())
 
-        if requirement['source'] != files.SOURCE_LOCAL:
-            self._appendStatus(requirement['message'])
+        source = requirement['source']
+        patch_id = requirement['patch_id']
+
+        if source == files.SOURCE_LOCAL:
+            return
+
+        self._appendStatus(requirement['message'])
+
+        if self._transfer is not None:
+            # Already collecting one. This happens when the host changes patch
+            # twice in quick succession; finishing the first transfer and
+            # re-checking is better than abandoning it half-written.
+            self._appendStatus('A patch download is already in progress.')
+            return
+
+        if source == files.SOURCE_HOST:
+            self._startPatchTransfer(patch_id)
+
+        elif source == files.SOURCE_CATALOG:
+            self._installFromCatalog(requirement)
+
+        else:
+            self._leaveOverPatch(
+                'You cannot join without the %s patch.' % patch_id
+                if patch_id else 'The required patch is not available.')
+
+    def _startPatchTransfer(self, patch_id):
+        """
+        Asks the host for its patch data files.
+        """
+        self._transfer_patch = patch_id
+        self._appendStatus(
+            'Asking the host for the %s patch files...' % patch_id)
+
+        self.client.send(protocol.make_message(
+            protocol.T_PATCH_NEED, {'patch_id': patch_id}))
+
+    def _installFromCatalog(self, requirement):
+        """
+        Gets the patch from the Patch Manager, with consent (decision 1).
+
+        Opens the Patch Manager rather than installing directly. There is no
+        headless installer to call: downloading is PatchManagerDialog's own
+        method, wired to its buttons, its status table and its download
+        workers, and driving it from here would mean reimplementing it. Opening
+        the real dialog also means the user sees the same download UI, with its
+        progress and its errors, that they would use outside a session.
+
+        The consequence, and the reason this is not merely a redirect: the
+        install is asynchronous and user-driven, so this cannot know when it
+        finished. It re-checks when the dialog closes and acts on the answer.
+        """
+        patch_id = requirement['patch_id']
+
+        if not collab_dialogs.confirm_catalog_install(
+                self.window, patch_id, requirement.get('patch_version', '')):
+            self._leaveOverPatch(
+                'You declined to install %s, so you have left the session.'
+                % patch_id)
+            return
+
+        self._appendStatus(
+            'Opening the Patch Manager so you can install %s...' % patch_id)
+
+        try:
+            opener = getattr(self.window, 'HandlePatchManager', None)
+            if opener is None:
+                raise RuntimeError('the Patch Manager is not available')
+            opener()
+        except Exception as exc:
+            debuglog.log('client', 'patch manager failed', error=str(exc))
+            self._leaveOverPatch(
+                'The Patch Manager could not be opened: %s' % exc)
+            return
+
+        # The dialog has closed. Ask the filesystem again rather than assuming
+        # the user went through with it - they may have closed it untouched,
+        # or installed something else.
+        if files.find_installed_patch(patch_id,
+                                      extra_dirs=_external_patch_dirs()):
+            self._appendStatus('%s is installed.' % patch_id)
+            self._reloadPatch(patch_id)
+            return
+
+        self._leaveOverPatch(
+            '%s was not installed, so you have left the session.' % patch_id)
+
+    def _leaveOverPatch(self, message):
+        """
+        Ends the session because the patch requirement cannot be met.
+
+        Decision 3: a client without the host's patch disconnects rather than
+        staying on read-only, because it cannot hold the same level state and a
+        seat showing the wrong level is worse than no seat.
+        """
+        self._appendStatus(message)
+        collab_dialogs.report_patch_unavailable(self.window, message)
+        self.leave()
+
+    # -- patch transfer, client side ----------------------------------------
+
+    def _onManifest(self, payload):
+        """
+        The host listed what it is offering. Validate it, then start fetching.
+
+        The manifest is validated here rather than trusted because it is the
+        thing consent was implied for: every later chunk is checked against it,
+        so a manifest that named a path outside the patch, or a .py file, would
+        undo the whole exclusion.
+        """
+        if self.client is None:
+            return
+
+        try:
+            entries = files.validate_manifest(payload)
+        except files.ManifestError as exc:
+            self._failTransfer('The host sent an invalid file list: %s' % exc)
+            return
+
+        if not entries:
+            self._failTransfer('The host offered no files.')
+            return
+
+        patch_id = str(payload.get('patch_id', '') or self._transfer_patch)
+
+        # Resolve the destination now, before a byte moves. patch_directory
+        # validates the id as a directory name, and an id that cannot be one
+        # ('CON', a trailing dot) would otherwise fail at commit - after the
+        # whole patch had been downloaded and verified.
+        try:
+            destination = files.patch_directory(patch_id)
+        except Exception as exc:
+            self._failTransfer(
+                'The host\'s patch name cannot be used as a folder: %s' % exc)
+            return
+
+        try:
+            staging = files.staging_directory()
+            self._transfer = files.TransferSession(staging, entries, patch_id)
+        except Exception as exc:
+            self._failTransfer('Could not prepare the download: %s' % exc)
+            return
+
+        self._transfer_destination = destination
+
+        self._transfer_patch = patch_id
+        self._transfer_queue = list(self._transfer.pending_paths())
+
+        self._appendStatus(files.describe_transfer(
+            entries, self._hostNick(), patch_id))
+
+        self._requestNextFile()
+
+    def _requestNextFile(self):
+        """
+        Asks for one file at a time.
+
+        Serial rather than pipelined: the receiver verifies each file's hash as
+        it completes, and a single outstanding request means a failure names the
+        file it happened on. A patch is a few hundred small files over a LAN or
+        a direct link, so the round trips are not the bottleneck.
+        """
+        if self.client is None or self._transfer is None:
+            return
+
+        while self._transfer_queue:
+            path = self._transfer_queue.pop(0)
+            self.client.send(protocol.make_message(
+                protocol.T_FILE_REQ, {'path': path}))
+            return
+
+        self._finishTransfer()
+
+    def _onFileChunk(self, payload):
+        if self._transfer is None:
+            return
+
+        try:
+            complete = self._transfer.add_chunk(payload)
+        except files.TransferError as exc:
+            # Covers a bad hash, an out-of-order chunk, an unoffered path and an
+            # oversized file - every one of which means the transfer cannot be
+            # trusted, so none of them is retried.
+            self._failTransfer('The download failed: %s' % exc)
+            return
+
+        if not complete:
+            return
+
+        # Report progress occasionally rather than per file: a real patch is
+        # 460-535 files, and a line each would bury the chat it shares a window
+        # with. Every tenth keeps the user informed that it is still moving.
+        done = len(self._transfer.entries) - len(self._transfer.pending_paths())
+        if done and done % 50 == 0:
+            self._appendStatus('Downloaded %d of %d files...'
+                               % (done, len(self._transfer.entries)))
+
+        self._requestNextFile()
+
+    def _finishTransfer(self):
+        """
+        Every file has arrived and verified. Install, then reload the patch.
+        """
+        transfer = self._transfer
+        if transfer is None:
+            return
+
+        patch_id = self._transfer_patch
+
+        if not transfer.is_complete:
+            self._failTransfer('The download ended early.')
+            return
+
+        destination = self._transfer_destination or files.patch_directory(patch_id)
+
+        try:
+            with _BusyIndicator(self.window,
+                                'Installing the %s patch...' % patch_id):
+                transfer.commit(destination)
+        except Exception as exc:
+            debuglog.log('client', 'patch commit failed', error=str(exc))
+            self._failTransfer('The patch could not be installed: %s' % exc)
+            return
+
+        self._clearTransfer()
+
+        if self.client is not None:
+            self.client.send(protocol.make_message(
+                protocol.T_FILE_DONE, {'ok': True}))
+
+        self._appendStatus('The %s patch was installed.' % patch_id)
+
+        # Said plainly rather than buried, because it is the one thing a
+        # transferred patch cannot give the user and they will otherwise
+        # report it as a bug: sprites.py is Python and never travels.
+        self._appendStatus(
+            'Note: custom sprite previews are not included in a transferred '
+            'patch. Sprites will still be placed and saved correctly, but '
+            'some will show default images. Install %s normally for full '
+            'previews.' % patch_id)
+
+        self._reloadPatch(patch_id)
+
+    def _clearTransfer(self, abort=False):
+        """
+        Drops all transfer state.
+
+        One place rather than three, because the fields have to move together:
+        leaving _transfer_patch set after a transfer ends would keep
+        _onTransferFinished armed, so a later unrelated file_done from the host
+        would tear down a session that had finished downloading long ago.
+        """
+        if abort and self._transfer is not None:
+            try:
+                self._transfer.abort()
+            except Exception:
+                # Staging is a temporary directory; failing to tidy it is not
+                # worth masking the error that got us here.
+                pass
+
+        self._transfer = None
+        self._transfer_patch = ''
+        self._transfer_queue = []
+        self._transfer_destination = ''
+
+    def _failTransfer(self, message):
+        """
+        Abandons a transfer, discarding anything staged.
+        """
+        debuglog.log('client', 'transfer failed', error=message)
+
+        self._clearTransfer(abort=True)
+
+        if self.client is not None:
+            self.client.send(protocol.make_message(
+                protocol.T_FILE_DONE, {'ok': False, 'error': message[:200]}))
+
+        self._leaveOverPatch(message)
+
+    def _onTransferFinished(self, ok, error):
+        """
+        The host ended the transfer - either refusing it, or reporting a fault.
+        """
+        if ok:
+            return
+
+        if self._transfer is None and not self._transfer_patch:
+            return
+
+        self._failTransfer(error or 'The host stopped the transfer.')
+
+    def _reloadPatch(self, patch_id):
+        """
+        Switches the editor to the patch that was just installed.
+
+        LoadGameDef takes the gamedef *folder* name, not the patch id - the id
+        is the name declared inside main.xml, and the two are routinely
+        different ('Newer Super Mario Bros. Wii' lives in NewerSMBW). Passing
+        the id would find no such folder and silently fall back to retail, which
+        looks like the transfer having done nothing.
+
+        Best-effort and non-fatal: the files are on disk either way, so a reload
+        that does not take is a restart away from being right, and killing the
+        session over it would throw away the user's work.
+        """
+        folder = self._patchFolderName(patch_id)
+
+        if folder:
+            try:
+                from reggie.io.gamedef import LoadGameDef
+                LoadGameDef(folder)
+                self._appendStatus('Switched to the %s patch.' % patch_id)
+                return
+            except Exception as exc:
+                debuglog.log('client', 'patch reload failed', error=str(exc))
+
+        self._appendStatus(
+            'The %s patch is installed. Restart Reggie to use it.' % patch_id)
+
+    @staticmethod
+    def _patchFolderName(patch_id):
+        """
+        The directory name of an installed patch, for LoadGameDef.
+        """
+        found = files.find_installed_patch(patch_id,
+                                           extra_dirs=_external_patch_dirs())
+        if not found:
+            return ''
+
+        return os.path.basename(str(found.get('path', '')).rstrip('\\/'))
+
+    def _hostNick(self):
+        if self.client_session is not None:
+            for entry in getattr(self.client_session, 'participants', ()):
+                if entry.get('role') == protocol.ROLE_HOST:
+                    return entry.get('nick', 'the host')
+        return 'the host'
+
+    # -- patch transfer, host side ------------------------------------------
+
+    def _onPatchNeeded(self, session_id, patch_id):
+        """
+        A client wants this session's patch. Build a manifest and offer it.
+
+        Runs on the main thread because it walks the patch directory. The host
+        decides what is in the manifest; the client only chooses from it.
+        """
+        if self.host_session is None:
+            return
+
+        directory = self._localPatchDirectory(patch_id)
+        if not directory:
+            self._appendStatus(
+                'Cannot send %s: its folder was not found.' % patch_id)
+            self._refuseTransfer(session_id, 'The host cannot find its patch.')
+            return
+
+        try:
+            with _BusyIndicator(self.window, 'Preparing the patch files...'):
+                manifest = files.build_manifest(directory, patch_id)
+        except Exception as exc:
+            debuglog.log('host', 'manifest build failed', error=str(exc))
+            self._appendStatus('Could not prepare %s: %s' % (patch_id, exc))
+            self._refuseTransfer(session_id,
+                                 'The host could not prepare the patch.')
+            return
+
+        entries = manifest['files']
+        if not entries:
+            self._refuseTransfer(session_id, 'That patch has no data files.')
+            return
+
+        # Record what this peer is allowed to fetch *before* offering it, so a
+        # file_req that arrives immediately cannot beat the record.
+        self.host_session.record_manifest(
+            session_id, patch_id, [entry['path'] for entry in entries])
+
+        # skipped entries are dicts ({'path', 'reason'}), not names.
+        skipped = [str(entry.get('path', '')) for entry in
+                   (manifest.get('skipped') or [])]
+        if skipped:
+            self._appendStatus(
+                'Sending %d files of %s. Not sent: %s.'
+                % (len(entries), patch_id, ', '.join(skipped[:5])))
+        else:
+            self._appendStatus(
+                'Sending %d files of %s.' % (len(entries), patch_id))
+
+        self._sendToPeer(session_id, protocol.T_MANIFEST,
+                         files.manifest_payload(manifest))
+
+    def _onFileRequested(self, session_id, path):
+        """
+        Sends one file, in chunks.
+
+        The path was already checked against the manifest by HostSession, which
+        is the authorisation point; this reads and sends. It is checked again on
+        the way in by read_chunks, which resolves through safe_join - two
+        independent checks, because this one turns a name into a disk read.
+
+        Reads from the patch this peer was *offered*, not the one loaded now.
+        The host can switch patch mid-transfer, and serving the new one against
+        the old manifest would fail the client's hash check - reporting
+        corruption for what is really a stale offer.
+        """
+        if self.host_session is None:
+            return
+
+        offered = self.host_session.offered_patch(session_id)
+        if not offered:
+            self._refuseTransfer(session_id, 'No transfer is in progress.')
+            return
+
+        directory = self._localPatchDirectory(offered)
+        if not directory:
+            self._refuseTransfer(session_id, 'The host cannot find its patch.')
+            return
+
+        try:
+            for chunk in files.read_chunks(directory, path):
+                self._sendToPeer(session_id, protocol.T_FILE_CHUNK, chunk)
+        except Exception as exc:
+            debuglog.log('host', 'file read failed', path=path, error=str(exc))
+            self._refuseTransfer(
+                session_id, 'The host could not read %s.' % path)
+
+    def _refuseTransfer(self, session_id, reason):
+        self._sendToPeer(session_id, protocol.T_FILE_DONE,
+                         {'ok': False, 'error': reason})
+        if self.host_session is not None:
+            self.host_session.clear_transfer(session_id)
+
+    def _sendToPeer(self, session_id, msg_type, payload):
+        if self.host_session is None:
+            return
+
+        participant = self.host_session.find(session_id)
+        if participant is None or participant.connection is None:
+            return
+
+        participant.connection.send_type(msg_type, payload)
+
+    @staticmethod
+    def _localPatchDirectory(patch_id):
+        """
+        Where this machine keeps the given patch.
+
+        Asks find_installed_patch rather than assuming reggiedata/patches,
+        because a patch installed by the Patch Manager or added as an external
+        patch lives elsewhere - the same reason patch_requirement does not
+        trust the catalog's view of what is installed.
+        """
+        if not patch_id:
+            return ''
+
+        found = files.find_installed_patch(patch_id,
+                                           extra_dirs=_external_patch_dirs())
+        if found:
+            return found.get('path', '') or ''
+
+        return ''
 
     # -- helpers ------------------------------------------------------------
 
