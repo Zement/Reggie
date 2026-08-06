@@ -193,6 +193,18 @@ def _apply_position(item, x, y):
         # Sprites are weird so they handle this themselves
         item.setNewObjPos(x, y)
 
+        # setNewObjPos deliberately suppresses itemChange (it would re-snap the
+        # coordinates), and itemChange is what normally drives the image's
+        # positionChanged(). A liquid takes its surface height from objy there,
+        # so without this a moved liquid kept its old height on every peer -
+        # and on the local side after an undo.
+        image = getattr(item, 'ImageObj', None)
+        if image is not None:
+            try:
+                image.positionChanged()
+            except Exception:
+                pass
+
     elif isinstance(item, ObjectItem):
         # Objects use the objx and objy properties differently
         oldBR = item.getFullRect()
@@ -700,6 +712,41 @@ def snapshot_properties(item):
     return {attr: _copy_value(getattr(item, attr)) for attr in _property_attrs(item)}
 
 
+def refresh_dependent_sprites():
+    """
+    Re-runs positionChanged() on every sprite image.
+
+    Some sprites derive their appearance from *other* items rather than from
+    their own data: liquids and fog fill the zone they sit in, and take their
+    surface height from the sprite's own objy, while a non-zero location id in
+    spritedata[5] makes them follow a LocationItem instead. All of that is
+    computed in the image's positionChanged().
+
+    Interactively that hook fires from SpriteItem.itemChange during a drag. A
+    remote edit never goes through itemChange - it must not, since itemChange
+    also re-snaps coordinates - so the derived state was left stale on every
+    peer: liquid heights did not change, and a sprite retargeted to another
+    location kept drawing over the old one.
+
+    _apply_geometry already did this for zone changes, and for exactly the same
+    reason. This is that sweep, reusable from the paths that need it.
+    """
+    area = getattr(globals_, 'Area', None)
+    if area is None:
+        return
+
+    for sprite in getattr(area, 'sprites', ()):
+        image = getattr(sprite, 'ImageObj', None)
+        if image is None:
+            continue
+        try:
+            image.positionChanged()
+        except Exception:
+            # A single sprite image that cannot recompute must not abort the
+            # rest of the refresh, or one bad sprite freezes every other.
+            pass
+
+
 def _refresh_item(item):
     """
     Refreshes an item's visuals, tooltip, list entry and (if it is being
@@ -722,6 +769,11 @@ def _refresh_item(item):
         item.UpdateDynamicSizing()
         mw.spriteList.updateSprite(item)
         item.update()
+
+        # UpdateDynamicSizing calls dataChanged() but not positionChanged(),
+        # and a liquid's surface height lives in the latter. Without this a
+        # remote height change was received and then not drawn.
+        refresh_dependent_sprites()
 
         editor = getattr(mw, 'spriteDataEditor', None)
         if editor is not None and mw.selObj is item:
@@ -748,6 +800,11 @@ def _refresh_item(item):
         item.UpdateRects()
         item.UpdateListItem()
         item.update()
+
+        # A liquid or fog sprite with a non-zero location id draws itself over
+        # that location, so moving or resizing one changes what those sprites
+        # look like.
+        refresh_dependent_sprites()
 
         editor = getattr(mw, 'locationEditor', None)
         if editor is not None and editor.loc is item:
