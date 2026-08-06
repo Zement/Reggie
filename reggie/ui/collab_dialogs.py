@@ -601,6 +601,23 @@ class CollabStatusWindow(QtWidgets.QDialog):
         self.setLayout(columns)
         self.resize(560, 320)
 
+        # In a QDialog every QPushButton is auto-default, so Enter activates
+        # whichever button holds focus as well as sending the chat line. That
+        # made pressing Enter after clicking "Change role" (or with focus on
+        # "Leave session") disconnect the user mid-sentence - Zement watched
+        # testers kick themselves this way.
+        #
+        # Done in one sweep over the children rather than per button, so a
+        # control added later cannot quietly reintroduce it.
+        for button in self.findChildren(QtWidgets.QPushButton):
+            button.setAutoDefault(False)
+            button.setDefault(False)
+
+        # Enter in the chat box now has exactly one meaning. Send is wired to
+        # returnPressed, not made the default button: a default button would
+        # fire whenever the dialog has focus anywhere, including in the roster.
+        self.chatEntry.setFocus()
+
     # -- updates ------------------------------------------------------------
 
     def setRoster(self, participants):

@@ -593,6 +593,8 @@ class CollabController(QtCore.QObject):
 
     def _sendChat(self, text):
         if self.host_session is not None:
+            # HostSession echoes the host's own message back through its event
+            # callback, so the host sees it without any help here.
             self.host_session.send_chat(text)
             return
 
@@ -600,6 +602,17 @@ class CollabController(QtCore.QObject):
             self.client.send(protocol.make_message(
                 protocol.T_CHAT, {'text': text,
                                   'kind': protocol.CHAT_KIND_USER}))
+
+            # Echo locally. The host relays a client's message to the *other*
+            # clients only - correct, since bouncing it back would duplicate it
+            # for everyone whose message did come back - so without this the
+            # sender is the one person who never sees what they said.
+            clean = protocol.sanitize_text(str(text or ''),
+                                           protocol.MAX_CHAT_CHARS)
+            if clean and self.status_window is not None:
+                self.status_window.appendChat(
+                    getattr(self.client_session, 'nick', '') or 'You', clean,
+                    protocol.CHAT_KIND_USER)
 
     def applyEditingPermissions(self):
         """

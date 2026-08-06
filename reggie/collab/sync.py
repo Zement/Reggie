@@ -1276,6 +1276,38 @@ def create_item(description, sprite_format=None, area=None):
     return item
 
 
+def _ensure_list_item(item):
+    """
+    Builds the side-list row a remotely created item needs.
+
+    The item classes set `listitem = None` and leave it to whoever creates the
+    item to build the row - the editor's own CreateEntrance/CreateLocation do
+    it right after construction. The collaboration path did not, so
+    `_attach_item` added None to the list widget and the item existed on the
+    canvas but never appeared in the Entrances, Locations or Comments panel.
+    That is what testers saw: everyone's items drawn correctly, but each list
+    showing only its owner's.
+
+    Sprites are not here on purpose: SpriteList is a table, and _attach_item
+    calls addSprite() rather than inserting a prebuilt row.
+    """
+    from reggie.core.levelitems import (
+        EntranceItem, LocationItem, CommentItem, PathItem,
+        ListWidgetItem_SortsByOther,
+    )
+    from PyQt6 import QtWidgets
+
+    if getattr(item, 'listitem', None) is not None:
+        return
+
+    if isinstance(item, (EntranceItem, LocationItem, PathItem)):
+        item.listitem = ListWidgetItem_SortsByOther(item)
+    elif isinstance(item, CommentItem):
+        # Comments sort by insertion, not by a key on the item, so a plain row
+        # is what the editor builds for them too.
+        item.listitem = QtWidgets.QListWidgetItem()
+
+
 def _register_created_item(item, area):
     """
     Puts a newly created item into the scene AND the editor's side lists.
@@ -1307,6 +1339,8 @@ def _register_created_item(item, area):
         # Headless: the area lists are the whole model, and the caller has
         # already updated them.
         return item
+
+    _ensure_list_item(item)
 
     index = _remove_from_area_lists(item, area)
 
