@@ -1146,15 +1146,18 @@ class SpriteImage_FallingIcicle(SLib.SpriteImage_StaticMultiple):  # 265
         SLib.loadIfNotInImageCache('IcicleLarge', 'icicle_large.png')
 
     def dataChanged(self):
-        super().dataChanged()
-
         size = self.parent.spritedata[5] & 1
         if size == 0:
             self.image = ImageCache['IcicleSmall']
-            self.height = 19
         else:
             self.image = ImageCache['IcicleLarge']
-            self.height = 36
+
+        # super() after the image is chosen (see SpriteImage_SpinyCheep), and
+        # before the explicit height, which must win over the size super()
+        # derives from the image.
+        super().dataChanged()
+
+        self.height = 19 if size == 0 else 36
 
 
 class SpriteImage_TiltGrate(SLib.SpriteImage_StaticMultiple):  # 267
@@ -1262,10 +1265,13 @@ class SpriteImage_WoodCircle(SLib.SpriteImage_StaticMultiple):  # 286
         ImageCache['WoodCircle2'] = SLib.GetImg('wood_circle_2.png')
 
     def dataChanged(self):
-        super().dataChanged()
         size = (self.parent.spritedata[5] & 0xF) % 3
 
         self.image = ImageCache['WoodCircle%d' % size]
+
+        # super() after the image is chosen (see SpriteImage_SpinyCheep), and
+        # before dimensions, which must win over the size super() derives.
+        super().dataChanged()
 
         if size > 2: size = 0
         self.dimensions = (
@@ -2153,7 +2159,6 @@ class SpriteImage_SpinyCheep(SLib.SpriteImage_StaticMultiple):  # 395
         SLib.loadIfNotInImageCache('SpinyCheepRight', 'cheep_spiny_right.png')
 
     def dataChanged(self):
-        super().dataChanged()
         # It can face right if set to chase players, but not when forced to face left
         chasePly = self.parent.spritedata[5] & 0xF
         forceLeft = (self.parent.spritedata[2] >> 4) & 8
@@ -2164,6 +2169,12 @@ class SpriteImage_SpinyCheep(SLib.SpriteImage_StaticMultiple):  # 395
         else:
             self.image = ImageCache['SpinyCheep']
             self.xOffset = -2 / 1.5
+
+        # super() last: SpriteImage_Static.dataChanged() derives self.size from
+        # self.image, and deletes it when there is none. Called first - as this
+        # did - the image is still None on the first pass, so the sprite fell
+        # back to the default spritebox size instead of its own.
+        super().dataChanged()
 
 
 class SpriteImage_Gabon(SLib.SpriteImage_StaticMultiple):  # 414
