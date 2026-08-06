@@ -1089,6 +1089,16 @@ class CollabController(QtCore.QObject):
         except sync.SyncError as exc:
             self._appendStatus('A change could not be applied: %s' % exc)
             return
+        except RuntimeError as exc:
+            # A destroyed Qt object reached the apply path. RefMap.require now
+            # catches the common case, but an item can also be destroyed part
+            # way through applying a multi-target op. Treated as divergence
+            # rather than allowed to escape: this used to reach the excepthook
+            # and put a traceback in log.txt while the session carried on
+            # quietly out of sync.
+            debuglog.log('op-in', 'stale item during apply', error=str(exc))
+            self._requestResync()
+            return
 
         if self.is_host:
             self._rebroadcast(payload, sender_id)

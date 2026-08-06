@@ -224,10 +224,31 @@ class RefMap:
         """
         Looks up an item or raises UnknownRefError. Use on every incoming
         reference: the alternative is applying an edit to the wrong object.
+
+        A reference whose item has been destroyed counts as unknown. The map
+        holds strong references on purpose (an undo command may still need a
+        detached item), so a Qt object destroyed underneath us leaves a live
+        Python wrapper here - and every later op for it would raise
+        RuntimeError deep inside the apply path rather than being handled as
+        the ordinary "we are out of date" case that it is.
         """
         item = self.item_for(ref)
         if item is None:
             raise UnknownRefError('unknown item reference %r' % (ref,))
+
+        # Only a *destroyed Qt object* counts as missing. An object with no
+        # scene() at all is not a level item and is none of this method's
+        # business - swallowing that would turn a malformed payload into a
+        # resync instead of the validation error it should raise.
+        scene = getattr(item, 'scene', None)
+        if callable(scene):
+            try:
+                scene()
+            except RuntimeError:
+                self.forget_ref(str(ref))
+                raise UnknownRefError(
+                    'item reference %r no longer exists' % (ref,))
+
         return item
 
     def forget(self, item):

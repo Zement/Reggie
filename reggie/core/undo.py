@@ -254,6 +254,76 @@ def _sprite_register_idtypes(spr):
         counter[value] = counter.get(value, 0) + 1
 
 
+def item_is_live(item):
+    """
+    Whether an item still exists and is still part of the level.
+
+    Collaboration made this necessary. An undo command holds direct references
+    to its items, which is correct for a single user - nothing else can remove
+    them. With a session running, a *peer* can delete an item that a local
+    command is still holding, and then undo reaches for something that is gone
+    in one of two ways:
+
+    - the Python object survives but the level no longer lists it, so
+      `layer.index(item)` raises ValueError (seen in Nin0's and Luke's logs);
+    - the underlying C++ object has been destroyed, so any attribute access
+      raises RuntimeError (seen in Zement's log).
+
+    Both are checked here, because a caller cannot tell them apart in advance
+    and the correct response to either is the same: skip the item.
+    """
+    if item is None:
+        return False
+
+    from reggie.core.levelitems import (
+        ObjectItem, SpriteItem, EntranceItem, LocationItem, PathItem,
+        CommentItem, ZoneItem,
+    )
+
+    try:
+        # Touches the C++ side, so a destroyed wrapper is caught here.
+        item.scene()
+
+        area = getattr(globals_, 'Area', None)
+        if area is None:
+            return False
+
+        if isinstance(item, PathItem):
+            path = getattr(item, 'path', None)
+            if path is None:
+                return False
+            try:
+                path.get_index(item)
+            except ValueError:
+                return False
+            return True
+
+        if isinstance(item, ObjectItem):
+            return any(item is other for other in area.layers[item.layer])
+        if isinstance(item, SpriteItem):
+            return any(item is other for other in area.sprites)
+        if isinstance(item, EntranceItem):
+            return any(item is other for other in area.entrances)
+        if isinstance(item, LocationItem):
+            return any(item is other for other in area.locations)
+        if isinstance(item, CommentItem):
+            return any(item is other for other in area.comments)
+        if isinstance(item, ZoneItem):
+            return any(item is other for other in area.zones)
+
+        return True
+
+    except (RuntimeError, AttributeError, IndexError, ValueError):
+        return False
+
+
+def _live_items(items):
+    """
+    Filters a command's items down to the ones still in the level.
+    """
+    return [item for item in (items or ()) if item_is_live(item)]
+
+
 def _detach_item(item):
     """
     Removes a level item from the scene and all bookkeeping lists, and returns
@@ -468,8 +538,11 @@ class MoveItemsCommand(QtGui.QUndoCommand):
 
     def undo(self):
         with _ApplyGuard():
+            # Skip items a peer deleted since the drag: moving a destroyed item
+            # raises RuntimeError from the C++ side (Zement's log).
             for item, old, new in reversed(self.entries):
-                _apply_position(item, old[0], old[1])
+                if item_is_live(item):
+                    _apply_position(item, old[0], old[1])
             _finish_mutation()
 
     def redo(self):
@@ -479,7 +552,8 @@ class MoveItemsCommand(QtGui.QUndoCommand):
 
         with _ApplyGuard():
             for item, old, new in self.entries:
-                _apply_position(item, new[0], new[1])
+                if item_is_live(item):
+                    _apply_position(item, new[0], new[1])
             _finish_mutation()
 
 
@@ -504,7 +578,9 @@ class AddItemsCommand(QtGui.QUndoCommand):
     def undo(self):
         with _ApplyGuard():
             self._contexts = []
-            for item in _deletion_order(self.items):
+            # Only items still in the level: a peer may have deleted one since
+            # this command was pushed, and detaching it again would raise.
+            for item in _deletion_order(_live_items(self.items)):
                 self._contexts.append((item, _detach_item(item)))
             _finish_mutation()
             globals_.mainWindow.ChangeSelectionHandler()
@@ -516,7 +592,7 @@ class AddItemsCommand(QtGui.QUndoCommand):
 
         with _ApplyGuard():
             # Re-attach in reverse detach order so stored indices are valid
-            for item, ctx in reversed(self._contexts):
+            for item, ctx in reversed(self._contexts or ()):
                 _attach_item(item, ctx)
             _finish_mutation()
 
@@ -560,7 +636,7 @@ class RemoveItemsCommand(QtGui.QUndoCommand):
 
         with _ApplyGuard():
             self._contexts = []
-            for item in _deletion_order(self.items):
+            for item in _deletion_order(_live_items(self.items)):
                 self._contexts.append((item, _detach_item(item)))
             _finish_mutation()
             globals_.mainWindow.ChangeSelectionHandler()
@@ -726,6 +802,12 @@ class ChangePropertyCommand(QtGui.QUndoCommand):
         return True
 
     def undo(self):
+        # A peer may have deleted the item since this edit; _refresh_item then
+        # calls into a destroyed C++ object (the AuxEntranceItem RuntimeError
+        # in Zement's log).
+        if not item_is_live(self.item):
+            return
+
         with _ApplyGuard():
             for attr, value in self.before.items():
                 setattr(self.item, attr, _copy_value(value))
@@ -735,6 +817,9 @@ class ChangePropertyCommand(QtGui.QUndoCommand):
     def redo(self):
         if self._skip_first_redo:
             self._skip_first_redo = False
+            return
+
+        if not item_is_live(self.item):
             return
 
         with _ApplyGuard():
@@ -866,7 +951,8 @@ class ResizeItemsCommand(QtGui.QUndoCommand):
     def undo(self):
         with _ApplyGuard():
             for item, old, new in reversed(self.entries):
-                _apply_geometry(item, *old)
+                if item_is_live(item):
+                    _apply_geometry(item, *old)
             _finish_mutation()
 
     def redo(self):
@@ -876,7 +962,8 @@ class ResizeItemsCommand(QtGui.QUndoCommand):
 
         with _ApplyGuard():
             for item, old, new in self.entries:
-                _apply_geometry(item, *new)
+                if item_is_live(item):
+                    _apply_geometry(item, *new)
             _finish_mutation()
 
 
