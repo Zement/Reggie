@@ -235,10 +235,9 @@ class GameDefMenu(QtWidgets.QMenu):
             if len(actions) >= 3:  # viewer, separator, patches..., separator, add button
                 self.insertAction(actions[-2], act)  # Insert before last separator
 
-        # Also refresh the main window's patch combo box if it exists
-        if hasattr(globals_, 'mainWindow') and globals_.mainWindow:
-            if hasattr(globals_.mainWindow, 'updatePatchComboBox'):
-                globals_.mainWindow.updatePatchComboBox()
+        # Also refresh the main window's patch combo box if it exists, so a
+        # newly added patch appears in both controls.
+        RefreshPatchSelector()
 
 
 class ReggieGameDefinition:
@@ -1110,12 +1109,63 @@ def LoadGameDef(name=None, dlg=None):
     if sprite_images_enabled and globals_.mainWindow is not None and hasattr(globals_.mainWindow, 'sprPicker'):
         globals_.mainWindow.sprPicker.show_sprite_images = True
 
+    # Show the patch that is actually loaded. The combo box reads LastGameDef,
+    # and until now only HandleSwitchPatch refreshed it - so every other route
+    # into a patch change (a collaboration client following its host, a level
+    # load, a failed load falling back to retail) left the box naming the
+    # previous patch. Doing it here rather than at each call site means the
+    # control cannot disagree with the loaded gamedef whoever changed it.
+    RefreshPatchSelector()
+
     # Tell a running collaboration session that the patch changed, so joined
     # clients can re-check whether they still have what the host is using. Only
     # on the success path: announcing a patch we failed to load would be a lie.
     NotifyCollabGameDefChanged()
 
     return True
+
+
+def RefreshPatchSelector():
+    """
+    Re-syncs the controls that name the loaded patch: the toolbar combo box and
+    the Change Game menu (its checkmarks and its description panel).
+
+    Both read the loaded gamedef only when they are built or when the user
+    drives them directly, so anything else that switches patch has to say so.
+    Guarded throughout: the combo box is optional (it can be turned off in
+    preferences, and is None then), and a patch switch must not fail because a
+    piece of chrome could not be updated.
+    """
+    window = getattr(globals_, 'mainWindow', None)
+    if window is None:
+        return
+
+    updater = getattr(window, 'updatePatchComboBox', None)
+    if updater is not None:
+        try:
+            updater()
+        except Exception:
+            pass
+
+    menu = getattr(window, 'GameDefMenu', None)
+    if menu is None:
+        return
+
+    try:
+        loaded = setting('LastGameDef')
+
+        # update_flag suppresses handleGameDefClicked, which the toggle would
+        # otherwise fire - re-entering the load we are finishing.
+        menu.update_flag = True
+        try:
+            for action in menu.actGroup.actions():
+                action.setChecked(action.data() == loaded)
+        finally:
+            menu.update_flag = False
+
+        menu.gameChanged.emit()
+    except Exception:
+        pass
 
 
 def NotifyCollabGameDefChanged():
