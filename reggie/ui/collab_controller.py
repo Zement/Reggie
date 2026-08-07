@@ -1817,14 +1817,45 @@ class CollabController(QtCore.QObject):
         # The dialog has closed. Ask the filesystem again rather than assuming
         # the user went through with it - they may have closed it untouched,
         # or installed something else.
-        if files.find_installed_patch(patch_id,
-                                      extra_dirs=_external_patch_dirs()):
+        #
+        # Retried rather than asked once. The Patch Manager downloads and
+        # unpacks on a worker thread, so closing the dialog does not guarantee
+        # the last file has been written: a single check can run before the
+        # patch's main.xml exists and conclude nothing was installed. Mone was
+        # dropped from a session that way after a download that had in fact
+        # succeeded, and it did not reproduce - which is what a race looks like.
+        if self._waitForInstalledPatch(patch_id):
             self._appendStatus('%s is installed.' % patch_id)
             self._reloadPatch(patch_id)
             return
 
         self._leaveOverPatch(
             '%s was not installed, so you have left the session.' % patch_id)
+
+    def _waitForInstalledPatch(self, patch_id, timeout=10.0):
+        """
+        Whether the patch is installed, allowing for a worker thread still
+        finishing.
+
+        Polls rather than sleeping once, so the common case (already on disk)
+        costs one scan and returns immediately. Keeps the event loop running so
+        the session's own signals are still delivered while waiting - the point
+        is to avoid a spurious disconnect, and blocking the loop here could
+        cause one.
+        """
+        deadline = time.monotonic() + timeout
+
+        while True:
+            if files.find_installed_patch(patch_id,
+                                          extra_dirs=_external_patch_dirs()):
+                return True
+
+            if time.monotonic() >= deadline:
+                return False
+
+            QtWidgets.QApplication.processEvents(
+                QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents,
+                100)
 
     def _leaveOverPatch(self, message):
         """

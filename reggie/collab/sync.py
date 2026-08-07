@@ -988,12 +988,62 @@ def _apply_area_settings(payload, refmap, sprite_format, area):
     # Options dialog edits".
     allowed = AREA_SETTINGS_ATTRS
 
+    tilesets_changed = False
+
     for name, encoded in snapshot.items():
         if name not in allowed:
             raise SyncError('area setting %r is not editable' % (name,))
-        setattr(target, name, decode_value(encoded, sprite_format))
+
+        value = decode_value(encoded, sprite_format)
+
+        if name in TILESET_ATTRS and getattr(target, name, None) != value:
+            tilesets_changed = True
+
+        setattr(target, name, value)
+
+    # Setting the name is not loading the tileset. A1's AreaSettingsCommand
+    # takes a refresh_tilesets flag and calls RefreshTilesetsFromArea(); this
+    # applier only did the setattr, so a peer's tileset change showed the new
+    # name in the Area Options dialog while the canvas kept drawing the old
+    # tiles - which is exactly how Zement described it.
+    #
+    # Guarded on an actual change because the reload is expensive: it re-reads
+    # up to four tileset archives and rebuilds the object picker, so doing it
+    # for every unrelated area-settings op (a time limit, an entrance number)
+    # would stall the editor for no reason.
+    if tilesets_changed:
+        _refresh_tilesets()
 
     return {'kind': 'area_settings', 'items': []}
+
+
+# The subset of AREA_SETTINGS_ATTRS that names a tileset archive.
+TILESET_ATTRS = frozenset({'tileset0', 'tileset1', 'tileset2', 'tileset3'})
+
+
+def _refresh_tilesets():
+    """
+    Reloads the tilesets named by the Area and refreshes everything drawn from
+    them.
+
+    Best-effort: the names are already applied, so a failed reload leaves the
+    level correct in the file and wrong on screen until the next load - which
+    is much better than aborting a remote op that has already been accepted.
+    """
+    from reggie.core import globals_
+
+    window = getattr(globals_, 'mainWindow', None)
+    if window is None:
+        return
+
+    refresh = getattr(window, 'RefreshTilesetsFromArea', None)
+    if refresh is None:
+        return
+
+    try:
+        refresh()
+    except Exception:
+        pass
 
 
 # The area attributes the Area Options and camera dialogs can change.
