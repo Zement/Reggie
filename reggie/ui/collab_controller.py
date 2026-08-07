@@ -381,10 +381,18 @@ class CollabController(QtCore.QObject):
             debuglog.log('upnp', 'router reported a public address')
             return external
 
-        debuglog.log('upnp', 'router reported no usable public address')
+        debuglog.log('upnp', 'router reported no usable public address',
+                     local=address)
         self._appendStatus(
-            'The router did not report a usable public address; the join code '
-            'uses your local address, which only works on this network.')
+            'The port was forwarded, but the router did not report a public '
+            'address. This usually means the reply came from a virtual '
+            'adapter\'s router (Hyper-V, WSL, a VM switch) rather than your '
+            'real one, or that your connection is behind carrier-grade NAT.')
+        self._appendStatus(
+            'The join code below contains your LOCAL address (%s), so it will '
+            'only work for players on this network. For play over the '
+            'internet, look up your public address and forward port %d by '
+            'hand.' % (address, port))
         return address
 
     def _startDiscovery(self, port, nick):

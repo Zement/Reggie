@@ -127,8 +127,14 @@ def load_collab_settings():
         'cursors': str(setting('CollabCursors', '') or '') or CURSORS_ON_MOVE,
         'clicks': bool(setting('CollabClicks', True)),
         'patch_source': _patch_source_setting(),
-        'discoverable': bool(setting('CollabDiscoverable', False)),
-        'upnp': bool(setting('CollabUPnP', False)),
+        # Both default to on: the common case is hosting for someone, and both
+        # only ever take effect while hosting. Discovery answers LAN probes by
+        # unicast and carries no secret; UPnP is what makes a join code usable
+        # over the internet at all, and its mapping is leased and removed when
+        # the session ends. A host who wants neither can still turn them off,
+        # and that choice is remembered.
+        'discoverable': _default_true_setting('CollabDiscoverable'),
+        'upnp': _default_true_setting('CollabUPnP'),
         'port': int(setting('CollabPort', identity.DEFAULT_HOST_PORT) or
                     identity.DEFAULT_HOST_PORT),
         'debug_log': bool(setting('CollabDebugLog', False)),
@@ -156,6 +162,21 @@ def _patch_source_setting():
     return stored or PATCH_SOURCE_AUTO
 
 
+def _default_true_setting(key):
+    """
+    A boolean preference whose default changed from off to on.
+
+    A stored False is ambiguous: it is what the old default wrote for everyone
+    who never touched the control, and also what a deliberate "off" writes. The
+    save side stamps <key>V2 once the user has been through the new dialog, so
+    only an unstamped False is treated as the old default and flipped.
+    """
+    if not setting(key + 'V2', False):
+        return True
+
+    return bool(setting(key, True))
+
+
 def save_collab_settings(values):
     setSetting('CollabNick', values.get('nick', DEFAULT_NICK))
     setSetting('CollabColor', values.get('color', ''))
@@ -166,8 +187,12 @@ def save_collab_settings(values):
     # Marks the stored value as written by the three-way control, so a
     # deliberate "Only from the Patch Manager" is never migrated to AUTO.
     setSetting('CollabPatchSourceV2', True)
-    setSetting('CollabDiscoverable', bool(values.get('discoverable', False)))
-    setSetting('CollabUPnP', bool(values.get('upnp', False)))
+    setSetting('CollabDiscoverable', bool(values.get('discoverable', True)))
+    setSetting('CollabUPnP', bool(values.get('upnp', True)))
+    # Stamps both as written by the current dialog, so a deliberate "off" is
+    # never mistaken for the old default and flipped back on.
+    setSetting('CollabDiscoverableV2', True)
+    setSetting('CollabUPnPV2', True)
     setSetting('CollabPort', int(values.get('port', identity.DEFAULT_HOST_PORT)))
     setSetting('CollabDebugLog', bool(values.get('debug_log', False)))
     setSetting('CollabFirewallPrompt',
@@ -297,10 +322,21 @@ class CollabSetupDialog(QtWidgets.QDialog):
         if not addresses:
             return 'Your address on this network could not be determined.'
 
-        return ('Your address on this network: %s\n'
-                'For play over the internet the join code will use your public '
-                'address instead, once the router has been asked.'
-                % ', '.join(addresses))
+        # The first entry comes from the routing table - the address this
+        # machine would actually use to reach the internet - and the rest are
+        # other adapters. Saying which is which matters on a machine with
+        # virtual adapters, where the list is long and only one entry is the
+        # real one; presenting four addresses as equals invites the reader to
+        # guess, and to conclude the wrong one was chosen.
+        primary = addresses[0]
+        others = addresses[1:]
+
+        text = 'Your address on this network: %s' % primary
+        if others:
+            text += '\nOther adapters on this machine: %s' % ', '.join(others)
+
+        return (text + '\nFor play over the internet the join code will use '
+                'your public address instead, once the router has been asked.')
 
     def _checkHostingPossible(self):
         """

@@ -312,6 +312,28 @@ def check_index(value, name='index', maximum=1 << 20):
     return value
 
 
+def check_float(value, name='value', maximum=1 << 20):
+    """
+    Validates a real number from the wire (path node speed, acceleration).
+
+    An int is accepted and widened, since JSON has no float/int distinction and
+    a speed of exactly 1 arrives as an int. NaN and the infinities are refused
+    explicitly: both compare False against every bound, so a plain range check
+    would let them through and they poison every later calculation.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SyncError('%s must be a number' % name)
+
+    number = float(value)
+    if number != number or number in (float('inf'), float('-inf')):
+        raise SyncError('%s must be a finite number' % name)
+
+    if not (-maximum <= number <= maximum):
+        raise SyncError('%s %r is out of range' % (name, number))
+
+    return number
+
+
 # ---------------------------------------------------------------------------
 # Property values
 # ---------------------------------------------------------------------------
@@ -479,6 +501,22 @@ def describe_item(item):
             'pathid': int(item.pathid),
             'nodeid': int(item.nodeid),
         })
+
+        # Per-node movement data, so a node recreated on the far side behaves
+        # like the original rather than reverting to the defaults. It lives on
+        # the parent Path, not the node, which is why it is read here.
+        path = getattr(item, 'path', None)
+        if path is not None:
+            try:
+                speed, accel, delay = path.get_data_for_node(int(item.nodeid))
+                description.update({
+                    'speed': float(speed),
+                    'accel': float(accel),
+                    'delay': int(delay),
+                    'loops': bool(getattr(path, '_loops', False)),
+                })
+            except (AttributeError, IndexError, TypeError, ValueError):
+                pass
     elif kind == KIND_ZONE:
         description['id'] = int(item.id)
 
@@ -535,6 +573,10 @@ def validate_description(description):
         clean.update({
             'pathid': check_index(description.get('pathid', 0), 'path id', 255),
             'nodeid': check_index(description.get('nodeid', 0), 'node id', 4095),
+            'speed': check_float(description.get('speed', 0.5), 'speed'),
+            'accel': check_float(description.get('accel', 0.00498), 'accel'),
+            'delay': check_index(description.get('delay', 0), 'delay', 1 << 16),
+            'loops': bool(description.get('loops', False)),
         })
     elif kind == KIND_ZONE:
         clean['id'] = check_index(description.get('id', 0), 'zone id', 15)
@@ -1267,9 +1309,16 @@ def create_item(description, sprite_format=None, area=None):
                            description.get('text', ''))
         target_area.comments.append(item)
 
+    elif kind == KIND_PATH:
+        # Returns early: Path.add_node has already inserted the node into the
+        # scene, the path and the side list, so the shared registration below
+        # would add a second list row for one object.
+        return _create_path_node(description, target_area)
+
     else:
-        # Paths and zones are created through their own editors, not as loose
-        # items, so a bare 'add' for them is refused rather than half-handled.
+        # A zone is created through its own dialog, which owns bookkeeping this
+        # layer cannot reproduce (background sets, camera profiles, bounding
+        # entries), so a bare 'add' for one is refused rather than half-handled.
         raise SyncError('remote creation of %r is not supported' % (kind,))
 
     _register_created_item(item, target_area)
@@ -1306,6 +1355,72 @@ def _ensure_list_item(item):
         # Comments sort by insertion, not by a key on the item, so a plain row
         # is what the editor builds for them too.
         item.listitem = QtWidgets.QListWidgetItem()
+
+
+def _create_path_node(description, target_area):
+    """
+    Creates a path node from a remote 'add', reusing the editor's own routines.
+
+    Refusing this was wrong rather than merely incomplete: drawing a path is an
+    ordinary edit, and a client that drew one had every node rejected with
+    "remote creation of 'path' is not supported" while the host kept them - so
+    the two sides silently diverged, which is exactly what op sync exists to
+    prevent.
+
+    Everything goes through Path.add_node, which is the single place the editor
+    itself creates a node (misc2.py's click handler calls it too). It owns the
+    bookkeeping that makes a node work: renumbering later nodes, the side-list
+    entry, the polyline item, and the scene insert. Constructing a PathItem here
+    would reproduce a subset of that and drift from it.
+
+    Returns the new node. Unlike the other kinds this one does NOT want
+    _register_created_item afterwards - add_node has already placed it - which
+    is why it is a separate function rather than another branch that falls
+    through to the shared registration.
+    """
+    from reggie.core import globals_
+    from reggie.core.levelitems import Path
+
+    path_id = int(description['pathid'])
+    node_id = int(description['nodeid'])
+
+    window = getattr(globals_, 'mainWindow', None)
+    if window is None:
+        raise SyncError('cannot create a path node without the editor')
+
+    path = None
+    for existing in target_area.paths:
+        if int(getattr(existing, '_id', -1)) == path_id:
+            path = existing
+            break
+
+    if path is None:
+        path = Path(path_id, window.scene, bool(description.get('loops', False)))
+        target_area.paths.append(path)
+
+    # Clamp rather than refuse: the peer's node index is only a hint about
+    # ordering, and an out-of-range one means the two sides briefly disagree
+    # about the node count - a reason to append, not to drop the edit.
+    index = max(0, min(node_id, len(path._nodes)))
+
+    node = path.add_node(
+        description['x'], description['y'],
+        speed=float(description.get('speed', 0.5)),
+        accel=float(description.get('accel', 0.00498)),
+        delay=int(description.get('delay', 0)),
+        index=index,
+    )
+
+    # add_node only wires this when add_to_list is used from the editor path;
+    # without it a later drag of this node updates nothing else.
+    node.positionChanged = window.HandlePathPosChange
+
+    try:
+        window.pathEditor.UpdatePathLength()
+    except Exception:
+        pass
+
+    return node
 
 
 def _register_created_item(item, area):

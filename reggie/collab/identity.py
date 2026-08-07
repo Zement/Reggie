@@ -84,6 +84,10 @@ _WINDOWS_RESERVED_NAMES = frozenset({
     'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9',
 })
 
+# Characters Windows rejects in a filename. '/' and '\\' are handled earlier as
+# separators; these are the rest. Control characters are covered separately.
+_WINDOWS_ILLEGAL_CHARACTERS = frozenset(':*?"<>|')
+
 _BASE32_ALPHABET = re.compile(r'^[A-Z2-7]+$')
 
 
@@ -549,6 +553,20 @@ def _reject_traversal_components(relative_path):
         stem = part.split('.', 1)[0].lower()
         if stem in _WINDOWS_RESERVED_NAMES:
             raise UnsafePathError('path uses the reserved name %r' % stem)
+
+        # Characters Windows forbids in a filename. Rejected on every platform
+        # so a manifest built on Linux cannot describe files a Windows peer is
+        # unable to create - the transfer would otherwise verify every hash and
+        # then fail at the last step, on the write.
+        #
+        # A colon is the one that bites in practice: 'NSMBW: The Prankster
+        # Comets' is a perfectly ordinary patch name and an impossible Windows
+        # directory name.
+        illegal = set(part) & _WINDOWS_ILLEGAL_CHARACTERS
+        if illegal:
+            raise UnsafePathError(
+                'path component contains characters that cannot be used in a '
+                'filename: %s' % ' '.join(sorted(illegal)))
 
         if len(part) > 255:
             raise UnsafePathError('path component is too long')

@@ -51,6 +51,7 @@ of the above is unit-testable, which is where it matters most.
 import base64
 import hashlib
 import os
+import re
 import shutil
 
 from reggie.collab import identity, protocol
@@ -516,6 +517,9 @@ class TransferSession:
             raise TransferError(
                 'Not installing the patch: %d file(s) never arrived.' % missing)
 
+        # A transferred patch must not claim to have files that were excluded.
+        self._drop_untransferred_declarations()
+
         destination_root = os.path.abspath(str(destination_dir))
         os.makedirs(destination_root, exist_ok=True)
 
@@ -533,6 +537,86 @@ class TransferSession:
 
         self.cleanup()
         return moved
+
+    def _drop_untransferred_declarations(self):
+        """
+        Removes main.xml entries pointing at files the transfer excluded.
+
+        Both shipped patches declare `<file name="sprites" path="sprites.py"/>`,
+        and sprites.py is exactly what may never be transferred. main.xml itself
+        *is* transferred, so without this the installed patch declares a file
+        that is not there, and ReggieGameDefinition.InitFromName opens it
+        unconditionally and raises FileNotFoundError - the patch then fails to
+        load at all. That is the second error from Zement and Mone's test.
+
+        Copying someone else's sprites.py instead was considered and rejected:
+        it would execute one patch's drawing code under another patch's name,
+        producing wrong sprite images with nothing on screen to explain why. A
+        patch with no sprites.py is a patch whose sprites draw with default
+        images, which is the documented and honest cost of a data-only transfer.
+
+        Best-effort: a patch that cannot be rewritten is still installed, since
+        the alternative is discarding a verified transfer over its manifest.
+        """
+        main_xml = self.entries.get('main.xml')
+        if main_xml is None:
+            return
+
+        try:
+            path = identity.safe_join(self.staging_root, 'main.xml')
+        except identity.UnsafePathError:
+            return
+
+        try:
+            with open(path, 'r', encoding='utf-8') as handle:
+                text = handle.read()
+        except OSError:
+            return
+
+        # Drop any <file> element whose path was not part of the transfer.
+        # Regex rather than a parse-and-serialise, deliberately: main.xml is
+        # hand-edited by patch authors, and rewriting it through ElementTree
+        # would silently reformat comments, attribute order and whitespace.
+        transferred = set(self.entries)
+
+        def keep(match):
+            element = match.group(0)
+            declared = re.search(r'path\s*=\s*"([^"]*)"', element)
+            if declared is None:
+                return element
+
+            relative = declared.group(1).replace('\\', '/').lstrip('./')
+            if relative in transferred:
+                return element
+
+            # Only drop declarations we know were excluded on purpose. A
+            # <file> naming something absent for another reason is left alone
+            # rather than quietly deleted.
+            try:
+                identity.check_transfer_extension(relative)
+            except identity.UnsafePathError:
+                return ''
+
+            return element
+
+        updated = re.sub(r'<file\b[^>]*/>', keep, text)
+
+        if updated == text:
+            return
+
+        try:
+            with open(path, 'w', encoding='utf-8') as handle:
+                handle.write(updated)
+        except OSError:
+            return
+
+        # The file changed, so its manifest hash no longer describes it. That is
+        # correct and deliberate - verification has already happened, against
+        # what the host sent - but the entry is updated so nothing later
+        # re-checks it against a stale digest.
+        entry = self.entries['main.xml']
+        entry['sha256'] = sha256_bytes(updated.encode('utf-8'))
+        entry['size'] = len(updated.encode('utf-8'))
 
     def abort(self):
         """
@@ -863,14 +947,99 @@ def patches_directory(base_dir=''):
         else PATCHES_RELATIVE_DIR
 
 
+def folder_name_for_patch(patch_id):
+    """
+    A directory name for a patch id.
+
+    A patch id is a *display name* from main.xml, not a filename, and the two
+    are routinely different: 'New Super Mario Bros. Wii: The Prankster Comets'
+    is an ordinary patch name and an impossible Windows directory name. Mone's
+    transfer got as far as installing and then failed with WinError 267 for
+    exactly that reason.
+
+    The Patch Manager never had this problem because it takes its folder name
+    from the repository URL and falls back to the name with spaces removed
+    (patch_manager_dialog._download_method1). This is the equivalent for a
+    transfer, where there is no URL to take.
+
+    Characters Windows forbids are replaced rather than dropped, so two patches
+    whose names differ only in punctuation cannot collapse onto one folder. The
+    result is still validated as a single safe component, because sanitising is
+    a convenience and safe_component is the guarantee.
+    """
+    # NOT stripped first: a trailing dot or space is one of the things this
+    # function must refuse, and stripping would hide it from the check below.
+    text = str(patch_id or '')
+    if not text.strip():
+        raise identity.UnsafePathError('empty patch id')
+
+    # Refuse anything path-shaped BEFORE sanitising, rather than repairing it.
+    # Sanitising first would quietly turn '../evil' into 'evil' and accept it -
+    # rewriting hostile input into something valid instead of rejecting it,
+    # which is the wrong instinct even where the result lands somewhere
+    # harmless. A patch id is a display name, and one shaped like a path is not
+    # a name whose intent we should be guessing.
+    #
+    # The line is drawn by *position*, which is what separates the two cases
+    # this function has to serve. A colon inside a name is punctuation
+    # ('NSMBW: The Prankster Comets') and is repaired; a colon in second place
+    # is a drive letter ('C:x') and is refused. Likewise a trailing dot or
+    # space, which Windows silently strips - repairing those would let two
+    # different ids collapse onto one folder.
+    if any(character in text for character in '/\\') or '..' in text:
+        raise identity.UnsafePathError(
+            'patch id %r looks like a path, not a name' % (patch_id,))
+
+    if re.match(r'^[A-Za-z]:', text):
+        raise identity.UnsafePathError(
+            'patch id %r looks like a drive path, not a name' % (patch_id,))
+
+    # Trailing dots and spaces are refused rather than trimmed. Windows strips
+    # both silently, so repairing them would let two ids that differ only there
+    # collapse onto one folder - and 'evil.py.' slipping past an extension check
+    # is the classic form of that trick. Nothing legitimate is lost: no patch is
+    # named with a trailing space.
+    if text != text.rstrip(' .'):
+        raise identity.UnsafePathError(
+            'patch id %r ends with a dot or space' % (patch_id,))
+
+    # Leading whitespace is only trimmed, since it cannot collide with anything
+    # Windows does and a padded display name is ordinary sloppiness.
+    text = text.lstrip()
+
+    if '\x00' in text:
+        raise identity.UnsafePathError('patch id contains a null byte')
+
+    for character in ':*?"<>|':
+        text = text.replace(character, '-')
+
+    # Collapse runs and trim what Windows would silently strip anyway.
+    text = re.sub(r'-{2,}', '-', text)
+    text = text.strip(' .-')
+
+    # Spaces are legal but awkward; the Patch Manager's own fallback removes
+    # them, so a transferred patch lands with a folder shaped like a
+    # manually installed one.
+    text = text.replace(' ', '')
+
+    if not text:
+        raise identity.UnsafePathError(
+            'patch id %r has no usable characters for a folder name'
+            % (patch_id,))
+
+    return identity.safe_component(text)
+
+
 def patch_directory(patch_id, base_dir=''):
     """
-    The directory for one patch, with the id validated as a single safe
-    component - a patch id arrives from the network, so it is not a filename
-    until it has been checked.
+    The directory a patch with this id should be installed into.
+
+    The id is turned into a filename first (see folder_name_for_patch) and then
+    validated - a patch id arrives from the network, so it is not a directory
+    name until it has been both sanitised and checked.
     """
-    safe = identity.safe_component(patch_id)
-    return os.path.join(patches_directory(base_dir), safe)
+    return os.path.join(patches_directory(base_dir),
+                        folder_name_for_patch(patch_id))
 
 
 def staging_directory(base_dir=''):

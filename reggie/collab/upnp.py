@@ -493,14 +493,38 @@ class PortMapping:
                 'port %d to this computer manually.' % int(port))
 
         last_error = None
+        services = []
 
         for description_url in gateways:
             try:
-                service_type, control_url = find_wan_service(description_url)
+                services.append(find_wan_service(description_url))
             except UPnPError as exc:
                 last_error = exc
-                continue
 
+        if not services:
+            raise UPnPError(str(last_error) if last_error
+                            else 'no usable UPnP gateway was found')
+
+        # Prefer a gateway that can name a real public address. More than one
+        # device answers SSDP on a machine with virtual adapters (Hyper-V, VM
+        # switches, WSL), and a virtual router will happily accept a port
+        # mapping it cannot make reachable from the internet - the mapping then
+        # "succeeds" while the host is left advertising a LAN address. Mone hit
+        # exactly this: three attempts, three successful mappings, and every
+        # one followed by "router reported no usable public address".
+        #
+        # Ordering rather than filtering, so a router that simply does not
+        # implement GetExternalIPAddress is still used - it is only demoted
+        # below one that does.
+        ordered = []
+        deferred = []
+        for service_type, control_url in services:
+            if external_ip_address(control_url, service_type):
+                ordered.append((service_type, control_url))
+            else:
+                deferred.append((service_type, control_url))
+
+        for service_type, control_url in ordered + deferred:
             mapping = cls(control_url, service_type, port, port,
                           internal_ip, lease_seconds)
             try:
