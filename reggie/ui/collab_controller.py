@@ -61,6 +61,31 @@ RESYNC_INTERVAL_SECONDS = 5.0
 _PERMISSION_HINT = ('Not available during this collaboration session: the host '
                     'decides which level and patch everyone is editing.')
 
+# Shown on a dialog an Editor may not open. Names the role, because unlike the
+# level and patch controls this one is not about the host at all - a Full client
+# may use these, and the user can ask to be promoted.
+_ROLE_HINT = ('Not available with your access level: area, zone, background, '
+              'camera and level-information changes need Full access. Ask the '
+              'host to change your role.')
+
+# The dialogs whose changes are Full-only, mapped from the op kinds in
+# protocol.OP_KINDS_FULL_ONLY:
+#
+#   areaoptions, camprofiles -> AreaSettingsCommand  -> 'area_settings'
+#   zones, backgrounds       -> ZonesSnapshotCommand -> 'zones'
+#   metainfo                 -> MetadataCommand      -> 'metadata'
+#
+# Kept as one list rather than inline so the set is readable next to the matrix
+# it mirrors, and so a test can assert every Full-only op kind has a control
+# here. Disabling the QAction covers its menu entry and its toolbar button.
+_FULL_ONLY_ACTIONS = (
+    'areaoptions',
+    'camprofiles',
+    'zones',
+    'backgrounds',
+    'metainfo',
+)
+
 
 class _BusyIndicator:
     """
@@ -676,7 +701,7 @@ class CollabController(QtCore.QObject):
         may_lead = (not active) or host or self._clientHasFullRole()
         may_change_area = may_lead
 
-        def enable(name, allowed):
+        def enable(name, allowed, hint=_PERMISSION_HINT):
             action = actions.get(name)
             if action is None:
                 return
@@ -691,7 +716,7 @@ class CollabController(QtCore.QObject):
                 self._original_tooltips[name] = action.toolTip()
 
             action.setToolTip(self._original_tooltips[name] if allowed
-                              else _PERMISSION_HINT)
+                              else hint)
 
         # Level loading: anyone trusted to lead, and only by name. "Open by
         # file" stays disabled for everybody in a session, including the host,
@@ -713,6 +738,19 @@ class CollabController(QtCore.QObject):
 
         for name in ('addarea', 'importarea', 'deletearea'):
             enable(name, may_change_area)
+
+        # The Full-only dialogs. Every one of these pushes a command whose op
+        # kind is in protocol.OP_KINDS_FULL_ONLY, so an Editor client that
+        # opened one could make changes, watch them apply locally, and see them
+        # refused by the host - the level then differs between the two sides
+        # with only a line in the chat log to explain it. Greying them out makes
+        # the restriction visible before the edit rather than after, exactly as
+        # it already works for Save and for changing the game patch.
+        #
+        # Disabling the action covers the menu entry and the toolbar button
+        # together, since both are built from the same QAction.
+        for name in _FULL_ONLY_ACTIONS:
+            enable(name, may_lead, _ROLE_HINT)
 
     def _setWidgetAllowed(self, widget, key, allowed):
         if widget is None:
