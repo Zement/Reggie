@@ -86,6 +86,22 @@ _FULL_ONLY_ACTIONS = (
     'metainfo',
 )
 
+# Loading a level: the host, or a client the host promoted to Full.
+_LEADER_ACTIONS = ('newlevel', 'openfromname', 'openrecent')
+
+# The game patch: the host only, whatever the client's role.
+_HOST_ONLY_ACTIONS = ('changegamedef',)
+
+# Adding, importing and deleting areas. Grouped separately from the Full-only
+# dialogs because they are a different kind of act - they change what areas
+# *exist*, not the settings of one - but they need the same restriction, and
+# more obviously so: Zement's point is that if an Editor may not edit an area's
+# settings, it certainly may not delete the area.
+_AREA_ACTIONS = ('addarea', 'importarea', 'deletearea')
+
+# Unavailable to everyone in a session, including the host.
+_NEVER_IN_SESSION_ACTIONS = ('openfromfile',)
+
 
 class _BusyIndicator:
     """
@@ -692,14 +708,7 @@ class CollabController(QtCore.QObject):
         if not isinstance(actions, dict):
             return
 
-        active = self.is_active
-        host = self.is_host
-
-        # A Full client is trusted with the session's level and area, exactly
-        # like the host. The role is what the distinction rests on, not being
-        # the host: an Editor client may change neither.
-        may_lead = (not active) or host or self._clientHasFullRole()
-        may_change_area = may_lead
+        window = self.window
 
         def enable(name, allowed, hint=_PERMISSION_HINT):
             action = actions.get(name)
@@ -718,39 +727,71 @@ class CollabController(QtCore.QObject):
             action.setToolTip(self._original_tooltips[name] if allowed
                               else hint)
 
-        # Level loading: anyone trusted to lead, and only by name. "Open by
-        # file" stays disabled for everybody in a session, including the host,
-        # because a path outside the patch's stage folder cannot be resolved
-        # from a name on another machine.
-        enable('newlevel', may_lead)
-        enable('openfromname', may_lead)
-        enable('openfromfile', not active)
-        enable('openrecent', may_lead)
+        for name in self._restrictedActions():
+            enable(name, self.actionAllowedBySession(name),
+                   _ROLE_HINT if name in _FULL_ONLY_ACTIONS
+                   else _PERMISSION_HINT)
 
-        # Game patch: host only, whatever the client's role. Switching patch
-        # reloads spritedata and tilesets under a level the host owns.
-        enable('changegamedef', not active or host)
+        active = self.is_active
+        host = self.is_host
+        may_change_area = self.actionAllowedBySession('addarea')
 
         self._setWidgetAllowed(getattr(window, 'patchComboBox', None),
                                'patchComboBox', not active or host)
         self._setWidgetAllowed(getattr(window, 'areaComboBox', None),
                                'areaComboBox', may_change_area)
 
-        for name in ('addarea', 'importarea', 'deletearea'):
-            enable(name, may_change_area)
+    @staticmethod
+    def _restrictedActions():
+        """
+        Every action a session can restrict, in one place.
+        """
+        return (_LEADER_ACTIONS + _HOST_ONLY_ACTIONS + _AREA_ACTIONS
+                + _FULL_ONLY_ACTIONS + _NEVER_IN_SESSION_ACTIONS)
 
-        # The Full-only dialogs. Every one of these pushes a command whose op
-        # kind is in protocol.OP_KINDS_FULL_ONLY, so an Editor client that
-        # opened one could make changes, watch them apply locally, and see them
-        # refused by the host - the level then differs between the two sides
-        # with only a line in the chat log to explain it. Greying them out makes
-        # the restriction visible before the edit rather than after, exactly as
-        # it already works for Save and for changing the game patch.
-        #
-        # Disabling the action covers the menu entry and the toolbar button
-        # together, since both are built from the same QAction.
-        for name in _FULL_ONLY_ACTIONS:
-            enable(name, may_lead, _ROLE_HINT)
+    def actionAllowedBySession(self, name):
+        """
+        Whether this session allows an action, ignoring any other reason it
+        might be disabled (an empty level, no zones, four areas already).
+
+        Public and separate from applyEditingPermissions because several places
+        recompute an action's enabled state from the level itself and run
+        afterwards - see set_action_allowed(). They need to ask this question
+        without re-running the whole pass, and combining the two answers is what
+        stops a level reload from quietly re-enabling a restricted control.
+        """
+        if not self.is_active:
+            return True
+
+        host = self.is_host
+
+        # A Full client is trusted with the session's level and area, exactly
+        # like the host. The role is what the distinction rests on, not being
+        # the host: an Editor client may change neither.
+        may_lead = host or self._clientHasFullRole()
+
+        if name in _NEVER_IN_SESSION_ACTIONS:
+            # "Open by file" can reach a level outside the patch's stage folder,
+            # which no other machine could resolve from the name alone - so it
+            # is unavailable to everyone in a session, the host included.
+            return False
+
+        if name in _HOST_ONLY_ACTIONS:
+            # Switching patch reloads spritedata and tilesets under a level the
+            # host owns, so it stays with the host whatever the client's role.
+            return host
+
+        if name in _LEADER_ACTIONS or name in _AREA_ACTIONS:
+            return may_lead
+
+        if name in _FULL_ONLY_ACTIONS:
+            # Each of these pushes a command whose op kind is in
+            # protocol.OP_KINDS_FULL_ONLY, so an Editor that opened one could
+            # edit, watch it apply locally, and have the host refuse it - the
+            # two sides then differ with only a chat line to explain it.
+            return may_lead
+
+        return True
 
     def _setWidgetAllowed(self, widget, key, allowed):
         if widget is None:
@@ -2415,6 +2456,46 @@ def _sprite_format():
     from reggie.core.raw_data import RawData
 
     return RawData.Format.Vanilla
+
+
+def set_action_allowed(name, allowed):
+    """
+    Enables an action, unless a collaboration session forbids it.
+
+    For the several places that compute their own enabled state from the level -
+    'backgrounds' follows the zone count, the area actions follow the area count
+    - and run *after* the session has applied its permissions. Calling
+    setEnabled directly there re-enabled a control the session had greyed out,
+    which is how Backgrounds and the three area actions stayed usable for an
+    Editor client: every level load, every Zones dialog and every zones undo put
+    them back.
+
+    So the two conditions are combined here rather than each site knowing about
+    collaboration. A control is available only if the level allows it AND the
+    session does.
+    """
+    window = getattr(globals_, 'mainWindow', None)
+    if window is None:
+        return
+
+    actions = getattr(window, 'actions', None)
+    if not isinstance(actions, dict):
+        return
+
+    action = actions.get(name)
+    if action is None:
+        return
+
+    if allowed:
+        controller = getattr(window, '_collab', None)
+        if controller is not None:
+            try:
+                allowed = controller.actionAllowedBySession(name)
+            except Exception:
+                # A collaboration problem must never leave a control stuck off.
+                allowed = True
+
+    action.setEnabled(bool(allowed))
 
 
 def _external_patch_dirs():

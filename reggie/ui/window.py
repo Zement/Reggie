@@ -1257,7 +1257,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # Actually delete the area
         globals_.Level.deleteArea(area_to_delete)
 
-        self.actions['deletearea'].setEnabled(len(globals_.Level.areas) > 1)
+        # Via set_action_allowed so a session's restriction survives; see its
+        # docstring.
+        from reggie.ui.collab_controller import set_action_allowed
+        set_action_allowed('deletearea', len(globals_.Level.areas) > 1)
 
         # Update the area selection combobox
         self.areaComboBox.clear()
@@ -2965,7 +2968,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         for spr in globals_.Area.sprites:
             spr.ImageObj.positionChanged()
 
-        self.actions['backgrounds'].setEnabled(len(globals_.Area.zones) > 0)
+        # Via set_action_allowed so a session's restriction is not overwritten;
+        # see its docstring.
+        from reggie.ui.collab_controller import set_action_allowed
+        set_action_allowed('backgrounds', len(globals_.Area.zones) > 0)
+
         self.levelOverview.update()
 
         zones_after = undo.snapshot_zones()

@@ -21,6 +21,7 @@ from libs import lh, lz77
 from reggie.core.dirty import setSetting, SetDirty
 from reggie.io.misc import IsNSMBLevel, LoadLevelNames, ChooseLevelNameDialog
 from reggie.core.level import Level_NSMBW
+from reggie.ui.collab_controller import set_action_allowed
 
 
 class LevelIO:
@@ -366,10 +367,15 @@ class LevelIO:
         self.win.actions['showlocations'].setChecked(True)
         self.win.actions['showpaths'].setChecked(True)
         self.win.actions['showcomments'].setChecked(True)
-        self.win.actions['addarea'].setEnabled(len(globals_.Level.areas) < 4)
-        self.win.actions['importarea'].setEnabled(len(globals_.Level.areas) < 4)
-        self.win.actions['deletearea'].setEnabled(len(globals_.Level.areas) > 1)
-        self.win.actions['backgrounds'].setEnabled(len(globals_.Area.zones) > 0)
+        # Through set_action_allowed, not setEnabled: a collaboration session
+        # may forbid these regardless of what the level allows, and this runs
+        # after the session has applied its permissions. Setting them directly
+        # here is what re-enabled Backgrounds and the area actions for an Editor
+        # client on every level load.
+        set_action_allowed('addarea', len(globals_.Level.areas) < 4)
+        set_action_allowed('importarea', len(globals_.Level.areas) < 4)
+        set_action_allowed('deletearea', len(globals_.Level.areas) > 1)
+        set_action_allowed('backgrounds', len(globals_.Area.zones) > 0)
 
         # Turn snapping back on
         globals_.OverrideSnapping = False
