@@ -1882,12 +1882,19 @@ def _refresh_after_zone_change(zones):
             except Exception:
                 pass
 
-    actions = getattr(window, 'actions', None)
-    if isinstance(actions, dict) and 'backgrounds' in actions:
-        try:
-            actions['backgrounds'].setEnabled(len(zones) > 0)
-        except Exception:
-            pass
+    # Through set_action_allowed, not setEnabled: Backgrounds is a Full-only
+    # dialog, and this runs on the *receiving* side of a remote zone change. An
+    # Editor client therefore re-enabled its own Backgrounds button every time
+    # the host touched a zone - which is why it stayed available after the
+    # other four sites were fixed.
+    #
+    # Imported inside the function, like the rest of this module's UI reach:
+    # reggie/collab stays Qt-free at import time, and a test asserts it.
+    try:
+        from reggie.ui.collab_controller import set_action_allowed
+        set_action_allowed('backgrounds', len(zones) > 0)
+    except Exception:
+        pass
 
 
 def _clear_area_items(area=None):
