@@ -26,7 +26,7 @@ things are load-bearing rather than cosmetic:
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from reggie.collab import discovery, files, identity, protocol, session, upnp
+from reggie.collab import discovery, identity, protocol, session, upnp
 from reggie.core import globals_
 from reggie.core.dirty import setSetting, setting
 
@@ -948,8 +948,10 @@ class CollabSettingsTab(QtWidgets.QWidget):
             'This is your own choice as a client - it has no effect while you '
             'are hosting. The Patch Manager is preferred where it has the '
             'patch: its files come from the catalog rather than from another '
-            'player. A host transfer always asks first and never accepts '
-            'program code, so custom sprite previews are not included.')
+            'player, and installing from it is asked for separately. A host '
+            'transfer runs without asking - joining a session is the consent - '
+            'and never accepts program code, so custom sprite previews are not '
+            'included.')
         patchHint.setWordWrap(True)
 
         self.banList = QtWidgets.QListWidget()
@@ -1054,36 +1056,14 @@ def _colorSwatch(color, size=12):
 # Prompts
 # ---------------------------------------------------------------------------
 
-def confirm_patch_transfer(parent, entries, host_nick, patch_id):
-    """
-    The consent prompt before any patch file is accepted (spec section 4.4).
-
-    Concrete on purpose - who, what, how many files, how big - because a vague
-    prompt trains people to click through it.
-    """
-    message = files.describe_transfer(entries, host_nick, patch_id)
-
-    box = QtWidgets.QMessageBox(parent)
-    box.setWindowTitle(_tr(0))
-    box.setIcon(QtWidgets.QMessageBox.Icon.Question)
-    box.setText('Accept these files from the host?')
-    box.setInformativeText(message)
-    box.setDetailedText('\n'.join(
-        '%s  (%d bytes)' % (entry['path'], entry['size']) for entry in entries))
-    box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes
-                           | QtWidgets.QMessageBox.StandardButton.No)
-    box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
-
-    return box.exec() == QtWidgets.QMessageBox.StandardButton.Yes
-
-
 def confirm_catalog_install(parent, patch_id, patch_version=''):
     """
     The consent prompt before installing a patch from the Patch Manager catalog.
 
-    Separate from confirm_patch_transfer, and required where that one is not,
-    because the two are different acts. Accepting data files from the host means
-    trusting a peer already authenticated by the pinned join code. Installing
+    Asked here and not for a host transfer, because the two are different acts.
+    Accepting data files from the host means trusting a peer already
+    authenticated by the pinned join code, which joining the session already
+    expressed - so that route runs unprompted (Zement, 2026-08-06). Installing
     from the catalog reaches out to a *third party* the user has not vouched for
     in this session, over the internet, and writes an unpacked archive - so it
     is asked for explicitly even though it is the more "official" route.

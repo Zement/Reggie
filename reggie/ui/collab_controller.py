@@ -217,6 +217,16 @@ class CollabController(QtCore.QObject):
         self._transfer_queue = []
         self._transfer_destination = ''
 
+        # What the session moved to while a patch was still being fetched, held
+        # until the patch is loaded and its Stage folder is known. `(level,
+        # area)` when a switch was deferred, None when there is nothing to
+        # replay; `_deferred_snapshot_area` is the area a snapshot was wanted
+        # for, or None. Kept apart because either can arrive without the other:
+        # a joining client asks for a snapshot with no level switch, and a
+        # mid-session switch is a level change with no snapshot request.
+        self._deferred_level = None
+        self._deferred_snapshot_area = None
+
         self._connect_signals()
 
     # -- signal wiring ------------------------------------------------------
@@ -935,6 +945,17 @@ class CollabController(QtCore.QObject):
         if level == self._currentLevelName() and area == self._areaNumber():
             return False
 
+        if self._patchPending():
+            # Same reason as in _onConnected: loading now would read tilesets
+            # through the outgoing patch, and the incoming one has no Stage
+            # folder yet. Only the latest switch is worth keeping - the session
+            # is somewhere specific, not everywhere it passed through.
+            self._deferred_level = (level, area)
+            self._appendStatus(
+                'Waiting for the %s patch before loading %s.'
+                % (self._transfer_patch, level or 'the area'))
+            return False
+
         window = self.window
         if not hasattr(window, 'LoadLevel'):
             return False
@@ -1137,10 +1158,20 @@ class CollabController(QtCore.QObject):
         self._startPresence()
         self._checkPatch(room_info)
 
+        area = int(room_info.get('area', 1) or 1)
+
+        if self._patchPending():
+            # The patch is still arriving, so asking for the level now would
+            # have it drawn with the tilesets of whatever patch is loaded - and
+            # the Stage folder of the incoming one is not even known yet, which
+            # is what produced a "tileset not found" warning before the user had
+            # been asked for the path. Replayed by _resumeDeferredLoad.
+            self._deferred_snapshot_area = area
+            return
+
         if self.client is not None:
             self.client.send(protocol.make_message(
-                protocol.T_SNAPSHOT_REQUEST,
-                {'area': int(room_info.get('area', 1) or 1)}))
+                protocol.T_SNAPSHOT_REQUEST, {'area': area}))
 
     def _onRoomInfoChanged(self, room_info):
         """
@@ -1662,6 +1693,14 @@ class CollabController(QtCore.QObject):
         if self.refmap is None:
             return
 
+        if self._patchPending():
+            # A snapshot the host sent on its own initiative, or one already in
+            # flight when the transfer started. Applying it would populate the
+            # area with items whose tilesets and sprite data are about to be
+            # replaced; the resync after the patch loads brings a current one.
+            self._deferred_snapshot_area = self._areaNumber()
+            return
+
         count = len(payload.get('items') or []) if isinstance(payload, dict) else 0
 
         try:
@@ -1738,6 +1777,14 @@ class CollabController(QtCore.QObject):
         loop and the user is waiting for it.
         """
         if self.client is None:
+            return False
+
+        if self._patchPending():
+            # The answer would only be discarded by _onSnapshot, and asking
+            # anyway would spend the rate-limit window on a snapshot built for
+            # the patch that is being replaced. Noted instead, so the resume
+            # after the patch loads fetches a current one.
+            self._deferred_snapshot_area = self._areaNumber()
             return False
 
         now = time.monotonic()
@@ -1830,6 +1877,44 @@ class CollabController(QtCore.QObject):
                 'You cannot join without the %s patch.' % patch_id
                 if patch_id else 'The required patch is not available.')
 
+    def _patchPending(self):
+        """
+        Whether a host transfer is still running, so the level cannot be loaded.
+
+        Keyed on _transfer_patch rather than _transfer because the two are set
+        at different moments: the id is stored when T_PATCH_NEED goes out, while
+        the TransferSession only exists once the host's manifest comes back. The
+        gap between them is exactly when the host's level switch tends to
+        arrive, so testing the session alone would let the first one through.
+
+        The catalog route needs no equivalent - see _installFromCatalog.
+        """
+        return bool(self._transfer_patch)
+
+    def _resumeDeferredLoad(self):
+        """
+        Loads what the session moved to while the patch was arriving.
+
+        Called after the patch has been loaded - which is after LoadGameDef has
+        asked for its Stage folder - so tilesets now resolve against the right
+        game. A level switch takes precedence over a bare snapshot request:
+        loading the level ends in _afterSessionLoad, which asks for the items
+        itself, and doing both would fetch the same area twice.
+        """
+        level = self._deferred_level
+        area = self._deferred_snapshot_area
+
+        self._deferred_level = None
+        self._deferred_snapshot_area = None
+
+        if level is not None:
+            self._onLevelSwitchRequested(level[0], level[1])
+            return
+
+        if area is not None and self.client is not None:
+            self.client.send(protocol.make_message(
+                protocol.T_SNAPSHOT_REQUEST, {'area': int(area)}))
+
     def _switchToPatch(self, patch_id):
         """
         Loads the patch the session uses, if it is not already loaded.
@@ -1869,6 +1954,11 @@ class CollabController(QtCore.QObject):
         The consequence, and the reason this is not merely a redirect: the
         install is asynchronous and user-driven, so this cannot know when it
         finished. It re-checks when the dialog closes and acts on the answer.
+
+        Not deferred the way a host transfer is, even though this also keeps the
+        event loop running: a catalog install sets the patch's Stage and Texture
+        paths itself, so there is no unanswered path question for a level load
+        to run ahead of (Zement, 2026-08-09).
         """
         patch_id = requirement['patch_id']
 
@@ -1944,6 +2034,13 @@ class CollabController(QtCore.QObject):
         staying on read-only, because it cannot hold the same level state and a
         seat showing the wrong level is worse than no seat.
         """
+        # Anything held back while the patch was being fetched is dropped rather
+        # than replayed: the patch never arrived, so loading that level now
+        # would produce exactly the mis-rendered state the deferral avoided -
+        # and the session is over in any case.
+        self._deferred_level = None
+        self._deferred_snapshot_area = None
+
         self._appendStatus(message)
         collab_dialogs.report_patch_unavailable(self.window, message)
         self.leave()
@@ -2092,6 +2189,11 @@ class CollabController(QtCore.QObject):
 
         self._reloadPatch(patch_id)
 
+        # Only now is it safe to open the level: _reloadPatch has been through
+        # LoadGameDef, which asks for the patch's Stage folder on first use, so
+        # the tilesets it names can actually be found.
+        self._resumeDeferredLoad()
+
     def _clearTransfer(self, abort=False):
         """
         Drops all transfer state.
@@ -2113,6 +2215,14 @@ class CollabController(QtCore.QObject):
         self._transfer_patch = ''
         self._transfer_queue = []
         self._transfer_destination = ''
+
+        if abort:
+            # An aborted transfer never delivers its patch, so whatever was held
+            # for it can never be loaded correctly. Cleared here rather than only
+            # in _leaveOverPatch because _teardown aborts too, and a stale level
+            # left behind would be replayed into the *next* session.
+            self._deferred_level = None
+            self._deferred_snapshot_area = None
 
     def _failTransfer(self, message):
         """
