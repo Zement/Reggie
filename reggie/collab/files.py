@@ -64,6 +64,29 @@ STAGING_DIRNAME = '_collab_staging'
 
 PATCHES_RELATIVE_DIR = os.path.join('reggiedata', 'patches')
 
+# Where a transferred patch's game data lands (Block C - B3).
+#
+# Deliberately a sibling of the user's own mods rather than a subfolder of one.
+# The Patch Manager installs full mods to assets/mods/<Mod Name>/Stage, and a
+# transfer writing there could overwrite levels the user made - which is the one
+# outcome this whole design exists to prevent. Everything under _collab is
+# session-derived by construction, so overwriting it is always safe, including
+# overwriting a *previous* session's copy (Zement, 2026-08-09).
+#
+# The consequence to keep in mind: a user's own 'assets/mods/Foo' and a
+# transferred 'assets/mods/_collab/Foo' are two different games as far as the
+# editor is concerned, and only the session points at the second one.
+COLLAB_MODS_RELATIVE_DIR = os.path.join('assets', 'mods', '_collab')
+
+# Sections of a manifest. A transfer now carries three different kinds of file
+# to three different destinations, so each entry says which it is. Anything
+# unrecognised is refused rather than guessed at - see validate_manifest.
+KIND_PATCH = 'patch'
+KIND_STAGE = 'stage'
+KIND_TEXTURE = 'texture'
+
+MANIFEST_KINDS = (KIND_PATCH, KIND_STAGE, KIND_TEXTURE)
+
 # Read/write in modest blocks: a patch is thousands of small PNGs, so this is
 # never the bottleneck, and it keeps memory flat for the one large file.
 HASH_CHUNK_BYTES = 64 * 1024
@@ -131,15 +154,33 @@ def sha256_bytes(data):
 # Building a manifest (host side)
 # ---------------------------------------------------------------------------
 
-def build_manifest(patch_dir, patch_id=''):
+def build_manifest(patch_dir, patch_id='', stage_dir='', texture_dir='',
+                   on_progress=None):
     """
-    Lists the transferable files in a patch directory.
+    Lists the transferable files of a patch and, optionally, its game data.
 
     Skips anything the transfer policy forbids rather than failing, so a patch
     containing `sprites.py` still yields a usable manifest of its data files -
     and the caller can tell the user that the code part will not be sent.
 
-    Returns {'patch_id', 'files': [{path, size, sha256}], 'skipped': [...],
+    `stage_dir` and `texture_dir` are the host's own Stage and Texture folders
+    (Block C - B3). Sending them is what stops two peers with the same patch id
+    editing different levels: the patch definition says which tilesets a level
+    names, but the levels and tilesets themselves live outside it, wherever the
+    host's StageGamePath happens to point.
+
+    A texture folder nested inside the stage folder - the usual layout - is not
+    walked twice: the stage pass skips anything under the texture root, so those
+    files are listed once, as 'texture'.
+
+    `on_progress(count, kind)` is called every so often while building, if given.
+    Building is dominated by hashing - measured at 6.2 s of the 10.8 s a real
+    NewerSMBW patch plus its Stage and Texture folders takes, against 0.19 s to
+    walk and stat them - and it runs on the caller's thread. Since it touches no
+    Qt state, the caller can safely keep the UI alive from the callback; that is
+    the difference between this and a scene rebuild, which cannot.
+
+    Returns {'patch_id', 'files': [{path, size, sha256, kind}], 'skipped': [...],
              'total_bytes'}.
     """
     root = os.path.abspath(str(patch_dir))
@@ -148,53 +189,85 @@ def build_manifest(patch_dir, patch_id=''):
 
     files = []
     skipped = []
-    total = 0
+    state = {'total': 0}
 
-    for directory, _subdirs, names in os.walk(root):
-        for name in sorted(names):
-            absolute = os.path.join(directory, name)
-            relative = os.path.relpath(absolute, root).replace(os.sep, '/')
-
-            # The same gate the receiver applies, run here so the host never
-            # offers something the client would refuse - and so a patch's
-            # sprites.py is visibly skipped rather than silently missing.
-            try:
-                identity.check_transfer_extension(relative)
-            except identity.UnsafePathError as exc:
-                skipped.append({'path': relative, 'reason': str(exc)})
+    def collect(section_root, kind, exclude=()):
+        """Walks one section, appending to the shared lists."""
+        for directory, _subdirs, names in os.walk(section_root):
+            resolved = os.path.abspath(directory)
+            if any(resolved == other or resolved.startswith(other + os.sep)
+                   for other in exclude):
                 continue
 
-            try:
-                size = os.path.getsize(absolute)
-            except OSError as exc:
-                skipped.append({'path': relative, 'reason': str(exc)})
-                continue
+            for name in sorted(names):
+                absolute = os.path.join(directory, name)
+                relative = os.path.relpath(
+                    absolute, section_root).replace(os.sep, '/')
 
-            total += size
-            if total > protocol.MAX_MANIFEST_TOTAL_BYTES:
-                raise ManifestError(
-                    'This patch is too large to send (over %d MiB of data '
-                    'files). The client should install it from the Patch '
-                    'Manager instead.'
-                    % (protocol.MAX_MANIFEST_TOTAL_BYTES // (1024 * 1024)))
+                # The same gate the receiver applies, run here so the host never
+                # offers something the client would refuse - and so a patch's
+                # sprites.py is visibly skipped rather than silently missing.
+                try:
+                    identity.check_transfer_extension(relative)
+                except identity.UnsafePathError as exc:
+                    skipped.append({'path': relative, 'reason': str(exc)})
+                    continue
 
-            files.append({
-                'path': relative,
-                'size': size,
-                'sha256': sha256_file(absolute),
-            })
+                try:
+                    size = os.path.getsize(absolute)
+                except OSError as exc:
+                    skipped.append({'path': relative, 'reason': str(exc)})
+                    continue
 
-            if len(files) > protocol.MAX_MANIFEST_FILES:
-                raise ManifestError(
-                    'This patch has too many files to send (over %d). The '
-                    'client should install it from the Patch Manager instead.'
-                    % protocol.MAX_MANIFEST_FILES)
+                state['total'] += size
+                if state['total'] > protocol.MAX_MANIFEST_TOTAL_BYTES:
+                    raise ManifestError(
+                        'This patch and its game files are too large to send '
+                        '(over %d MiB). The client should install it from the '
+                        'Patch Manager instead.'
+                        % (protocol.MAX_MANIFEST_TOTAL_BYTES // (1024 * 1024)))
+
+                files.append({
+                    'path': relative,
+                    'size': size,
+                    'sha256': sha256_file(absolute),
+                    'kind': kind,
+                })
+
+                # Every 25 files rather than every file: the callback exists so
+                # a host does not look frozen, and calling it thousands of times
+                # would cost more than the hashing it reports on.
+                if on_progress is not None and len(files) % 25 == 0:
+                    on_progress(len(files), kind)
+
+                if len(files) > protocol.MAX_MANIFEST_FILES:
+                    raise ManifestError(
+                        'This patch and its game files have too many files to '
+                        'send (over %d). The client should install it from the '
+                        'Patch Manager instead.'
+                        % protocol.MAX_MANIFEST_FILES)
+
+    texture_root = (os.path.abspath(str(texture_dir))
+                    if texture_dir and os.path.isdir(str(texture_dir)) else '')
+
+    collect(root, KIND_PATCH)
+
+    if stage_dir and os.path.isdir(str(stage_dir)):
+        stage_root = os.path.abspath(str(stage_dir))
+        # Texture usually lives inside Stage. Excluded from this pass so the
+        # same file is not listed under two kinds, which would have the receiver
+        # write it twice and the second write race the first.
+        collect(stage_root, KIND_STAGE,
+                exclude=(texture_root,) if texture_root else ())
+
+    if texture_root:
+        collect(texture_root, KIND_TEXTURE)
 
     return {
         'patch_id': str(patch_id),
         'files': files,
         'skipped': skipped,
-        'total_bytes': total,
+        'total_bytes': state['total'],
     }
 
 
@@ -209,7 +282,8 @@ def manifest_payload(manifest):
         'patch_id': manifest.get('patch_id', ''),
         'files': [{'path': entry['path'],
                    'size': entry['size'],
-                   'sha256': entry['sha256']}
+                   'sha256': entry['sha256'],
+                   'kind': entry.get('kind', KIND_PATCH)}
                   for entry in manifest['files']],
     }
 
@@ -263,12 +337,32 @@ def validate_manifest(payload, require_allowed_extension=True):
 
         normalised = path.replace('\\', '/')
 
+        # Which of the three destinations this file is for. Read before the
+        # duplicate check, because that check is per destination - see below.
+        # Defaulted rather than required, so a host running the previous
+        # version - whose manifests are all patch files and carry no kind - is
+        # still understood. An unrecognised value is refused outright: `kind`
+        # chooses a filesystem root, and guessing at one supplied by a peer is
+        # how a transfer ends up writing somewhere nobody intended.
+        kind = entry.get('kind', KIND_PATCH)
+        if kind is None or kind == '':
+            kind = KIND_PATCH
+        if kind not in MANIFEST_KINDS:
+            raise ManifestError(
+                'The host offered %r as an unknown kind of file (%r).'
+                % (path, kind))
+
         # Compared case-insensitively: Windows filesystems are case-insensitive,
         # so 'foo.png' and 'FOO.png' are one file on disk. Treating them as
         # distinct would let the second overwrite the first *after* it had been
         # verified, and then leave commit() half-finished when the vanished
         # source could not be moved.
-        key = normalised.lower()
+        #
+        # Keyed on (kind, path) rather than path alone: the three sections have
+        # three different roots, so 'Pa0_jyotyu.arc' as a texture and the same
+        # name as a stage file are two files in two folders, not a duplicate.
+        # Within one section the rule is unchanged.
+        key = (kind, normalised.lower())
         if key in seen:
             raise ManifestError('The host listed %r twice.' % path)
         seen.add(key)
@@ -288,7 +382,7 @@ def validate_manifest(payload, require_allowed_extension=True):
             raise ManifestError('The host sent an invalid checksum for %r.' % path)
 
         clean.append({'path': normalised, 'size': size,
-                      'sha256': sha.lower()})
+                      'sha256': sha.lower(), 'kind': kind})
 
     return clean
 
@@ -358,32 +452,75 @@ class TransferSession:
     been received and every hash matches. `commit()` is the only method that
     touches the destination, and it refuses to run while anything is outstanding.
 
+    Since Block C - B3 a transfer carries three sections - the patch definition,
+    the Stage folder and the Texture folder - which go to three different
+    destinations. Every internal map is therefore keyed on **(kind, path)**, not
+    on the path alone: 'Pa0_jyotyu.arc' is a legitimate name in two of those
+    sections at once, and treating the two as one file would have the second
+    overwrite the first in staging after the first had already been verified.
+
+    The wire is unaffected. A file_req and a file_chunk still name a path, and
+    the *host* knows which section it is serving from, so a chunk is matched
+    back to its entry by path within the section currently being fetched.
+
     Usage:
         session = TransferSession(staging_root, entries, patch_id='NewerSMBW')
-        for path in session.pending_paths():
+        for kind, path in session.pending_keys():
             ... request it, then feed each chunk ...
-            session.add_chunk(payload)
-        session.commit(destination_dir)
+            session.add_chunk(payload, kind)
+        session.commit({KIND_PATCH: ..., KIND_STAGE: ..., KIND_TEXTURE: ...})
     """
 
     def __init__(self, staging_root, entries, patch_id=''):
         self.staging_root = os.path.abspath(str(staging_root))
         self.patch_id = str(patch_id)
-        self.entries = {entry['path']: dict(entry) for entry in entries}
 
-        self._received = {}      # path -> bytes written
-        self._handles = {}       # path -> open file handle
-        self._expected = {}      # path -> chunk total, once known
-        self._next_index = {}    # path -> next chunk index expected
+        # Keyed on (kind, path); see the class docstring. Entries that arrived
+        # without a kind are patch files, which is what every manifest was
+        # before B3.
+        self.entries = {}
+        for entry in entries:
+            record = dict(entry)
+            record.setdefault('kind', KIND_PATCH)
+            self.entries[(record['kind'], record['path'])] = record
+
+        self._received = {}      # key -> bytes written
+        self._handles = {}       # key -> open file handle
+        self._expected = {}      # key -> chunk total, once known
+        self._next_index = {}    # key -> next chunk index expected
         self._verified = set()
-        self.failed = {}         # path -> reason
+        self.failed = {}         # key -> reason
 
         os.makedirs(self.staging_root, exist_ok=True)
 
     # -- state --------------------------------------------------------------
 
+    def _staging_path(self, kind, path):
+        """
+        Where one file is staged.
+
+        Each section gets its own subdirectory, so the same relative name in two
+        sections cannot collide before commit. `kind` is validated against the
+        closed set first, so it can never introduce a path component of its own.
+        """
+        if kind not in MANIFEST_KINDS:
+            raise TransferError('unknown transfer section %r' % (kind,))
+
+        return identity.safe_join(os.path.join(self.staging_root, kind), path)
+
+    def pending_keys(self):
+        """The (kind, path) pairs still outstanding."""
+        return [key for key in self.entries if key not in self._verified]
+
     def pending_paths(self):
-        return [path for path in self.entries if path not in self._verified]
+        """
+        The paths still outstanding, without their section.
+
+        Kept for callers that only need names - the phase 6 tests and the
+        pre-B3 single-section flow. Prefer pending_keys(), which is unambiguous
+        when the same name appears in two sections.
+        """
+        return [path for _kind, path in self.pending_keys()]
 
     @property
     def is_complete(self):
@@ -405,10 +542,16 @@ class TransferSession:
 
     # -- receiving ----------------------------------------------------------
 
-    def add_chunk(self, payload):
+    def add_chunk(self, payload, kind=None):
         """
         Accepts one file_chunk payload. Returns True when that file is complete
         and verified.
+
+        `kind` names the section being fetched. It comes from the receiver's own
+        request queue, never from the payload: the section decides which folder
+        the bytes land in, so letting the sender choose it would hand a peer the
+        destination. When it is omitted the payload's own path must be unique
+        across sections, which is the pre-B3 single-section case.
 
         Raises TransferError for anything the sender should not have sent: an
         unlisted path, a chunk out of order, more bytes than announced, or a
@@ -417,14 +560,15 @@ class TransferSession:
         """
         path = str(payload.get('path', '')).replace('\\', '/')
 
-        entry = self.entries.get(path)
+        key = self._key_for(kind, path)
+        entry = self.entries.get(key)
         if entry is None:
             # Not in the manifest the user consented to. Refusing here is what
             # keeps consent meaningful.
             raise TransferError('The host sent a file that was not offered: %r'
                                 % path)
 
-        if path in self._verified:
+        if key in self._verified:
             raise TransferError('The host sent %r again after it was complete.'
                                 % path)
 
@@ -434,11 +578,11 @@ class TransferSession:
                 or isinstance(total, bool) or not isinstance(total, int)):
             raise TransferError('The host sent a malformed chunk for %r.' % path)
 
-        known_total = self._expected.setdefault(path, total)
+        known_total = self._expected.setdefault(key, total)
         if total != known_total:
             raise TransferError('The host changed the chunk count for %r.' % path)
 
-        expected_index = self._next_index.get(path, 0)
+        expected_index = self._next_index.get(key, 0)
         if index != expected_index:
             # In-order only. Out-of-order chunks would mean seeking in the
             # output file, and a sender that can choose offsets can write
@@ -451,57 +595,85 @@ class TransferSession:
         except (ValueError, TypeError):
             raise TransferError('The host sent unreadable data for %r.' % path)
 
-        written = self._received.get(path, 0)
+        written = self._received.get(key, 0)
         if written + len(data) > entry['size']:
             raise TransferError(
                 'The host sent more data than announced for %r '
                 '(%d bytes, expected %d).'
                 % (path, written + len(data), entry['size']))
 
-        handle = self._handles.get(path)
+        handle = self._handles.get(key)
         if handle is None:
-            destination = identity.safe_join(self.staging_root, path)
+            destination = self._staging_path(key[0], path)
             os.makedirs(os.path.dirname(destination), exist_ok=True)
             handle = open(destination, 'wb')
-            self._handles[path] = handle
+            self._handles[key] = handle
 
         handle.write(data)
-        self._received[path] = written + len(data)
-        self._next_index[path] = index + 1
+        self._received[key] = written + len(data)
+        self._next_index[key] = index + 1
 
         if index + 1 < total:
             return False
 
         # Last chunk: close and verify.
         handle.close()
-        self._handles.pop(path, None)
-        self._verify(path, entry)
+        self._handles.pop(key, None)
+        self._verify(key, entry)
         return True
 
-    def _verify(self, path, entry):
-        destination = identity.safe_join(self.staging_root, path)
+    def _key_for(self, kind, path):
+        """
+        The entry key for a chunk that named `path`.
+
+        With an explicit `kind` this is simply the pair. Without one - a caller
+        that has not been taught about sections - the path is resolved against
+        whatever sections list it, and an ambiguous name is refused rather than
+        guessed at, because guessing would write the file to the wrong folder.
+        """
+        if kind is not None:
+            return (kind, path)
+
+        matches = [key for key in self.entries if key[1] == path]
+        if not matches:
+            return (KIND_PATCH, path)
+        if len(matches) > 1:
+            raise TransferError(
+                'The file %r exists in more than one section; the section must '
+                'be given.' % path)
+        return matches[0]
+
+    def _verify(self, key, entry):
+        destination = self._staging_path(key[0], key[1])
+        path = key[1]
 
         actual_size = os.path.getsize(destination)
         if actual_size != entry['size']:
-            self.failed[path] = 'size mismatch'
+            self.failed[key] = 'size mismatch'
             raise VerificationError(
                 '%r arrived with %d bytes but %d were announced.'
                 % (path, actual_size, entry['size']))
 
         actual_hash = sha256_file(destination)
         if actual_hash != entry['sha256']:
-            self.failed[path] = 'checksum mismatch'
+            self.failed[key] = 'checksum mismatch'
             raise VerificationError(
                 '%r failed its checksum. The file was corrupted or tampered '
                 'with in transit.' % path)
 
-        self._verified.add(path)
+        self._verified.add(key)
 
     # -- finishing ----------------------------------------------------------
 
     def commit(self, destination_dir):
         """
         Moves the verified files into place.
+
+        `destination_dir` is either one directory - every file is a patch file,
+        the pre-B3 shape - or a {kind: directory} mapping. A mapping missing a
+        kind that the transfer actually carries is refused rather than filled
+        in: silently dropping a section would install a patch whose levels never
+        arrived, which looks exactly like the bug this block is fixing.
 
         Refuses unless every listed file is present and verified: a
         half-installed patch is worse than none, because the user would see
@@ -517,21 +689,43 @@ class TransferSession:
             raise TransferError(
                 'Not installing the patch: %d file(s) never arrived.' % missing)
 
+        if isinstance(destination_dir, dict):
+            roots = {kind: os.path.abspath(str(path))
+                     for kind, path in destination_dir.items()}
+        else:
+            roots = {KIND_PATCH: os.path.abspath(str(destination_dir))}
+
+        needed = {kind for kind, _path in self.entries}
+        missing_roots = sorted(needed - set(roots))
+        if missing_roots:
+            raise TransferError(
+                'Not installing: no destination was given for %s files.'
+                % ', '.join(missing_roots))
+
         # A transferred patch must not claim to have files that were excluded.
         self._drop_untransferred_declarations()
 
-        destination_root = os.path.abspath(str(destination_dir))
-        os.makedirs(destination_root, exist_ok=True)
+        for kind in needed:
+            os.makedirs(roots[kind], exist_ok=True)
 
         moved = []
-        for path in sorted(self.entries):
-            source = identity.safe_join(self.staging_root, path)
+        for kind, path in sorted(self.entries):
+            source = self._staging_path(kind, path)
             # Validate against the *destination* root too. The staging path was
             # already checked, but the destination is a different root and the
             # check is cheap.
-            target = identity.safe_join(destination_root, path)
+            target = identity.safe_join(roots[kind], path)
 
             os.makedirs(os.path.dirname(target), exist_ok=True)
+            # Overwrites deliberately: a re-transfer replaces an earlier
+            # session's copy, and shutil.move onto an existing file raises on
+            # Windows. Only ever inside a destination the caller chose - the
+            # patch folder or _collab - never over the user's own game data.
+            if os.path.exists(target):
+                try:
+                    os.remove(target)
+                except OSError:
+                    pass
             shutil.move(source, target)
             moved.append(target)
 
@@ -558,13 +752,16 @@ class TransferSession:
         Best-effort: a patch that cannot be rewritten is still installed, since
         the alternative is discarding a verified transfer over its manifest.
         """
-        main_xml = self.entries.get('main.xml')
+        # main.xml belongs to the patch section; a level or tileset called
+        # main.xml would not be a patch manifest and must not be rewritten.
+        key = (KIND_PATCH, 'main.xml')
+        main_xml = self.entries.get(key)
         if main_xml is None:
             return
 
         try:
-            path = identity.safe_join(self.staging_root, 'main.xml')
-        except identity.UnsafePathError:
+            path = self._staging_path(KIND_PATCH, 'main.xml')
+        except (identity.UnsafePathError, TransferError):
             return
 
         try:
@@ -577,7 +774,12 @@ class TransferSession:
         # Regex rather than a parse-and-serialise, deliberately: main.xml is
         # hand-edited by patch authors, and rewriting it through ElementTree
         # would silently reformat comments, attribute order and whitespace.
-        transferred = set(self.entries)
+        #
+        # Only the patch section counts: main.xml declares files inside the
+        # patch folder, so a level of the same name in the Stage section would
+        # not satisfy a declaration.
+        transferred = {name for section, name in self.entries
+                       if section == KIND_PATCH}
 
         def keep(match):
             element = match.group(0)
@@ -614,9 +816,8 @@ class TransferSession:
         # correct and deliberate - verification has already happened, against
         # what the host sent - but the entry is updated so nothing later
         # re-checks it against a stale digest.
-        entry = self.entries['main.xml']
-        entry['sha256'] = sha256_bytes(updated.encode('utf-8'))
-        entry['size'] = len(updated.encode('utf-8'))
+        main_xml['sha256'] = sha256_bytes(updated.encode('utf-8'))
+        main_xml['size'] = len(updated.encode('utf-8'))
 
     def abort(self):
         """
@@ -1044,3 +1245,61 @@ def patch_directory(patch_id, base_dir=''):
 
 def staging_directory(base_dir=''):
     return os.path.join(patches_directory(base_dir), STAGING_DIRNAME)
+
+
+# ---------------------------------------------------------------------------
+# Transferred game data (Block C - B3)
+# ---------------------------------------------------------------------------
+
+def collab_mods_directory(base_dir=''):
+    return os.path.join(str(base_dir), COLLAB_MODS_RELATIVE_DIR) if base_dir \
+        else COLLAB_MODS_RELATIVE_DIR
+
+
+def collab_game_directory(patch_id, base_dir=''):
+    """
+    The folder holding a transferred patch's game data.
+
+    Named from the patch id through the same sanitiser the patch folder uses, so
+    a patch whose display name is not a legal directory name ('NSMBW: The
+    Prankster Comets') lands somewhere real - and so the two folders for one
+    patch are named consistently.
+    """
+    return os.path.join(collab_mods_directory(base_dir),
+                        folder_name_for_patch(patch_id))
+
+
+def collab_stage_directory(patch_id, base_dir=''):
+    """
+    Where a transferred patch's levels go.
+
+    Mirrors the layout the Patch Manager already produces for a full mod -
+    <mod>/Stage with <mod>/Stage/Texture inside it - so a user who looks at
+    these folders sees the shape they know, and so the texture path can be
+    derived from the stage path exactly as it is elsewhere.
+    """
+    return os.path.join(collab_game_directory(patch_id, base_dir), 'Stage')
+
+
+def collab_texture_directory(patch_id, base_dir=''):
+    return os.path.join(collab_stage_directory(patch_id, base_dir), 'Texture')
+
+
+def destination_for_kind(kind, patch_id, base_dir=''):
+    """
+    The root a manifest section is written to.
+
+    One function rather than three call sites choosing for themselves: this is
+    the point where a network-supplied `kind` becomes a filesystem location, so
+    an unknown kind has to fail here rather than default to somewhere.
+    """
+    if kind == KIND_PATCH:
+        return patch_directory(patch_id, base_dir)
+
+    if kind == KIND_STAGE:
+        return collab_stage_directory(patch_id, base_dir)
+
+    if kind == KIND_TEXTURE:
+        return collab_texture_directory(patch_id, base_dir)
+
+    raise TransferError('unknown transfer section %r' % (kind,))

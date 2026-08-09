@@ -56,7 +56,7 @@ class CollabSignals(QtCore.QObject):
     # Patch transfer. Host side: a peer needs the patch, or wants one file of
     # it. Client side: the manifest arrived, a chunk arrived, the host finished.
     patchNeeded = QtCore.pyqtSignal(str, str)          # session id, patch id
-    fileRequested = QtCore.pyqtSignal(str, str)        # session id, path
+    fileRequested = QtCore.pyqtSignal(str, str, str)   # session id, path, kind
     manifestReceived = QtCore.pyqtSignal(dict)
     fileChunkReceived = QtCore.pyqtSignal(dict)
     transferFinished = QtCore.pyqtSignal(bool, str)    # ok, error
@@ -164,7 +164,8 @@ class CollabBridge(QtCore.QObject):
         elif kind == 'file_req':
             self.signals.fileRequested.emit(
                 getattr(participant, 'session_id', ''),
-                str(data.get('path', '') or ''))
+                str(data.get('path', '') or ''),
+                str(data.get('kind', '') or 'patch'))
 
         elif kind == 'file_denied':
             # A peer asking for something outside its manifest. Shown, not

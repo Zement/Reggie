@@ -803,10 +803,16 @@ class HostSession:
 
     def offered_paths(self, session_id):
         """
-        The paths currently offered to one participant, as a frozenset.
+        The (kind, path) pairs currently offered to one participant.
 
         Empty when no transfer is in flight, which is the fail-closed default:
         a file_req arriving before or after a manifest matches nothing.
+
+        Pairs rather than bare paths since Block C - B3: a transfer carries the
+        patch, the Stage folder and the Texture folder, and the same relative
+        name can legitimately appear in more than one of them. Authorising on
+        the name alone would let a client fetch a *stage* file by asking for it
+        as a *patch* file, which is the wrong file from the wrong folder.
         """
         with self._lock:
             state = self._transfers.get(session_id)
@@ -831,14 +837,26 @@ class HostSession:
         Records what the host is offering a participant, so later file_reqs can
         be checked against it. Called by the owner after it builds a manifest.
 
+        `paths` may be plain names or (kind, path) pairs; a plain name is taken
+        as a patch file, which is what every manifest was before Block C - B3.
+        Both are normalised to pairs here, so the authorisation check has one
+        shape to compare against.
+
         Replaces any previous offer for that participant: a peer gets one
         transfer at a time, and a second manifest supersedes the first rather
         than widening what the first allowed.
         """
+        offered = set()
+        for item in (paths or ()):
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                offered.add((str(item[0]), str(item[1])))
+            else:
+                offered.add(('patch', str(item)))
+
         with self._lock:
             self._transfers[session_id] = {
                 'patch_id': str(patch_id or ''),
-                'paths': set(str(p) for p in (paths or ())),
+                'paths': offered,
                 'started': time.monotonic(),
                 'sent': 0,
             }
@@ -888,19 +906,23 @@ class HostSession:
         A client asking for one file from the manifest it was sent.
         """
         path = str(message['p'].get('path', '') or '')
+        # Defaulted to the patch section, so a client that predates B3 - whose
+        # requests carry no kind - still matches the offers it was sent.
+        kind = str(message['p'].get('kind', '') or 'patch')
         offered = self.offered_paths(participant.session_id)
 
-        if path not in offered:
+        if (kind, path) not in offered:
             # Counted like a rejected op, so a peer probing for files shows up
             # in the roster rather than only in a log nobody reads.
             participant.rejected_ops += 1
             debuglog.log('host', 'file_req REFUSED', nick=participant.nick,
-                         path=path, offered=len(offered))
+                         path=path, kind=kind, offered=len(offered))
             self._refuse_transfer(
                 participant,
                 'That file was not offered.' if offered else
                 'No transfer is in progress.')
-            self._emit('file_denied', {'participant': participant, 'path': path})
+            self._emit('file_denied', {'participant': participant, 'path': path,
+                                       'kind': kind})
             return
 
         with self._lock:
@@ -908,7 +930,8 @@ class HostSession:
             if state is not None:
                 state['sent'] += 1
 
-        self._emit('file_req', {'participant': participant, 'path': path})
+        self._emit('file_req', {'participant': participant, 'path': path,
+                                'kind': kind})
 
     def _handle_file_done(self, participant, message):
         payload = message['p']

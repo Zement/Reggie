@@ -65,6 +65,24 @@ ALLOWED_TRANSFER_EXTENSIONS = frozenset({
     '.arc', '.png', '.xml', '.txt', '.json', '.bin',
 })
 
+# Two-part extensions that may be transferred (Block C - B3).
+#
+# Levels and tilesets ship in three forms - 'x.arc', 'x.arc.LH' and 'x.arc.LZ',
+# the latter two being LH/LZ-compressed archives (globals_.FileExtentions). They
+# are the same data and carry the same (absence of) risk, so a transfer that
+# carries Stage and Texture folders has to accept all three.
+#
+# Deliberately listed as *compound* extensions rather than adding '.lh' and
+# '.lz' to the set above. check_transfer_extension only looks at the text after
+# the final dot, so allowing bare '.lh' would also admit 'evil.py.lh' - the
+# denylist would still catch that particular name, but the rule would then rest
+# entirely on the denylist being exhaustive, which is the arrangement the
+# two-gate design exists to avoid. Requiring the full '.arc.lh' keeps the
+# allowlist meaningful on its own.
+ALLOWED_COMPOUND_TRANSFER_EXTENSIONS = frozenset({
+    '.arc.lh', '.arc.lz',
+})
+
 # Explicit denylist as a second gate, so an allowlist mistake is never the only
 # thing standing between a peer and code execution. Anything Python, any native
 # module, any script, any archive.
@@ -587,6 +605,14 @@ def check_transfer_extension(relative_path):
     for suffix in DENIED_TRANSFER_EXTENSIONS:
         if lowered.endswith(suffix) or ('%s.' % suffix) in lowered:
             raise UnsafePathError('file type %r may never be transferred' % suffix)
+
+    # Two-part extensions first, so 'level.arc.lh' is recognised as a compressed
+    # level rather than as the '.lh' its final dot suggests. The name must be
+    # longer than the extension - a file called exactly '.arc.lh' has no stem and
+    # is not a level.
+    for compound in ALLOWED_COMPOUND_TRANSFER_EXTENSIONS:
+        if lowered.endswith(compound) and len(lowered) > len(compound):
+            return compound
 
     dot = lowered.rfind('.')
     extension = lowered[dot:] if dot > 0 else ''

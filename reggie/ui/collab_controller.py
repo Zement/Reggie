@@ -239,6 +239,14 @@ class CollabController(QtCore.QObject):
         self._transfer_queue = []
         self._transfer_destination = ''
 
+        # The file currently being fetched, as (kind, path), and how many there
+        # were to start with. The first is what matches an arriving chunk to the
+        # section *we* asked for rather than the one the sender names; the
+        # second is only for the progress line, since the queue shrinks as it
+        # goes (Block C - B3).
+        self._transfer_current = None
+        self._transfer_total = 0
+
         # What the session moved to while a patch was still being fetched, held
         # until the patch is loaded and its Stage folder is known. `(level,
         # area)` when a switch was deferred, None when there is nothing to
@@ -2237,12 +2245,21 @@ class CollabController(QtCore.QObject):
 
         patch_id = str(payload.get('patch_id', '') or self._transfer_patch)
 
-        # Resolve the destination now, before a byte moves. patch_directory
-        # validates the id as a directory name, and an id that cannot be one
-        # ('CON', a trailing dot) would otherwise fail at commit - after the
-        # whole patch had been downloaded and verified.
+        # Resolve every destination now, before a byte moves. These validate the
+        # id as a directory name, and an id that cannot be one ('CON', a
+        # trailing dot) would otherwise fail at commit - after the whole patch
+        # had been downloaded and verified.
+        #
+        # The game data goes to assets/mods/_collab/<patch>/, never to the
+        # user's own assets/mods/<patch>/: everything under _collab is
+        # session-derived by construction, so overwriting it is always safe,
+        # while overwriting the user's own levels never is.
         try:
-            destination = files.patch_directory(patch_id)
+            destination = {
+                files.KIND_PATCH: files.patch_directory(patch_id),
+                files.KIND_STAGE: files.collab_stage_directory(patch_id),
+                files.KIND_TEXTURE: files.collab_texture_directory(patch_id),
+            }
         except Exception as exc:
             self._failTransfer(
                 'The host\'s patch name cannot be used as a folder: %s' % exc)
@@ -2258,7 +2275,11 @@ class CollabController(QtCore.QObject):
         self._transfer_destination = destination
 
         self._transfer_patch = patch_id
-        self._transfer_queue = list(self._transfer.pending_paths())
+        # (kind, path) pairs: the same name can appear in two sections, and the
+        # section is what decides which folder the bytes land in.
+        self._transfer_queue = list(self._transfer.pending_keys())
+        self._transfer_total = len(self._transfer_queue)
+        self._transfer_current = None
 
         self._appendStatus(files.describe_transfer(
             entries, self._hostNick(), patch_id))
@@ -2278,9 +2299,13 @@ class CollabController(QtCore.QObject):
             return
 
         while self._transfer_queue:
-            path = self._transfer_queue.pop(0)
+            kind, path = self._transfer_queue.pop(0)
+            # Remembered so an arriving chunk is matched to the section that was
+            # asked for, rather than to a section the sender names. The section
+            # decides the destination folder, so it stays the receiver's choice.
+            self._transfer_current = (kind, path)
             self.client.send(protocol.make_message(
-                protocol.T_FILE_REQ, {'path': path}))
+                protocol.T_FILE_REQ, {'path': path, 'kind': kind}))
             return
 
         self._finishTransfer()
@@ -2289,8 +2314,14 @@ class CollabController(QtCore.QObject):
         if self._transfer is None:
             return
 
+        # The section comes from *our own* outstanding request, not from the
+        # payload. It selects one of three destination folders, so taking it
+        # from the sender would let a host redirect a file into a folder the
+        # client never asked it for.
+        kind = (self._transfer_current or (None, None))[0]
+
         try:
-            complete = self._transfer.add_chunk(payload)
+            complete = self._transfer.add_chunk(payload, kind)
         except files.TransferError as exc:
             # Covers a bad hash, an out-of-order chunk, an unoffered path and an
             # oversized file - every one of which means the transfer cannot be
@@ -2301,13 +2332,21 @@ class CollabController(QtCore.QObject):
         if not complete:
             return
 
-        # Report progress occasionally rather than per file: a real patch is
-        # 460-535 files, and a line each would bury the chat it shares a window
-        # with. Every tenth keeps the user informed that it is still moving.
-        done = len(self._transfer.entries) - len(self._transfer.pending_paths())
-        if done and done % 50 == 0:
-            self._appendStatus('Downloaded %d of %d files...'
-                               % (done, len(self._transfer.entries)))
+        self._transfer_current = None
+
+        # Report progress occasionally rather than per file: a transfer can now
+        # carry a patch plus a Stage and Texture folder - thousands of files -
+        # and a line each would bury the chat it shares a window with. Every
+        # fiftieth keeps the user informed that it is still moving, and the
+        # megabyte figures matter more than the count at this size.
+        total = self._transfer_total or len(self._transfer.entries)
+        done = total - len(self._transfer_queue) - 1
+        if done > 0 and done % 50 == 0:
+            self._appendStatus(
+                'Downloaded %d of %d files (%.1f of %.1f MiB)...'
+                % (done, total,
+                   self._transfer.received_bytes / (1024.0 * 1024.0),
+                   self._transfer.total_bytes / (1024.0 * 1024.0)))
 
         self._requestNextFile()
 
@@ -2325,7 +2364,14 @@ class CollabController(QtCore.QObject):
             self._failTransfer('The download ended early.')
             return
 
-        destination = self._transfer_destination or files.patch_directory(patch_id)
+        # Resolved in _onManifest; recomputed only if that somehow did not run,
+        # and as the same {kind: root} mapping, because a bare directory would
+        # give commit() nowhere to put the levels and tilesets.
+        destination = self._transfer_destination or {
+            files.KIND_PATCH: files.patch_directory(patch_id),
+            files.KIND_STAGE: files.collab_stage_directory(patch_id),
+            files.KIND_TEXTURE: files.collab_texture_directory(patch_id),
+        }
 
         try:
             with _BusyIndicator(self.window,
@@ -2344,6 +2390,13 @@ class CollabController(QtCore.QObject):
 
         self._appendStatus('The %s patch was installed.' % patch_id)
 
+        # Point the patch at the game data that just arrived, *before*
+        # _reloadPatch runs. LoadGameDef asks the user to pick a Stage folder
+        # when the patch has none, so writing these first does not merely order
+        # that prompt correctly - it means the question is already answered and
+        # the prompt never appears (checklist 10.1b).
+        self._adoptTransferredGameData(patch_id)
+
         # Said plainly rather than buried, because it is the one thing a
         # transferred patch cannot give the user and they will otherwise
         # report it as a bug: sprites.py is Python and never travels.
@@ -2359,6 +2412,48 @@ class CollabController(QtCore.QObject):
         # LoadGameDef, which asks for the patch's Stage folder on first use, so
         # the tilesets it names can actually be found.
         self._resumeDeferredLoad()
+
+    def _adoptTransferredGameData(self, patch_id):
+        """
+        Points the transferred patch at the Stage and Texture folders that came
+        with it (Block C - B3).
+
+        This is the step the catalog route has always done for itself
+        (patch_manager_dialog writes StageGamePath_<name> after an install) and
+        the host-transfer route never did - which is why a transferred patch
+        asked the user to find a Stage folder that only existed inside the
+        transfer.
+
+        The keys are per *patch name*, not per folder, because that is what
+        ReggieGameDefinition.GetStageGamePath reads.
+
+        Written only for folders that actually arrived: a transfer from a host
+        that had no Stage path set carries no levels, and claiming a path to an
+        empty directory would be worse than leaving the question open. Nothing
+        outside _collab is ever touched, and the user's own paths for their own
+        copy of a patch are a different key entirely.
+        """
+        from reggie.core.dirty import setSetting
+
+        try:
+            stage = files.collab_stage_directory(patch_id)
+            texture = files.collab_texture_directory(patch_id)
+        except Exception as exc:
+            debuglog.log('client', 'collab paths unavailable', error=str(exc))
+            return False
+
+        if not os.path.isdir(stage):
+            return False
+
+        setSetting('StageGamePath_' + patch_id, stage)
+        if os.path.isdir(texture):
+            setSetting('TextureGamePath_' + patch_id, texture)
+
+        self._appendStatus(
+            'The levels and tilesets from this session are in %s.' % stage)
+        debuglog.log('client', 'adopted transferred game data',
+                     patch=patch_id, stage=stage)
+        return True
 
     def _clearTransfer(self, abort=False):
         """
@@ -2381,6 +2476,8 @@ class CollabController(QtCore.QObject):
         self._transfer_patch = ''
         self._transfer_queue = []
         self._transfer_destination = ''
+        self._transfer_current = None
+        self._transfer_total = 0
 
         if abort:
             # An aborted transfer never delivers its patch, so whatever was held
@@ -2505,15 +2602,49 @@ class CollabController(QtCore.QObject):
             self._refuseTransfer(session_id, 'The host cannot find its patch.')
             return
 
+        # The patch definition alone is not enough to see the same level: it
+        # says which tilesets a level names, but the levels and tilesets
+        # themselves live in the host's Stage and Texture folders, wherever its
+        # StageGamePath happens to point. Sending those too is what stops two
+        # peers with the same patch id editing different levels (Block C - B3).
+        stage_dir, texture_dir = self._localGameDataDirectories()
+
+        # Hashing a patch with its Stage and Texture folders takes seconds -
+        # about 11 for NewerSMBW - and it runs here, on the main thread. Keeping
+        # the window painting through it is safe in a way it is not during a
+        # scene rebuild: this touches no Qt state, only the filesystem. Input is
+        # still excluded, so the user cannot start something else mid-walk.
+        def preparing(count, kind):
+            try:
+                self.window.statusBar().showMessage(
+                    'Preparing %s files to send: %d...' % (kind, count))
+            except Exception:
+                # A window without a status bar is not a reason to abandon a
+                # transfer; the progress line is a courtesy.
+                pass
+            QtWidgets.QApplication.processEvents(
+                QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents,
+                10)
+
         try:
             with _BusyIndicator(self.window, 'Preparing the patch files...'):
-                manifest = files.build_manifest(directory, patch_id)
+                manifest = files.build_manifest(directory, patch_id,
+                                                stage_dir, texture_dir,
+                                                on_progress=preparing)
         except Exception as exc:
             debuglog.log('host', 'manifest build failed', error=str(exc))
             self._appendStatus('Could not prepare %s: %s' % (patch_id, exc))
             self._refuseTransfer(session_id,
                                  'The host could not prepare the patch.')
             return
+        finally:
+            # The per-file line is transient; leaving the last one on screen
+            # would have the status bar claim the host is still preparing files
+            # long after it finished.
+            try:
+                self.window.statusBar().clearMessage()
+            except Exception:
+                pass
 
         entries = manifest['files']
         if not entries:
@@ -2521,32 +2652,47 @@ class CollabController(QtCore.QObject):
             return
 
         # Record what this peer is allowed to fetch *before* offering it, so a
-        # file_req that arrives immediately cannot beat the record.
+        # file_req that arrives immediately cannot beat the record. Recorded as
+        # (kind, path) pairs: the same name can appear in two sections, and
+        # authorising on the name alone would let a client fetch one section's
+        # file by asking for it as another's.
         self.host_session.record_manifest(
-            session_id, patch_id, [entry['path'] for entry in entries])
+            session_id, patch_id,
+            [(entry.get('kind', files.KIND_PATCH), entry['path'])
+             for entry in entries])
 
         # skipped entries are dicts ({'path', 'reason'}), not names.
         skipped = [str(entry.get('path', '')) for entry in
                    (manifest.get('skipped') or [])]
+
+        counts = {}
+        for entry in entries:
+            kind = entry.get('kind', files.KIND_PATCH)
+            counts[kind] = counts.get(kind, 0) + 1
+
+        summary = '%d files of %s (%s), %.1f MiB' % (
+            len(entries), patch_id,
+            ', '.join('%d %s' % (counts[k], k) for k in sorted(counts)),
+            manifest['total_bytes'] / (1024.0 * 1024.0))
+
         if skipped:
-            self._appendStatus(
-                'Sending %d files of %s. Not sent: %s.'
-                % (len(entries), patch_id, ', '.join(skipped[:5])))
+            self._appendStatus('Sending %s. Not sent: %s.'
+                               % (summary, ', '.join(skipped[:5])))
         else:
-            self._appendStatus(
-                'Sending %d files of %s.' % (len(entries), patch_id))
+            self._appendStatus('Sending %s.' % summary)
 
         self._sendToPeer(session_id, protocol.T_MANIFEST,
                          files.manifest_payload(manifest))
 
-    def _onFileRequested(self, session_id, path):
+    def _onFileRequested(self, session_id, path, kind=files.KIND_PATCH):
         """
         Sends one file, in chunks.
 
-        The path was already checked against the manifest by HostSession, which
-        is the authorisation point; this reads and sends. It is checked again on
-        the way in by read_chunks, which resolves through safe_join - two
-        independent checks, because this one turns a name into a disk read.
+        The (kind, path) pair was already checked against the manifest by
+        HostSession, which is the authorisation point; this reads and sends. It
+        is checked again on the way in by read_chunks, which resolves through
+        safe_join - two independent checks, because this one turns a name into a
+        disk read.
 
         Reads from the patch this peer was *offered*, not the one loaded now.
         The host can switch patch mid-transfer, and serving the new one against
@@ -2561,18 +2707,73 @@ class CollabController(QtCore.QObject):
             self._refuseTransfer(session_id, 'No transfer is in progress.')
             return
 
-        directory = self._localPatchDirectory(offered)
+        directory = self._sourceDirectoryForKind(kind, offered)
         if not directory:
-            self._refuseTransfer(session_id, 'The host cannot find its patch.')
+            self._refuseTransfer(
+                session_id,
+                'The host cannot find its patch.' if kind == files.KIND_PATCH
+                else 'The host cannot find its %s folder.' % kind)
             return
 
         try:
             for chunk in files.read_chunks(directory, path):
+                # The section travels back with every chunk, so the receiver
+                # never has to guess which of three folders the bytes are for.
+                chunk['kind'] = kind
                 self._sendToPeer(session_id, protocol.T_FILE_CHUNK, chunk)
         except Exception as exc:
-            debuglog.log('host', 'file read failed', path=path, error=str(exc))
+            debuglog.log('host', 'file read failed', path=path, kind=kind,
+                         error=str(exc))
             self._refuseTransfer(
                 session_id, 'The host could not read %s.' % path)
+
+    def _sourceDirectoryForKind(self, kind, patch_id):
+        """
+        Which of the host's folders a manifest section is served from.
+
+        The patch section comes from the patch this peer was offered; the other
+        two come from the host's *current* Stage and Texture paths. That
+        difference is deliberate and matches how the two are recorded: the
+        offered patch is pinned so a mid-transfer switch cannot corrupt a
+        verified download, while the game data paths are a local preference that
+        the manifest was built from moments earlier.
+        """
+        if kind == files.KIND_PATCH:
+            return self._localPatchDirectory(patch_id)
+
+        stage_dir, texture_dir = self._localGameDataDirectories()
+
+        if kind == files.KIND_STAGE:
+            return stage_dir
+        if kind == files.KIND_TEXTURE:
+            return texture_dir
+
+        return ''
+
+    @staticmethod
+    def _localGameDataDirectories():
+        """
+        The host's own Stage and Texture folders, as (stage, texture).
+
+        Read through the gamedef rather than from QSettings directly, because
+        that is what resolves the per-patch keys and their fallbacks
+        (StageGamePath_<patch name>, then StageGamePath). Either may be empty -
+        a host that has never set them has nothing to send, which is not an
+        error, just a transfer with no game data in it.
+        """
+        gamedef = getattr(globals_, 'gamedef', None)
+        if gamedef is None:
+            return '', ''
+
+        def resolve(getter):
+            try:
+                value = str(getter() or '')
+            except Exception:
+                return ''
+            return value if value and os.path.isdir(value) else ''
+
+        return (resolve(getattr(gamedef, 'GetStageGamePath', lambda: '')),
+                resolve(getattr(gamedef, 'GetTextureGamePath', lambda: '')))
 
     def _refuseTransfer(self, session_id, reason):
         self._sendToPeer(session_id, protocol.T_FILE_DONE,

@@ -53,14 +53,30 @@ MAX_OP_TARGETS = 2048
 #
 # Raised from 256 to 1024 in phase 6 after measuring the real patches in
 # reggiedata/patches: NewerSMBW is 535 transferable files (~9.4 MiB) and
-# NSMBWerPlus is 468, almost all small PNGs. 256 would have rejected both, which
-# is exactly the growth Zement predicted when he asked to keep 256 "for now".
+# NSMBWerPlus is 468, almost all small PNGs.
 #
-# The byte cap is the meaningful limit and stays at 64 MiB: it bounds what a peer
-# can make us store, whereas the file count only bounds bookkeeping.
-MAX_MANIFEST_FILES = 1024
-MAX_MANIFEST_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MiB
-MAX_CHUNK_BYTES = 256 * 1024                 # 256 KiB of raw bytes per chunk
+# Raised again in Block C - B3, because a transfer now carries the patch's
+# Stage and Texture folders as well and the old caps could not hold them.
+# Zement's real-world ceilings (2026-08-09):
+#
+#   patch    up to  30 MB              (realistic average ~10 MB)
+#   Stage    ~200 levels x up to 500 KB padded, so up to ~100 MB   (~3 MB)
+#   Texture  the largest package found is ~150 MB over ~1200 files (~15 MB)
+#
+# so ~280 MB and ~2000 files in the worst case anyone has actually built. The
+# caps are set above that with room to spare rather than at it, because a cap
+# that a real patch reaches is a cap that turns into a bug report.
+#
+# These are *caps*, not expectations: the common case is tens of megabytes, and
+# the transfer happens once - the files are reused by later sessions. The
+# trade-off is deliberate (Zement): refusing a large patch would push the user
+# to download the same bytes by some other route, which is no faster.
+#
+# The byte cap remains the meaningful limit - it bounds what a peer can make us
+# store - while the file count only bounds bookkeeping.
+MAX_MANIFEST_FILES = 4096
+MAX_MANIFEST_TOTAL_BYTES = 512 * 1024 * 1024  # 512 MiB
+MAX_CHUNK_BYTES = 256 * 1024                  # 256 KiB of raw bytes per chunk
 
 
 class ProtocolError(Exception):
@@ -647,7 +663,14 @@ def _v_manifest(p):
 
 
 def _v_file_req(p):
-    return {'path': _get_str(p, 'path', 512)}
+    # 'kind' names the manifest section (patch/stage/texture) since Block
+    # C - B3. Optional, and bounded only as a short string here: the closed set
+    # lives in files.MANIFEST_KINDS, and the host checks the (kind, path) pair
+    # against what it actually offered, which is the authorisation that matters.
+    return {
+        'path': _get_str(p, 'path', 512),
+        'kind': _get_str(p, 'kind', 32, required=False),
+    }
 
 
 def _v_file_chunk(p):
@@ -657,6 +680,7 @@ def _v_file_chunk(p):
     _require(index < total, 'chunk index must be < total')
     return {
         'path': _get_str(p, 'path', 512),
+        'kind': _get_str(p, 'kind', 32, required=False),
         'index': index,
         'total': total,
         'data': data,
