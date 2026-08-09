@@ -658,6 +658,21 @@ def _v_manifest(p):
             'path': _get_str(entry, 'path', 512),
             'size': size,
             'sha256': sha,
+            # Which section the file belongs to (patch/stage/texture), since
+            # Block C - B3. This validator rebuilds each entry from scratch -
+            # that is the point of it, so unknown keys cannot ride along - which
+            # means a field omitted here is a field silently deleted in flight.
+            # Leaving it out made every level and tileset arrive labelled as a
+            # patch file, so the client asked for them from the patch folder and
+            # the host, which had offered them as stage files, refused its own
+            # manifest.
+            #
+            # Bounded as a short string only; the closed set lives in
+            # files.MANIFEST_KINDS and is enforced by validate_manifest, which
+            # is also where an unrecognised value is refused rather than
+            # defaulted. An absent field stays absent so that layer can tell
+            # "not sent" (a pre-B3 host) from "sent as patch".
+            'kind': _get_str(entry, 'kind', 32, required=False),
         })
     return {'files': out, 'patch_id': _get_str(p, 'patch_id', 128, required=False)}
 
