@@ -1929,7 +1929,7 @@ class CollabController(QtCore.QObject):
         nobody can find helps nobody.
         """
         if self.settings.get('debug_log'):
-            path = debuglog.enable(_settings_directory())
+            path = debuglog.enable(_debug_log_directory())
             if path:
                 self._appendStatus('Debug log: %s' % path)
         else:
@@ -3130,6 +3130,54 @@ def _settings_directory():
     directory = os.path.join(base, 'Reggie Next')
     os.makedirs(directory, exist_ok=True)
     return directory
+
+
+def _debug_log_directory():
+    """
+    Where collaboration debug logs are written: <Reggie root>/logs.
+
+    Deliberately not _settings_directory(). That answers "where does the private
+    key live", and in a source checkout it resolves to the repository root -
+    because QSettings is opened on the relative path 'settings.ini' - so every
+    session dropped a collab_debug_<pid>.log beside the source, where they
+    accumulate quickly and are noise in exactly the folder that should stay
+    clean (Zement, 2026-08-09).
+
+    A `logs/` folder next to the application, rather than somewhere in the
+    working notes: the debug log is a shipped feature with its own preference,
+    so its output belongs with the program and not in a gitignored scratch tree
+    that only exists in this checkout.
+
+    The root comes from io.misc.module_path(), not from this file's location.
+    In a PyInstaller build __file__ points inside the temporary _MEIPASS
+    extraction directory, which is deleted when the program exits - so a log
+    written relative to it would vanish with the process that needed it.
+    module_path() is the codebase's existing answer to that question and
+    resolves to the folder holding the executable (and to Contents/Resources on
+    macOS).
+
+    Falls back to the settings directory when there is no writable folder
+    there - an installation under Program Files is read-only for a normal user,
+    and a log location is never worth failing a session over.
+    """
+    try:
+        from reggie.io.misc import module_path
+
+        root = module_path() or os.path.abspath(
+            os.path.join(os.path.dirname(__file__), '..', '..'))
+
+        directory = os.path.join(root, 'logs')
+        os.makedirs(directory, exist_ok=True)
+
+        # Confirmed writable rather than assumed: makedirs succeeds on an
+        # existing read-only folder, and discovering that at the first write
+        # would lose the log silently.
+        if os.access(directory, os.W_OK):
+            return directory
+    except Exception:
+        pass
+
+    return _settings_directory()
 
 
 def _sprite_format():

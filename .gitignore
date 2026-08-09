@@ -162,6 +162,11 @@ Reggie-Next.code-workspace
 # Everything under here is developer-local and never committed. See _workspace/.
 _workspace/
 
+# Runtime logs written beside the application (collaboration debug logs, and
+# anything a future unified logger writes). '*.log' above already covers the
+# files; this keeps the folder itself out of the tree as well.
+logs/
+
 # Assets folder contents (keep folder structure only)
 assets/mods/*
 assets/snapshots/*
