@@ -502,7 +502,24 @@ def main():
 
     print("[BOOT] ✓ Reggie boot complete! Starting event loop...")
     exitcodesys = globals_.app.exec()
-    globals_.app.deleteLater()
+
+    # NOT app.deleteLater(). That was here for years and is the wrong call in
+    # the wrong place: deleteLater() schedules destruction through the event
+    # loop, and the loop has just finished, so the QApplication is instead torn
+    # down during interpreter shutdown - while Python still holds references to
+    # widgets whose C++ halves it owns. Every later access to one of those is a
+    # read through a dangling pointer, which on Windows is an access violation
+    # (0xC0000005) with no Python traceback at all: the process simply dies
+    # after the last unrelated line of output.
+    #
+    # Nothing needs to be deleted here in any case. Qt destroys the application
+    # object and its widget tree as the process exits, and doing it by hand
+    # only reorders that teardown against Python's own garbage collection.
+    #
+    # Dropping the global reference is enough: it lets the normal shutdown run
+    # in Qt's order rather than a hand-forced one.
+    globals_.app = None
+
     sys.exit(exitcodesys)
 
 
