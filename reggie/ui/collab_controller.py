@@ -289,6 +289,10 @@ class CollabController(QtCore.QObject):
         # C - B3, phase 2). Empty when nothing has been reported yet.
         self._host_fingerprint = {}
 
+        # The mismatch last reported to the user, so the same one is not
+        # repeated on every snapshot. Cleared when the content matches again.
+        self._reported_mismatch = ''
+
         self._connect_signals()
 
     # -- signal wiring ------------------------------------------------------
@@ -716,6 +720,7 @@ class CollabController(QtCore.QObject):
         self._session_area = 1
         self._is_save_authority = False
         self._host_fingerprint = {}
+        self._reported_mismatch = ''
 
         # The session's Stage/Texture override goes with it, so the editor
         # returns to the user's own folders the moment the session ends. This
@@ -1921,6 +1926,13 @@ class CollabController(QtCore.QObject):
 
         self._appendStatus('Level loaded from the host.')
 
+        # A snapshot is the *usual* way a client arrives at a level - joining, or
+        # being resynced - and it does not go through _onLevelSwitchRequested, so
+        # checking only there missed the common case entirely. Zement's phase 2
+        # test found this: the client downloaded the patch, received a snapshot,
+        # and no mismatch was ever reported (2026-08-09).
+        self._checkContentMatches()
+
     def _configureDebugLog(self):
         """
         Turns the diagnostic log on or off to match the current preference.
@@ -2501,18 +2513,38 @@ class CollabController(QtCore.QObject):
             problems.append('these tilesets differ from the host\'s: %s'
                             % ', '.join(named))
 
+        summary = '; '.join(problems)
+
         if not problems:
             debuglog.log('client', 'content matches the host', level=level)
+            # Forgotten, so that moving back onto a divergent level warns again
+            # rather than staying quiet because it once warned about it.
+            self._reported_mismatch = ''
             return True
+
+        debuglog.log('client', 'CONTENT MISMATCH', level=level,
+                     problems=summary)
+
+        # Said once per distinct problem, not once per snapshot. A resync
+        # arrives whenever the host edits anything, and repeating the same
+        # paragraph each time would bury the chat it shares a window with -
+        # while a *different* mismatch is genuinely new information.
+        if self._reported_mismatch == summary:
+            return False
+
+        self._reported_mismatch = summary
 
         self._appendStatus(
             'Warning - you are not seeing the same files as the host: %s. '
             'The host\'s objects are correct, but the graphics behind them may '
             'not be. Check that this patch points at the session\'s Stage and '
-            'Texture folders.' % '; '.join(problems))
+            'Texture folders.' % summary)
 
-        debuglog.log('client', 'CONTENT MISMATCH', level=level,
-                     problems='; '.join(problems))
+        # And said once in a dialog, the first time it happens in a session.
+        # A line in the chat log is easy to miss - Zement's phase 2 test looked
+        # for exactly this and found nothing - and quietly editing a different
+        # level from everyone else is the failure this block exists to prevent.
+        collab_dialogs.report_content_mismatch(self.window, problems)
         return False
 
     def _adoptTransferredGameData(self, patch_id):

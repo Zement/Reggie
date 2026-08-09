@@ -1106,6 +1106,41 @@ def report_patch_unavailable(parent, message):
     box.exec()
 
 
+def report_content_mismatch(parent, problems):
+    """
+    Reports that this peer's files are not the host's (Block C - B3).
+
+    A dialog rather than only a chat line, and this is the reason: the session
+    reports everything as matching whenever the patch id and version agree, so a
+    user with a divergent stage path has *no other signal at all* that they are
+    looking at a different level. Zement's phase 2 test went looking for exactly
+    this warning and found nothing, because the check had not run on the path a
+    joining client actually takes.
+
+    A warning, not an error: nothing is broken and no work is lost. The host's
+    objects are correct and the client's edits still apply to them; what differs
+    is the graphics behind them. The user can carry on if they choose to.
+
+    Shown once per distinct mismatch per session - the caller keeps that state,
+    because a resync arrives whenever the host edits anything and a dialog per
+    snapshot would be unusable.
+    """
+    box = QtWidgets.QMessageBox(parent)
+    box.setWindowTitle('Different files from the host')
+    box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+    box.setText('You are not seeing the same files as the host.')
+    box.setInformativeText(
+        'The session is using the same game patch, but your copies of these '
+        'differ:\n\n  %s\n\n'
+        'The host\'s objects are correct, and your edits will apply to them, '
+        'but the graphics behind them may not match what everyone else sees.\n\n'
+        'This usually means the patch points at a different Stage or Texture '
+        'folder on your machine than it does on the host\'s.'
+        % '\n  '.join(str(problem) for problem in (problems or ())))
+    box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
+    box.exec()
+
+
 def report_pin_mismatch(parent, message):
     """
     Reports a certificate pin mismatch.
