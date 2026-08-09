@@ -87,6 +87,13 @@ KIND_TEXTURE = 'texture'
 
 MANIFEST_KINDS = (KIND_PATCH, KIND_STAGE, KIND_TEXTURE)
 
+# The forms a level file takes, longest-suffix first so '.arc.LH' is matched
+# before '.arc'. Mirrors globals_.FileExtentions, restated here rather than
+# imported because this module is deliberately free of Qt and of the editor's
+# globals - the same reason external patch directories are passed in rather than
+# read from QSettings.
+FILE_EXTENSIONS = ('.arc.LH', '.arc.LZ', '.arc')
+
 # Read/write in modest blocks: a patch is thousands of small PNGs, so this is
 # never the bottleneck, and it keeps memory flat for the one large file.
 HASH_CHUNK_BYTES = 64 * 1024
@@ -148,6 +155,98 @@ def sha256_file(path):
 
 def sha256_bytes(data):
     return hashlib.sha256(bytes(data)).hexdigest()
+
+
+def sha256_file_or_empty(path):
+    """
+    SHA-256 of a file, or '' if it cannot be read.
+
+    Used for fingerprinting, where "I do not have this file" and "I have a
+    different one" are both answers worth reporting and neither is an error.
+    """
+    try:
+        return sha256_file(path)
+    except (OSError, ValueError):
+        return ''
+
+
+def resolve_level_file(stage_dir, level_name, extensions=FILE_EXTENSIONS):
+    """
+    The path a level name resolves to inside a stage folder, or ''.
+
+    A level travels as a *name*, never a path, and each peer resolves it in its
+    own stage folder - which is exactly how two peers with the same patch end up
+    editing different files. This is the resolution step, isolated so the
+    fingerprint can be taken of the file a peer would actually open.
+
+    The name is validated as a single filename component first: it arrives from
+    the network, and a name that reached outside the stage folder would be a
+    peer choosing which of our files to hash.
+    """
+    if not stage_dir or not level_name:
+        return ''
+
+    for extension in extensions:
+        try:
+            candidate = identity.safe_join(stage_dir, level_name + extension)
+        except identity.UnsafePathError:
+            return ''
+
+        if os.path.isfile(candidate):
+            return candidate
+
+    return ''
+
+
+def level_fingerprint(stage_dir, level_name):
+    """
+    The hash of the level a peer would open for this name, or ''.
+    """
+    return sha256_file_or_empty(resolve_level_file(stage_dir, level_name))
+
+
+def tileset_fingerprints(texture_dir, names):
+    """
+    The hashes of the tilesets a peer would draw with, in slot order.
+
+    An empty slot, a name that does not resolve, and an unreadable file all give
+    '' - the comparison only cares whether two peers agree, and they agree when
+    both sides are empty just as much as when both hashes match.
+    """
+    out = []
+    for name in (names or ()):
+        clean = str(name or '')
+        if not clean or not texture_dir:
+            out.append('')
+            continue
+
+        try:
+            candidate = identity.safe_join(texture_dir, clean + '.arc')
+        except identity.UnsafePathError:
+            out.append('')
+            continue
+
+        out.append(sha256_file_or_empty(candidate))
+
+    return out
+
+
+def compare_fingerprints(ours, theirs):
+    """
+    Which entries differ between two fingerprint lists.
+
+    Returns the indices that disagree. A missing entry on either side counts as
+    a difference *only* when the other side has one: two peers that both lack a
+    tileset are in the same state, which is what matters here.
+    """
+    differing = []
+    for index in range(max(len(ours or ()), len(theirs or ()))):
+        mine = (ours or ())[index] if index < len(ours or ()) else ''
+        yours = (theirs or ())[index] if index < len(theirs or ()) else ''
+        if mine != yours:
+            differing.append(index)
+
+    return differing
 
 
 # ---------------------------------------------------------------------------
@@ -1103,7 +1202,14 @@ def installed_patches(base_dir='', extra_dirs=()):
                 continue
 
             name, version = declared
-            found.setdefault(name, {'path': directory, 'version': version})
+            found.setdefault(name, {
+                'path': directory,
+                'version': version,
+                # Whether this copy arrived from a session (Block C - B3). Read
+                # from the folder rather than the name, so the patch keeps the
+                # identity every comparison depends on.
+                'collab': read_collab_marker(directory) is not None,
+            })
 
     # External patches are listed last so an explicitly installed copy takes
     # precedence over one the user merely pointed at.
@@ -1120,7 +1226,11 @@ def installed_patches(base_dir='', extra_dirs=()):
             continue
 
         name, version = declared
-        found.setdefault(name, {'path': str(directory), 'version': version})
+        found.setdefault(name, {
+            'path': str(directory),
+            'version': version,
+            'collab': read_collab_marker(str(directory)) is not None,
+        })
 
     return found
 
@@ -1283,6 +1393,75 @@ def collab_stage_directory(patch_id, base_dir=''):
 
 def collab_texture_directory(patch_id, base_dir=''):
     return os.path.join(collab_stage_directory(patch_id, base_dir), 'Texture')
+
+
+# Marks a patch folder as a session copy (Block C - B3).
+#
+# A *flag*, not a renamed patch - Zement's own suggestion, and the analysis
+# behind it: `_patchId()` returns gamedef.name, read from main.xml, and
+# files.patch_requirement compares exactly that against the host's patch_id.
+# Appending '(Collab)' to the name would therefore make every later comparison
+# see a mismatch, and the client would flip between the two copies or
+# re-transfer forever. Renaming the thing that *is* the identity, in order to
+# record a property *about* it, is the bug the flag avoids.
+#
+# Written locally by the receiver and never transferred, so a host cannot forge
+# one; the transfer denylist has no say here because this file never crosses.
+COLLAB_MARKER_FILENAME = 'collab.json'
+
+
+def write_collab_marker(patch_dir, patch_id, host_nick=''):
+    """
+    Records that this patch folder came from a session.
+
+    Best-effort: a marker that cannot be written costs a "(Collab)" label in the
+    UI, which is not worth failing a verified transfer over.
+    """
+    import json
+
+    payload = {
+        'collab': True,
+        'source_patch': str(patch_id or ''),
+        'host': str(host_nick or ''),
+        'received': _utc_now(),
+    }
+
+    try:
+        os.makedirs(str(patch_dir), exist_ok=True)
+        with open(os.path.join(str(patch_dir), COLLAB_MARKER_FILENAME),
+                  'w', encoding='utf-8') as handle:
+            json.dump(payload, handle, indent=2)
+    except OSError:
+        return False
+
+    return True
+
+
+def read_collab_marker(patch_dir):
+    """
+    The marker in a patch folder, or None. Tolerant: an unreadable or malformed
+    marker means "not marked", never an error - the folder is still a patch.
+    """
+    import json
+
+    try:
+        with open(os.path.join(str(patch_dir), COLLAB_MARKER_FILENAME),
+                  'r', encoding='utf-8') as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+    if not isinstance(data, dict) or not data.get('collab'):
+        return None
+
+    return data
+
+
+def _utc_now():
+    import datetime
+
+    return datetime.datetime.now(datetime.timezone.utc).replace(
+        microsecond=0).isoformat()
 
 
 def destination_for_kind(kind, patch_id, base_dir=''):

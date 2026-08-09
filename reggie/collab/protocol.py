@@ -623,6 +623,12 @@ def _v_presence(p):
 
 
 def _v_room_info(p):
+    # Note for anyone adding a field: this rebuilds the payload from scratch, so
+    # anything not listed here is *deleted in flight* with no error anywhere.
+    # That is deliberate - unknown keys must not ride along - but it cost a live
+    # bug once already, when the manifest validator dropped 'kind' and every
+    # level arrived labelled as a patch file. Add the field here, and test
+    # through validate_message rather than the payload builder.
     return {
         'game_id': _get_str(p, 'game_id', 128, required=False),
         'game_name': _get_str(p, 'game_name', 200, required=False),
@@ -632,7 +638,45 @@ def _v_room_info(p):
         'in_catalog': _get_bool(p, 'in_catalog', required=False),
         'level_name': _get_str(p, 'level_name', 200, required=False),
         'area': _get_int(p, 'area', minimum=1, maximum=4, required=False, default=1),
+
+        # Content fingerprints (Block C - B3). What the host actually has open,
+        # so a client can tell "same patch" from "same files" - see known open
+        # 10.1, where both peers had the same patch id and different levels.
+        #
+        # Hashes are not required to be well-formed hex here: an empty string is
+        # the legitimate answer for "I have no such file", and a malformed one
+        # simply fails to match, which is the same outcome as a mismatch. The
+        # lists are bounded so a peer cannot make us hold an unbounded payload.
+        'level_sha256': _get_str(p, 'level_sha256', 64, required=False),
+        'tilesets': _get_str_list(p, 'tilesets', 4, 64),
+        'tileset_sha256': _get_str_list(p, 'tileset_sha256', 4, 64),
     }
+
+
+def _get_str_list(payload, key, max_items, max_chars):
+    """
+    A short list of short strings, or [] when absent.
+
+    Bounded on both axes because it arrives from a peer. Entries that are not
+    strings are refused rather than coerced - a fingerprint list with a
+    surprise in it is a malformed message, not something to repair.
+    """
+    if key not in payload:
+        return []
+
+    value = payload[key]
+    _require(isinstance(value, list), 'field %r must be a list' % key)
+    _require(len(value) <= max_items,
+             'field %r exceeds %d items' % (key, max_items))
+
+    out = []
+    for item in value:
+        _require(isinstance(item, str), 'field %r must contain strings' % key)
+        _require(len(item) <= max_chars,
+                 'field %r entries exceed %d characters' % (key, max_chars))
+        out.append(item)
+
+    return out
 
 
 def _v_patch_need(p):

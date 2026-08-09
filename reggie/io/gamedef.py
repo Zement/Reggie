@@ -605,10 +605,65 @@ class ReggieGameDefinition:
         # Use the fallback
         return fallback
 
+    # A collaboration session's game data, as {patch name: (stage, texture)}.
+    #
+    # Class-level rather than per-instance, and deliberately so: loading a patch
+    # builds a *new* ReggieGameDefinition, so an override stored on an instance
+    # would be lost the moment the session switched patch - which is exactly
+    # when it is needed. Keyed on the patch name for the same reason the
+    # QSettings keys are.
+    #
+    # This is how a session points at transferred levels without touching the
+    # user's own preferences (Block C - B3). The user's StageGamePath_<patch>
+    # keeps whatever it always had; the session simply answers first, and stops
+    # answering when it ends. Nothing here is ever written to disk.
+    _sessionGamePaths = {}
+
+    @classmethod
+    def SetSessionGamePaths(cls, patch_name, stage, texture):
+        """
+        Points a patch at a session's copy of its game data, for as long as the
+        session lasts. Both paths may be empty to record only one of them.
+        """
+        cls._sessionGamePaths[str(patch_name)] = (str(stage or ''),
+                                                  str(texture or ''))
+
+    @classmethod
+    def ClearSessionGamePaths(cls):
+        """
+        Forgets every session override. Called when a session ends, so the
+        editor goes back to the user's own folders.
+        """
+        cls._sessionGamePaths.clear()
+
+    def _sessionPath(self, index):
+        """
+        The session's stage (0) or texture (1) path for this gamedef, or ''.
+
+        Only ever consulted for a *custom* gamedef: the retail game is not a
+        patch and has no per-patch key to shadow.
+        """
+        if not self.custom:
+            return ''
+
+        paths = ReggieGameDefinition._sessionGamePaths.get(self.name)
+        if not paths:
+            return ''
+
+        path = paths[index]
+        # Verified rather than trusted: a session copy can be deleted between
+        # joining and loading, and silently returning a path to nothing would
+        # look like the missing-tileset bug this block exists to remove.
+        return path if path and os.path.isdir(path) else ''
+
     def GetTextureGamePath(self):
         """
         Returns the texture game path
         """
+        session = self._sessionPath(1)
+        if session:
+            return session
+
         if not self.custom:
             return setting('TextureGamePath')
 
@@ -635,6 +690,10 @@ class ReggieGameDefinition:
         """
         Returns the stage game path
         """
+        session = self._sessionPath(0)
+        if session:
+            return session
+
         if not self.custom:
             return setting('StageGamePath')
 

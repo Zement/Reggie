@@ -284,6 +284,11 @@ class CollabController(QtCore.QObject):
         # per-action decision.
         self._is_save_authority = False
 
+        # The host's last room_info, kept so the content check can run *after*
+        # the level has loaded rather than when the message arrived (Block
+        # C - B3, phase 2). Empty when nothing has been reported yet.
+        self._host_fingerprint = {}
+
         self._connect_signals()
 
     # -- signal wiring ------------------------------------------------------
@@ -710,6 +715,18 @@ class CollabController(QtCore.QObject):
         self._session_level = ''
         self._session_area = 1
         self._is_save_authority = False
+        self._host_fingerprint = {}
+
+        # The session's Stage/Texture override goes with it, so the editor
+        # returns to the user's own folders the moment the session ends. This
+        # is what makes the override safe: it never outlives the session and it
+        # was never written to disk.
+        try:
+            from reggie.io.gamedef import ReggieGameDefinition
+
+            ReggieGameDefinition.ClearSessionGamePaths()
+        except Exception:
+            pass
 
         # Restore every control the session had restricted. Doing this here
         # rather than in leave() covers a session that ended because the *other*
@@ -1196,6 +1213,10 @@ class CollabController(QtCore.QObject):
             self._broadcastLevelChange()
             self._broadcastSnapshot()
         else:
+            # Now that the level is open, the fingerprints describe the files
+            # this peer is actually looking at. Comparing any earlier would
+            # hash whatever it had open before the session moved it.
+            self._checkContentMatches()
             self._requestResync(force=True)
 
         return True
@@ -1334,6 +1355,9 @@ class CollabController(QtCore.QObject):
         # level cannot be loaded yet but the session is already somewhere.
         self._setSessionLevel(str(room_info.get('level_name', '') or ''), area)
 
+        # Checked after the level loads, not now; see _onRoomInfoChanged.
+        self._host_fingerprint = dict(room_info or {})
+
         if self._patchPending():
             # The patch is still arriving, so asking for the level now would
             # have it drawn with the tilesets of whatever patch is loaded - and
@@ -1355,6 +1379,12 @@ class CollabController(QtCore.QObject):
         patch = str(room_info.get('patch_id', '') or '')
         self._appendStatus(
             'The host is now using: %s.' % (patch or 'the retail game'))
+
+        # Kept for the content check, which runs after the level has loaded -
+        # comparing before that would fingerprint whatever this editor had open
+        # a moment ago rather than what the session moved it to.
+        self._host_fingerprint = dict(room_info or {})
+
         self._checkPatch(room_info)
 
     def _onDisconnected(self, reason):
@@ -2413,6 +2443,78 @@ class CollabController(QtCore.QObject):
         # the tilesets it names can actually be found.
         self._resumeDeferredLoad()
 
+    # -- content mismatch (Block C - B3, phase 2) ---------------------------
+
+    def _checkContentMatches(self):
+        """
+        Compares what this peer has open against what the host reported.
+
+        The bug this exists for (known open 10.1): `patch_id` and
+        `patch_version` match whenever two peers have the same patch, but the
+        *stage path* is a local preference. Zement and Mone both had "Another
+        Mario Wii" pointing at different stage folders, both opened '01-01', and
+        saw completely different levels - while the session reported everything
+        as matching. The names agree; the bytes do not.
+
+        Reports rather than acts. A mismatch is worth saying plainly - Zement's
+        position, which is the right one, is that an unsynced state defeats the
+        purpose of a session and must not pass silently - but the fix is to
+        fetch the host's copies, which is what the transfer already does.
+        Refusing the join was considered and rejected: a client with the wrong
+        tilesets is looking at the right objects with the wrong pictures, and
+        the *destructive* case is saving, which the host-only save authority
+        already closes.
+        """
+        if not self.is_active or self.is_host:
+            return True
+
+        host = self._host_fingerprint
+        if not host:
+            return True
+
+        # An older host sends no fingerprints at all. Nothing to compare is not
+        # a mismatch; it is a peer that cannot answer the question.
+        if 'level_sha256' not in host and 'tileset_sha256' not in host:
+            return True
+
+        stage, texture = self._localGameDataDirectories()
+        level = self._session_level or self._currentLevelName()
+
+        problems = []
+
+        theirs = str(host.get('level_sha256', '') or '')
+        ours = files.level_fingerprint(stage, level)
+        if theirs and ours and theirs != ours:
+            problems.append(
+                'your copy of %s is not the same file as the host\'s' % level)
+        elif theirs and not ours and level:
+            problems.append('you do not have a copy of %s' % level)
+
+        their_names = list(host.get('tilesets') or [])
+        their_hashes = list(host.get('tileset_sha256') or [])
+        our_hashes = files.tileset_fingerprints(texture, their_names)
+
+        differing = files.compare_fingerprints(our_hashes, their_hashes)
+        named = [their_names[index] for index in differing
+                 if index < len(their_names) and their_names[index]]
+        if named:
+            problems.append('these tilesets differ from the host\'s: %s'
+                            % ', '.join(named))
+
+        if not problems:
+            debuglog.log('client', 'content matches the host', level=level)
+            return True
+
+        self._appendStatus(
+            'Warning - you are not seeing the same files as the host: %s. '
+            'The host\'s objects are correct, but the graphics behind them may '
+            'not be. Check that this patch points at the session\'s Stage and '
+            'Texture folders.' % '; '.join(problems))
+
+        debuglog.log('client', 'CONTENT MISMATCH', level=level,
+                     problems='; '.join(problems))
+        return False
+
     def _adoptTransferredGameData(self, patch_id):
         """
         Points the transferred patch at the Stage and Texture folders that came
@@ -2449,10 +2551,60 @@ class CollabController(QtCore.QObject):
         if os.path.isdir(texture):
             setSetting('TextureGamePath_' + patch_id, texture)
 
+        # Also as a session override, which is what serves a client that
+        # *already had* this patch (Block C - B3, phase 2). Such a client keeps
+        # its own patch and its own StageGamePath_<patch>; the session simply
+        # answers first, and stops answering when it ends. Without this, a
+        # second client would look at its own levels while believing it was in
+        # sync - the 10.1 case with the roles reversed.
+        self._useSessionGamePaths(patch_id, stage, texture)
+
+        # Mark the patch folder as a session copy. A *flag*, not a renamed
+        # patch: _patchId() returns gamedef.name and patch_requirement compares
+        # exactly that, so appending '(Collab)' to the name would make every
+        # later comparison see a mismatch and the client would flip between the
+        # two copies or re-transfer forever. Written locally and never sent, so
+        # a host cannot forge one.
+        try:
+            files.write_collab_marker(files.patch_directory(patch_id),
+                                      patch_id, self._hostNick())
+        except Exception as exc:
+            # A missing marker costs a label in the UI, nothing more.
+            debuglog.log('client', 'collab marker not written', error=str(exc))
+
         self._appendStatus(
             'The levels and tilesets from this session are in %s.' % stage)
         debuglog.log('client', 'adopted transferred game data',
                      patch=patch_id, stage=stage)
+        return True
+
+    def _useSessionGamePaths(self, patch_id, stage, texture):
+        """
+        Points this patch at the session's game data for as long as it lasts.
+
+        Separate from the QSettings write above because the two serve different
+        clients. A peer that had to *download* the patch has no preference of
+        its own, so writing the setting is right and it keeps the files
+        afterwards. A peer that already *had* the patch has its own
+        StageGamePath_<patch>, pointing at its own levels, and rewriting that
+        from the network would be changing a preference on someone else's
+        machine and leaving it changed. The override does neither: it answers
+        first while the session runs and is forgotten in _teardown.
+        """
+        if not patch_id:
+            return False
+
+        try:
+            from reggie.io.gamedef import ReggieGameDefinition
+
+            ReggieGameDefinition.SetSessionGamePaths(patch_id, stage, texture)
+        except Exception as exc:
+            debuglog.log('client', 'session path override failed',
+                         error=str(exc))
+            return False
+
+        debuglog.log('client', 'session game paths set', patch=patch_id,
+                     stage=stage)
         return True
 
     def _clearTransfer(self, abort=False):
@@ -2825,7 +2977,7 @@ class CollabController(QtCore.QObject):
         patch check, which reads neither; phase 0 makes a client set its session
         identity from this on connect, so both have to be true.
         """
-        return {
+        info = {
             'game_id': self._gameId(),
             'game_name': self._gameName(),
             'patch_id': self._patchId(),
@@ -2833,6 +2985,53 @@ class CollabController(QtCore.QObject):
             'level_name': self._currentLevelName(),
             'area': self._areaNumber(),
         }
+        info.update(self._contentFingerprint())
+        return info
+
+    def _contentFingerprint(self):
+        """
+        Hashes of the level and tilesets this peer actually has open.
+
+        The reason this exists (Block C - B3, known open 10.1): `patch_id` and
+        `patch_version` match whenever two peers have the same patch, but the
+        *stage path* is a local preference. Zement and Mone both had "Another
+        Mario Wii", pointing at different stage folders, both opened '01-01' and
+        saw completely different levels - and nothing noticed, because the two
+        things the session compared did match.
+
+        Hashing the *bytes* rather than the name is the whole point: the names
+        agree in that case and the files do not.
+
+        Cheap by construction - a level is tens of kilobytes and there are four
+        tilesets - and best-effort: a fingerprint that cannot be taken is
+        reported as absent, never as an error, since failing to compare is not a
+        reason to fail a join.
+        """
+        try:
+            stage, texture = self._localGameDataDirectories()
+            level = self._currentLevelName()
+
+            return {
+                'level_sha256': files.level_fingerprint(stage, level),
+                'tilesets': self._currentTilesetNames(),
+                'tileset_sha256': files.tileset_fingerprints(
+                    texture, self._currentTilesetNames()),
+            }
+        except Exception as exc:
+            debuglog.log('controller', 'fingerprint failed', error=str(exc))
+            return {}
+
+    @staticmethod
+    def _currentTilesetNames():
+        """
+        The four tileset names of the current area, in slot order.
+        """
+        area = getattr(globals_, 'Area', None)
+        if area is None:
+            return []
+
+        return [str(getattr(area, 'tileset%d' % slot, '') or '')
+                for slot in range(4)]
 
     @staticmethod
     def _gameId():
