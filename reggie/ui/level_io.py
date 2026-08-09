@@ -98,7 +98,43 @@ class LevelIO:
         LoadLevelNames()
         dlg = ChooseLevelNameDialog()
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            # In a session, a client asks the host first and the host's
+            # broadcast is what actually loads it (Block C - B3, phase 3d).
+            # Outside one, and for the host, this is True immediately.
+            if not self._ProposeCollabSwitch(dlg.currentlevel, 1):
+                return
+
             self.win.LoadLevel(dlg.currentlevel, False, 1)
+
+    def _ProposeCollabSwitch(self, level, area):
+        """
+        Whether this editor may load a level itself, or has handed the decision
+        to the host (Block C - B3, phase 3d).
+
+        Returns True when the caller should go ahead - which is every case
+        outside a session, so the ordinary editor is unaffected.
+
+        Guarded and lazy like the other collab hooks here, but note the
+        *difference* in what a failure means: those report something that has
+        already happened, so swallowing an error is right. This one asks
+        permission, and an error means the answer is unknown. Loading anyway
+        would be the pre-3d behaviour - moving the session without the host's
+        consent - so an unknown answer allows the load only when there is
+        demonstrably no session to consult.
+        """
+        controller = getattr(self.win, '_collab', None)
+        if controller is None:
+            return True
+
+        try:
+            if not controller.is_active:
+                return True
+            return bool(controller.proposeLevelChange(level, area))
+        except Exception:
+            # A broken controller must not stop a lone user opening a level;
+            # is_active having raised means we cannot even tell if there is a
+            # session, and the editor being unusable is the worse failure.
+            return True
     def HandleOpenFromFile(self):
         """
         Open a level using the filename

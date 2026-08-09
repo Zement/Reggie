@@ -52,7 +52,19 @@ class CollabSignals(QtCore.QObject):
     levelSaved = QtCore.pyqtSignal(dict)          # the host saved the level
     snapshotRequested = QtCore.pyqtSignal(str, int)    # session id, area
     levelSwitchRequested = QtCore.pyqtSignal(str, int)  # level name, area
-    operationRejected = QtCore.pyqtSignal(str)         # reason
+
+    # A Full client is *asking* the host to move the session (Block C - B3,
+    # phase 3d). Separate from levelSwitchRequested, which means "the session
+    # has moved, load it": this one has not been decided yet, and the host has
+    # to know who asked in order to answer them. session id, level, area.
+    levelSwitchProposed = QtCore.pyqtSignal(str, str, int)
+    # reason, op_id. op_id names *what* was refused: an operation id for a
+    # refused edit, or the message type for a refused request. A refused switch
+    # proposal has to be distinguishable from a refused edit, because the two
+    # want opposite responses - an edit was applied optimistically and needs a
+    # resync, a proposal was never applied and needs the waiting caller
+    # released (Block C - B3, phase 3d).
+    operationRejected = QtCore.pyqtSignal(str, str)
 
     # Patch transfer. Host side: a peer needs the patch, or wants one file of
     # it. Client side: the manifest arrived, a chunk arrived, the host finished.
@@ -139,11 +151,15 @@ class CollabBridge(QtCore.QObject):
                 int(data.get('area', 1) or 1))
 
         elif kind == 'area_switch':
-            # Loading a level touches the whole editor, so this must reach the
+            # A client is *asking*; the host decides (Block C - B3, phase 3d).
+            # This used to load straight away, which is why the host's unsaved
+            # work could be walked over by a client's switch. Answering it
+            # touches the editor and may open a dialog, so it must reach the
             # main thread before anything happens.
             self.signals.statusMessage.emit(
-                '%s is changing the level or area.' % nick)
-            self.signals.levelSwitchRequested.emit(
+                '%s asked to change the level or area.' % nick)
+            self.signals.levelSwitchProposed.emit(
+                str(getattr(participant, 'session_id', '') or ''),
                 str(data.get('level', '') or ''),
                 int(data.get('area', 1) or 1))
 
@@ -252,7 +268,8 @@ class CollabBridge(QtCore.QObject):
 
         elif kind == 'op_reject':
             self.signals.operationRejected.emit(
-                data.get('reason', 'The host rejected a change.'))
+                data.get('reason', 'The host rejected a change.'),
+                str(data.get('op_id', '') or ''))
 
         elif kind == protocol.T_AREA_SWITCH:
             # The host moved everyone. Same signal as the host-side request, so

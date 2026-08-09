@@ -1145,6 +1145,52 @@ def report_content_mismatch(parent, problems):
     box.exec()
 
 
+def resolve_switch_proposal(parent, nick, destination):
+    """
+    Asks the host what to do about its unsaved work before a client's switch
+    (Block C - B3, phase 3d). Returns 'save', 'discard', or 'cancel'.
+
+    Shown only when the host actually has unsaved changes, so it is not a
+    permission prompt - the client is allowed to do this. It is the host's own
+    Save/Discard/Cancel, asked at the moment someone else's action would
+    otherwise discard the work.
+
+    Naming who asked is the point of having a dialog of its own rather than
+    reusing CheckDirty's: a Save prompt appearing with nobody at the keyboard is
+    alarming and unexplainable, and the host needs to know the move is coming
+    from a person, not a fault.
+
+    Cancel is the default. The safe answer when the host is not sure - or is not
+    really reading - is the one that keeps their work and keeps the session
+    where it is; both other answers are recoverable from, but a mis-clicked
+    Discard is not.
+    """
+    box = QtWidgets.QMessageBox(parent)
+    box.setWindowTitle('Move the session?')
+    box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+    box.setText('%s wants to move the session to %s.' % (nick, destination))
+    box.setInformativeText(
+        'You have unsaved changes to the level that is open now.\n\n'
+        'Save keeps them and then moves. Discard moves without keeping them. '
+        'Cancel stays on this level and tells %s the request was declined.'
+        % nick)
+    box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Save
+                           | QtWidgets.QMessageBox.StandardButton.Discard
+                           | QtWidgets.QMessageBox.StandardButton.Cancel)
+    box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+
+    answer = box.exec()
+
+    if answer == QtWidgets.QMessageBox.StandardButton.Save:
+        return 'save'
+    if answer == QtWidgets.QMessageBox.StandardButton.Discard:
+        return 'discard'
+
+    # Anything else - including the window being closed - is a cancel. A dialog
+    # dismissed without an answer must not be read as consent to discard.
+    return 'cancel'
+
+
 def report_pin_mismatch(parent, message):
     """
     Reports a certificate pin mismatch.

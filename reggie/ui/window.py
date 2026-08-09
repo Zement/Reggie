@@ -780,6 +780,25 @@ class ReggieWindow(QtWidgets.QMainWindow):
         except Exception:
             return True
 
+    def _CollabLevelName(self):
+        """
+        The level this editor has open, as the session names it (Block C - B3).
+
+        An area switch stays within the same level, but the proposal that
+        carries it still has to name that level: the wire carries names, never
+        paths, so the other peers resolve it against their own stage folder.
+        Asking the controller keeps the one definition of "the level's name" in
+        one place rather than re-deriving it from fileSavePath here.
+        """
+        controller = getattr(self, '_collab', None)
+        if controller is None:
+            return ''
+
+        try:
+            return str(controller.sessionLevelName() or '')
+        except Exception:
+            return ''
+
     def HandleCollaborate(self):
         """
         Opens the collaboration setup dialog, or the status window if a session
@@ -1549,6 +1568,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
             return
 
         if self.CheckDirty():
+            self.areaComboBox.setCurrentIndex(old_idx)
+            return
+
+        # In a session, a client asks the host before moving everyone, and the
+        # host's broadcast is what loads it (Block C - B3, phase 3d). The combo
+        # box goes back to where it was either way: on a refusal because we are
+        # staying, and on acceptance because the incoming switch sets it.
+        if not self._levelio._ProposeCollabSwitch(self._CollabLevelName(),
+                                                  idx + 1):
             self.areaComboBox.setCurrentIndex(old_idx)
             return
 

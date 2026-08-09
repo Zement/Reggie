@@ -299,6 +299,24 @@ class CollabController(QtCore.QObject):
         # in flight, which is the normal state (Block C - B3, phase 3c).
         self._expected_save = None
 
+        # -- switch proposals (Block C - B3, phase 3d) -----------------------
+        #
+        # A Full client keeps level and area leading, but Save is the host's, so
+        # a client's switch has to be resolved by the host *before* it happens:
+        # once the client has loaded, there is nothing left for the host to
+        # cancel back to.
+        #
+        # Client side: the outcome of the proposal currently in flight, or None
+        # when none is. 'waiting' while the host is deciding, then 'accepted' or
+        # a refusal reason. Read by the modal wait, which is why it is a plain
+        # attribute rather than a return value - the answer arrives on a signal.
+        self._proposal = None
+
+        # Host side: the session id of the client whose proposal is being
+        # resolved, so a second one arriving mid-dialog is refused rather than
+        # stacking a second dialog on the host. '' when none is open.
+        self._resolving_proposal = ''
+
         self._connect_signals()
 
     # -- signal wiring ------------------------------------------------------
@@ -312,6 +330,7 @@ class CollabController(QtCore.QObject):
         self.signals.snapshotReceived.connect(self._onSnapshot)
         self.signals.snapshotRequested.connect(self._onSnapshotRequested)
         self.signals.levelSwitchRequested.connect(self._onLevelSwitchRequested)
+        self.signals.levelSwitchProposed.connect(self._onLevelSwitchProposed)
         self.signals.operationRejected.connect(self._onOperationRejected)
         self.signals.connected.connect(self._onConnected)
         self.signals.roomInfoChanged.connect(self._onRoomInfoChanged)
@@ -941,6 +960,219 @@ class CollabController(QtCore.QObject):
             return False
         return getattr(session_object, 'role', '') == protocol.ROLE_FULL
 
+    # -- switch proposals (Block C - B3, phase 3d) --------------------------
+    #
+    # Only a *client* proposes. The host switches directly, because it is the
+    # save authority: there is nobody else's unsaved work to resolve, and its
+    # own is handled by the ordinary CheckDirty it already runs.
+
+    PROPOSAL_TIMEOUT_SECONDS = 30.0
+
+    def proposeLevelChange(self, level, area=1):
+        """
+        Asks the host to move the session, and waits for its answer.
+
+        Returns True if the caller should go ahead and load, False if it should
+        not. Everyone who is not a Full client in a session gets True
+        immediately, so the ordinary editor and the host are untouched by this.
+
+        This is the inversion decision 11 needed. A client used to load first and
+        announce afterwards, which left the host's dialog with nothing to cancel
+        back to - by the time it was asked, the client had already moved, and
+        "Cancel" could only have put it back with a second load. Proposing first
+        costs a round trip and makes the host's answer meaningful.
+        """
+        if not self.is_active or self.is_host:
+            return True
+
+        if not self._clientHasFullRole():
+            # Not allowed to move the session at all. The controls are disabled,
+            # so this is the bypass path; the host would refuse it anyway.
+            return False
+
+        if self.client is None:
+            return False
+
+        if self._proposal is not None:
+            # One at a time from this client too, not only host-side: a second
+            # dialog here would send a second proposal the host has already
+            # committed to refusing.
+            self._appendStatus('You are already waiting for the host\'s answer.')
+            return False
+
+        payload = {'area': _clamp_area(area), 'level': str(level or '')}
+
+        # Armed *before* the send, not after. The answer is delivered by the
+        # bridge from the transport's reader thread, so it can arrive the moment
+        # the message is on the wire - and a reply landing while _proposal is
+        # still None is not recognised as an answer at all: it falls through to
+        # the refused-edit path, asks for a pointless resync, and then this
+        # waits out the full timeout for an answer it has already had.
+        self._proposal = 'waiting'
+
+        try:
+            self.client.send(protocol.make_message(protocol.T_AREA_SWITCH,
+                                                   payload))
+        except Exception as exc:
+            self._proposal = None
+            self._appendStatus('The host could not be asked: %s' % exc)
+            return False
+
+        self._appendStatus('Asked the host to move the session to %s.'
+                           % _describeLevel(payload['level'], payload['area']))
+        debuglog.log('client', 'proposed level change', level=payload['level'],
+                     area=payload['area'])
+
+        outcome = self._waitForProposal()
+        self._proposal = None
+
+        if outcome == 'accepted':
+            # The host agreed and has broadcast the switch to everyone,
+            # including us. Loading here as well would load it twice, so the
+            # broadcast is left to do it - _onLevelSwitchRequested is the one
+            # place a level is loaded for the session.
+            return False
+
+        self._appendStatus(outcome or 'The host did not answer.')
+        return False
+
+    def _waitForProposal(self):
+        """
+        Waits for the host's answer, keeping the event loop running.
+
+        The loop must keep running: the answer arrives on the session's own
+        reader thread and is delivered through the bridge's signals, so blocking
+        here would stop us hearing the very thing we are waiting for. Same shape
+        and same reason as _waitForInstalledPatch.
+
+        A timeout is not optional either. The host's dialog is modal on *its*
+        machine, and a host who has stepped away would otherwise leave the
+        client frozen with no way out.
+        """
+        deadline = time.monotonic() + self.PROPOSAL_TIMEOUT_SECONDS
+
+        with _BusyIndicator(self.window, 'Waiting for the host...'):
+            while self._proposal == 'waiting':
+                if time.monotonic() >= deadline:
+                    return ('The host did not answer, so the session stayed '
+                            'on %s.' % self._describeCurrentLevel())
+
+                if not self.is_active:
+                    return 'The session ended while you were waiting.'
+
+                QtWidgets.QApplication.processEvents(
+                    QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents,
+                    50)
+
+        return self._proposal
+
+    def _resolveProposal(self, participant, level, area):
+        """
+        Host side: decides a client's proposal and answers it.
+
+        Returns True if the switch should go ahead here.
+
+        The host's unsaved work is the whole reason this exists, so it is asked
+        about it first, and the dialog names who is asking - a Save/Discard
+        prompt appearing unbidden while someone else is at the keyboard is
+        otherwise unexplainable.
+        """
+        session_id = str(getattr(participant, 'session_id', '') or '')
+        nick = str(getattr(participant, 'nick', '') or 'A client')
+
+        if self._resolving_proposal:
+            # Two clients proposing at once. Refusing the second is better than
+            # queueing it: by the time the host answered the first, the second
+            # would be a move from a level nobody is on any more.
+            self._refuseProposal(
+                participant,
+                'the host is already answering another request')
+            return False
+
+        self._resolving_proposal = session_id or nick
+        try:
+            if globals_.Dirty and self._maySave():
+                choice = collab_dialogs.resolve_switch_proposal(
+                    self.window, nick, _describeLevel(level, area))
+
+                if choice == 'cancel':
+                    self._refuseProposal(
+                        participant, 'the host is keeping the current level')
+                    self._appendStatus('You declined %s\'s request to move to '
+                                       '%s.' % (nick, _describeLevel(level, area)))
+                    return False
+
+                if choice == 'save':
+                    if not self._saveForProposal():
+                        # The save failed, so proceeding would lose exactly the
+                        # work the host just chose to keep.
+                        self._refuseProposal(
+                            participant,
+                            'the host could not save, so the level did not '
+                            'change')
+                        return False
+
+            self._appendStatus('%s moved the session to %s.'
+                               % (nick, _describeLevel(level, area)))
+            return True
+        finally:
+            self._resolving_proposal = ''
+
+    def _refuseProposal(self, participant, reason):
+        """
+        Tells one client its proposal was declined.
+
+        Reuses T_OP_REJECT, which _handle_area_switch already sends for a
+        role-denied switch and which the client already surfaces: "the host said
+        no" needs no message type of its own. op_id names the request type, so
+        the client can tell its own refused proposal from a refused edit.
+        """
+        connection = getattr(participant, 'connection', None)
+        if connection is None:
+            return False
+
+        try:
+            connection.send_type(protocol.T_OP_REJECT, {
+                'op_id': protocol.T_AREA_SWITCH,
+                'reason': reason,
+            })
+        except Exception:
+            return False
+
+        return True
+
+    def _maySave(self):
+        """
+        Whether this editor could actually save, so the host is not offered a
+        Save button that would be refused.
+        """
+        window = self.window
+        checker = getattr(window, '_maySaveInSession', None)
+        if not callable(checker):
+            return True
+        try:
+            return bool(checker())
+        except Exception:
+            return True
+
+    def _saveForProposal(self):
+        """
+        Saves the host's work in answer to its own dialog. Returns success.
+
+        A failure here must be reported as a failure rather than swallowed: the
+        caller uses it to decide whether the switch may proceed, and treating a
+        failed save as a success would discard the work.
+        """
+        window = self.window
+        save = getattr(window, 'HandleSave', None)
+        if not callable(save):
+            return False
+        try:
+            return bool(save())
+        except Exception as exc:
+            self._appendStatus('The level could not be saved: %s' % exc)
+            return False
+
     def notifyLevelChanged(self):
         """
         Republishes the level after the host loaded another one or switched area.
@@ -978,22 +1210,33 @@ class CollabController(QtCore.QObject):
             return False
 
         if not self.is_host:
-            if not self._clientHasFullRole():
+            # A client that has already loaded is in the wrong state whatever
+            # its role, so both branches resync (Block C - B3, phase 3d).
+            #
+            # This used to be where a Full client announced its switch, after
+            # the fact. It no longer is: proposeLevelChange asks the host
+            # *before* loading, so a Full client reaching here means the switch
+            # bypassed that - the editor found a route into LoadLevel that does
+            # not propose. Announcing it now would be the old behaviour and the
+            # old bug: the host would be told about a move it never agreed to,
+            # with its unsaved work already stepped over.
+            #
+            # So this is a backstop, and it is deliberately the conservative
+            # one: pull this peer back to the session's state rather than push
+            # its state onto everyone. Losing a local switch is recoverable;
+            # silently overriding the host's unsaved work is not.
+            if self._clientHasFullRole():
+                self._appendStatus(
+                    'That level change did not go through the host, so the '
+                    'session\'s level is being reloaded.')
+                debuglog.log('client', 'unproposed level change',
+                             level=self._describeCurrentLevel())
+            else:
                 self._appendStatus(
                     'You changed level or area locally; reloading the host\'s.')
-                self._requestResync(force=True)
-                return False
 
-            # Tell the host what to switch everyone to. The host owns
-            # redistribution, so this asks rather than broadcasts.
-            self.client.send(protocol.make_message(
-                protocol.T_AREA_SWITCH, self._levelChangePayload()))
-
-            self._appendStatus('Asked the host to switch to %s.'
-                               % self._describeCurrentLevel())
-            debuglog.log('client', 'requested level change',
-                         level=self._describeCurrentLevel())
-            return True
+            self._requestResync(force=True)
+            return False
 
         # The old references are meaningless now.
         self.refmap = sync.RefMap(origin='host', is_authority=True)
@@ -1122,6 +1365,74 @@ class CollabController(QtCore.QObject):
 
         return self._currentLevelName() == self._session_level
 
+    def _onLevelSwitchProposed(self, session_id, level, area):
+        """
+        Host side: a Full client asked to move the session (phase 3d).
+
+        Runs on the main thread, because answering it may open a dialog and will
+        load a level.
+
+        Only the host reaches here - session.py emits this from the host's own
+        message loop - but it is checked anyway rather than assumed: a client
+        that somehow got here would be acting as the authority.
+        """
+        if not self.is_active or not self.is_host:
+            return False
+
+        host_session = self.host_session
+        if host_session is None:
+            return False
+
+        participant = host_session.find(session_id)
+        if participant is None:
+            # The client left between asking and being answered. Nothing to
+            # refuse and nobody to tell, so the session simply stays put.
+            return False
+
+        if not self._resolveProposal(participant, level, area):
+            return False
+
+        # Accepted. Tell the proposing client so *before* loading anything.
+        #
+        # The obvious implementation is to let the host's own load broadcast the
+        # switch and treat that broadcast as the acceptance - and it does
+        # release the wait. But it is not guaranteed to happen: the broadcast is
+        # skipped when the host is already on the requested level and area
+        # (_onLevelSwitchRequested returns early), and while a level is being
+        # loaded on behalf of the session (_suppress_level_notify). In both
+        # cases the host has agreed, and the client would wait out the full
+        # timeout and then be told the host never answered.
+        #
+        # An explicit acceptance costs one small message and removes the whole
+        # class. The broadcast still arrives and is still what loads the level
+        # everywhere; this only ends the waiting.
+        self._acceptProposal(participant, level, area)
+
+        return self._onLevelSwitchRequested(level, _clamp_area(area))
+
+    def _acceptProposal(self, participant, level, area):
+        """
+        Tells one client its proposal was accepted.
+
+        Sent as an area_switch to that client alone: it is the same message the
+        broadcast uses, so the client needs no new type and the one it receives
+        first wins. Both say the same thing, so a duplicate is harmless - the
+        second is skipped by the "already have it" guard.
+        """
+        connection = getattr(participant, 'connection', None)
+        if connection is None:
+            return False
+
+        try:
+            connection.send_type(protocol.T_AREA_SWITCH, {
+                'area': _clamp_area(area),
+                'level': str(level or ''),
+            })
+        except Exception:
+            return False
+
+        return True
+
     def _onLevelSwitchRequested(self, level, area):
         """
         Loads the level and area a peer moved the session to.
@@ -1132,6 +1443,13 @@ class CollabController(QtCore.QObject):
         """
         if not self.is_active:
             return False
+
+        # If we were waiting for an answer to our own proposal, this is it: the
+        # host only broadcasts a switch once it has accepted one. Released
+        # before the load, so the wait's busy indicator is gone before the
+        # loading one appears (Block C - B3, phase 3d).
+        if self._proposal == 'waiting':
+            self._proposal = 'accepted'
 
         # Where the session is, recorded before anything can decline to load it.
         # A peer that cannot open the level is still *in* a session that moved -
@@ -1428,7 +1746,16 @@ class CollabController(QtCore.QObject):
         # controls follow the role rather than only the session.
         self.applyEditingPermissions()
 
-    def _onOperationRejected(self, reason):
+    def _onOperationRejected(self, reason, op_id=''):
+        # A refused switch proposal is not a refused edit. Nothing was applied,
+        # so there is nothing to reconcile and a resync here would ask the host
+        # for a snapshot of the level we are already on. Release the waiting
+        # proposal instead (Block C - B3, phase 3d).
+        if op_id == protocol.T_AREA_SWITCH and self._proposal == 'waiting':
+            self._proposal = ('The host declined: %s.' % reason if reason
+                              else 'The host declined the change.')
+            return
+
         # The client's optimistic edit was refused. Ask for a fresh snapshot
         # rather than guessing what the host's state is now.
         self._appendStatus('A change was not accepted: %s' % reason)
@@ -3482,6 +3809,29 @@ def _debug_log_directory():
         pass
 
     return _settings_directory()
+
+
+def _clamp_area(area):
+    """
+    An area number that is certainly in range, whatever arrived.
+
+    The wire validator enforces 1-4 too; this covers the local callers, which
+    pass whatever a combo box index produced.
+    """
+    try:
+        return max(1, min(4, int(area or 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _describeLevel(level, area):
+    """
+    How a level and area are named to the user, in one place, so a proposal and
+    the status line that answers it read the same way.
+    """
+    if level:
+        return '%s (area %d)' % (level, _clamp_area(area))
+    return 'area %d' % _clamp_area(area)
 
 
 def _sprite_format():
