@@ -30,6 +30,59 @@ class LevelIO:
     def __init__(self, win):
         self.win = win
 
+    def _refuseSaveInSession(self, what):
+        """
+        Blocks a save the running session does not permit (Block C - B3).
+
+        Returns True when the caller must stop. The gate lives here rather than
+        only on the QAction because disabling a menu item does not disable the
+        function: HandleSave is reached from CheckDirty (window.py) and from
+        several internal callers - closing the editor, restoring an autosave,
+        switching level - none of which go through the menu.
+
+        The rules, per Zement (2026-08-09):
+
+        - **Save**: the host only. A Full client leads the session but does not
+          own its file; two save authorities would be two sources of truth.
+        - **Save as...**: nobody, the host included. It rewrites fileSavePath,
+          which renames the session's level on one machine only - after which
+          that peer is editing a file no one else can resolve by name. Same
+          reasoning that already put "open by file" out of reach in a session.
+        - **Save a copy as...**: nobody, for now. It is safe except when the
+          target lands in the session's own stage folder, it is rarely used, and
+          re-enabling it later with a destination check is cheap.
+        """
+        controller = getattr(self.win, '_collab', None)
+        if controller is None:
+            return False
+
+        try:
+            if not controller.is_active:
+                return False
+            allowed = bool(controller.isSaveAuthority())
+        except Exception:
+            # A broken controller must not stop someone saving their own work.
+            return False
+
+        if allowed and what == 'save':
+            return False
+
+        if what == 'save':
+            message = ('Only the host can save the level during a '
+                       'collaboration session.')
+        elif what == 'saveas':
+            message = ('"Save as" is not available during a collaboration '
+                       'session: it would rename the level on your machine '
+                       'only, and the other participants could no longer find '
+                       'it.')
+        else:
+            message = ('"Save a copy as" is not available during a '
+                       'collaboration session.')
+
+        QtWidgets.QMessageBox.information(
+            self.win, 'Collaboration', message)
+        return True
+
     def HandleNewLevel(self):
         """
         Create a new level
@@ -65,9 +118,13 @@ class LevelIO:
         """
         Save a level back to the archive. Returns whether saving was successful.
         """
+        if self._refuseSaveInSession('save'):
+            return False
+
         if not self.win.fileSavePath or self.win.fileSavePath.endswith('.arc.LH'):
-            # Delegate save to HandleSaveAs function
-            return self.win.HandleSaveAs()
+            # Delegate save to HandleSaveAs function. Flagged as coming from
+            # Save so the session gate is not applied twice - see HandleSaveAs.
+            return self.HandleSaveAs(_from_save=True)
 
         data = globals_.Level.save()
 
@@ -83,7 +140,7 @@ class LevelIO:
                 )
 
                 # Delegate to HandleSaveAs
-                return self.win.HandleSaveAs()
+                return self.HandleSaveAs(_from_save=True)
 
             data = compressed
 
@@ -116,11 +173,20 @@ class LevelIO:
         # Saving resets the undo history (Block C - A1)
         self.win.undoStack.clear()
         return True
-    def HandleSaveAs(self, copy = False):
+    def HandleSaveAs(self, copy = False, _from_save = False):
         """
         Save a level back to the archive, with a new filename. Returns whether
         saving was successful.
+
+        `_from_save` is set when HandleSave delegated here because there is no
+        path to save to yet. That call has already been through the session
+        gate, so re-running it would refuse a save the host is entitled to and
+        show a second dialog for one refusal.
         """
+        if not _from_save and self._refuseSaveInSession(
+                'savecopyas' if copy else 'saveas'):
+            return False
+
         fn = QtWidgets.QFileDialog.getSaveFileName(self.win,
             globals_.trans.string('FileDlgs', 8 if copy else 3),
             '',

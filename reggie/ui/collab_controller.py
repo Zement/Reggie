@@ -68,6 +68,13 @@ _ROLE_HINT = ('Not available with your access level: area, zone, background, '
               'camera and level-information changes need Full access. Ask the '
               'host to change your role.')
 
+# Shown on the save entries. Separate from _PERMISSION_HINT, which explains that
+# the host chooses the level and patch - true, but not the reason saving is
+# restricted, and a hint that explains the wrong rule is worse than none.
+_SAVE_HINT = ('Not available during this collaboration session: the host saves '
+              'the level for everyone, and your copy is kept up to date '
+              'automatically.')
+
 # The dialogs whose changes are Full-only, mapped from the op kinds in
 # protocol.OP_KINDS_FULL_ONLY:
 #
@@ -100,7 +107,22 @@ _HOST_ONLY_ACTIONS = ('changegamedef',)
 _AREA_ACTIONS = ('addarea', 'importarea', 'deletearea')
 
 # Unavailable to everyone in a session, including the host.
-_NEVER_IN_SESSION_ACTIONS = ('openfromfile',)
+#
+# 'openfromfile' can reach a level outside the patch's stage folder, which no
+# other machine could resolve from the name alone.
+#
+# The two Save-as entries are here for the same shape of reason (Block C - B3,
+# Zement 2026-08-09). 'saveas' rewrites fileSavePath, which renames the
+# session's level on one machine only - after which that peer is editing a file
+# nobody else can find by name. 'savecopyas' is safe except when it lands in the
+# session's own stage folder, and is rare enough that blocking it outright costs
+# nothing; re-enabling it with a destination check is a noted follow-up.
+_NEVER_IN_SESSION_ACTIONS = ('openfromfile', 'saveas', 'savecopyas')
+
+# Writing the session's level: the host, whatever a client's role. A Full client
+# leads the session but does not own its file - two save authorities would be
+# two sources of truth for one level.
+_SAVE_ACTIONS = ('save',)
 
 
 class _BusyIndicator:
@@ -226,6 +248,33 @@ class CollabController(QtCore.QObject):
         # mid-session switch is a level change with no snapshot request.
         self._deferred_level = None
         self._deferred_snapshot_area = None
+
+        # -- session file identity (Block C - B3, phase 0) -------------------
+        #
+        # Which level and area the *session* is on, tracked explicitly rather
+        # than read back out of mainWindow.fileSavePath.
+        #
+        # The two are not the same question, and conflating them is the root of
+        # several B3 symptoms. fileSavePath answers "what file did this editor
+        # last open", which during a session may be:
+        #
+        #   - a different level entirely, if the peers' stage paths diverge and
+        #     both resolved '01-01' against their own folder (known open 10.1);
+        #   - nothing at all, if the client has never opened this level (10.1b);
+        #   - stale, between a session moving and the load completing.
+        #
+        # Saving, prompting about unsaved changes, and reporting where the
+        # session is must all be answered from the session's own view, so it is
+        # kept here. `_session_level` is the bare level name as it travels on
+        # the wire, '' when the session is on an unsaved level.
+        self._session_level = ''
+        self._session_area = 1
+
+        # Whether this peer may write the session's level to disk. The host is
+        # the save authority (Zement, 2026-08-09); a client never is, whatever
+        # its role, so this is set once when a session starts and is not a
+        # per-action decision.
+        self._is_save_authority = False
 
         self._connect_signals()
 
@@ -365,6 +414,12 @@ class CollabController(QtCore.QObject):
             address, actual_port, fingerprint, secret)
 
         self.mode = 'host'
+
+        # The host is the session's save authority, and the session starts on
+        # whatever the host already has open.
+        self._is_save_authority = True
+        self._setSessionLevel(self._currentLevelName(), self._areaNumber())
+
         self.applyEditingPermissions()
 
         # Say which address the code actually carries. The setup dialog can
@@ -502,6 +557,13 @@ class CollabController(QtCore.QObject):
             return False
 
         self.mode = 'join'
+
+        # A client is never the save authority, whatever its role: Save is the
+        # host's (Zement, 2026-08-09). Where the session is is not known yet -
+        # room_info and the first area_switch answer that.
+        self._is_save_authority = False
+        self._setSessionLevel('', 1)
+
         self.applyEditingPermissions()
         debuglog.log('controller', 'joined', host=host, port=port,
                      fp=debuglog.short_fingerprint(self.client.cert_fingerprint))
@@ -633,6 +695,14 @@ class CollabController(QtCore.QObject):
         self.join_code = ''
         self.mode = ''
 
+        # The session's file identity dies with the session. Left set, it would
+        # tell the next session - or the editor between sessions - that it is on
+        # a level it is not on, and isSaveAuthority() would keep answering from
+        # a role nobody holds any more.
+        self._session_level = ''
+        self._session_area = 1
+        self._is_save_authority = False
+
         # Restore every control the session had restricted. Doing this here
         # rather than in leave() covers a session that ended because the *other*
         # side hung up, which would otherwise leave the editor permanently
@@ -738,9 +808,14 @@ class CollabController(QtCore.QObject):
                               else hint)
 
         for name in self._restrictedActions():
-            enable(name, self.actionAllowedBySession(name),
-                   _ROLE_HINT if name in _FULL_ONLY_ACTIONS
-                   else _PERMISSION_HINT)
+            if name in _FULL_ONLY_ACTIONS:
+                hint = _ROLE_HINT
+            elif name in _SAVE_ACTIONS or name in ('saveas', 'savecopyas'):
+                hint = _SAVE_HINT
+            else:
+                hint = _PERMISSION_HINT
+
+            enable(name, self.actionAllowedBySession(name), hint)
 
         active = self.is_active
         host = self.is_host
@@ -757,7 +832,8 @@ class CollabController(QtCore.QObject):
         Every action a session can restrict, in one place.
         """
         return (_LEADER_ACTIONS + _HOST_ONLY_ACTIONS + _AREA_ACTIONS
-                + _FULL_ONLY_ACTIONS + _NEVER_IN_SESSION_ACTIONS)
+                + _FULL_ONLY_ACTIONS + _NEVER_IN_SESSION_ACTIONS
+                + _SAVE_ACTIONS)
 
     def actionAllowedBySession(self, name):
         """
@@ -790,6 +866,12 @@ class CollabController(QtCore.QObject):
             # Switching patch reloads spritedata and tilesets under a level the
             # host owns, so it stays with the host whatever the client's role.
             return host
+
+        if name in _SAVE_ACTIONS:
+            # Asked of the save authority rather than of `host` directly, so
+            # there is one answer to "may I write this level" and level_io's
+            # gate and this menu state cannot disagree.
+            return self.isSaveAuthority()
 
         if name in _LEADER_ACTIONS or name in _AREA_ACTIONS:
             return may_lead
@@ -845,6 +927,15 @@ class CollabController(QtCore.QObject):
 
         # We are loading this level *because* a peer asked us to. Announcing it
         # again would bounce it straight back to the sender.
+        #
+        # The session's own record is still updated first, and deliberately
+        # before the early return: this is the path a remote-driven load takes,
+        # so skipping it here would leave a client's session identity stuck on
+        # whatever it joined with, which is the state phase 0 exists to remove.
+        # _onLevelSwitchRequested sets it too, from the name it was given; this
+        # covers what actually loaded, which is the more truthful of the two.
+        self._setSessionLevel(self._currentLevelName(), self._areaNumber())
+
         if self._suppress_level_notify:
             return False
 
@@ -931,6 +1022,68 @@ class CollabController(QtCore.QObject):
             return '%s (area %d)' % (level, area)
         return 'area %d' % area
 
+    # -- session file identity (Block C - B3, phase 0) -----------------------
+
+    def _setSessionLevel(self, level, area):
+        """
+        Records where the session now is.
+
+        Called from the one place a level or area actually changes for the
+        session - the host announcing it, or a peer applying it - so the two
+        sides cannot drift apart the way reading fileSavePath on demand allowed.
+        """
+        self._session_level = str(level or '')
+        try:
+            self._session_area = max(1, min(4, int(area or 1)))
+        except (TypeError, ValueError):
+            self._session_area = 1
+
+    def sessionLevelName(self):
+        """
+        The level the session is on, or '' outside a session.
+
+        Public because the save path and the dirty check both need it and
+        neither should be re-deriving it from fileSavePath.
+        """
+        if not self.is_active:
+            return ''
+        return self._session_level
+
+    def isSaveAuthority(self):
+        """
+        Whether this peer may write the session's level to disk.
+
+        True outside a session - an editor not in a session owns its own file,
+        and every caller reads better as "may I save" than as "am I in a
+        session and if so am I the host".
+        """
+        if not self.is_active:
+            return True
+        return self._is_save_authority
+
+    def hasSessionFile(self):
+        """
+        Whether the file this editor has open is the one the session is on.
+
+        The question `fileSavePath` cannot answer on its own: both peers can
+        hold a file called '01-01' that resolves through different stage paths
+        to different levels (known open 10.1), and a client that never opened
+        this level has no file at all (10.1b). Names are compared here; phase 2
+        adds the content fingerprint that settles the first case properly.
+
+        False outside a session, because the question is meaningless there -
+        callers should ask isSaveAuthority() instead.
+        """
+        if not self.is_active:
+            return False
+
+        if not self._session_level:
+            # The session is on a level that has never been saved, so no file
+            # can correspond to it.
+            return False
+
+        return self._currentLevelName() == self._session_level
+
     def _onLevelSwitchRequested(self, level, area):
         """
         Loads the level and area a peer moved the session to.
@@ -941,6 +1094,13 @@ class CollabController(QtCore.QObject):
         """
         if not self.is_active:
             return False
+
+        # Where the session is, recorded before anything can decline to load it.
+        # A peer that cannot open the level is still *in* a session that moved -
+        # that is precisely the 10.1b case, where the client has no copy of the
+        # file - and a save or a dirty check asking "where are we" during that
+        # window must not be told "wherever this editor happens to be".
+        self._setSessionLevel(level, area)
 
         if level == self._currentLevelName() and area == self._areaNumber():
             return False
@@ -1159,6 +1319,12 @@ class CollabController(QtCore.QObject):
         self._checkPatch(room_info)
 
         area = int(room_info.get('area', 1) or 1)
+
+        # Where the session is, as the host reports it. This is the client's
+        # first answer to that question and it holds until an area_switch
+        # replaces it - including through a deferred patch transfer, where the
+        # level cannot be loaded yet but the session is already somewhere.
+        self._setSessionLevel(str(room_info.get('level_name', '') or ''), area)
 
         if self._patchPending():
             # The patch is still arriving, so asking for the level now would
@@ -2447,13 +2613,24 @@ class CollabController(QtCore.QObject):
     # -- helpers ------------------------------------------------------------
 
     def _roomInfo(self):
+        """
+        What the session is, for a joining or re-checking client.
+
+        `level_name` and `area` are derived the same way the wire derives them,
+        rather than read from globals_. There is no globals_.levelName - the
+        attribute never existed, so this reported '' for every session - and the
+        area was hardcoded to 1, so a host working in area 2 told every client it
+        was in area 1. Neither mattered while room_info was only used for the
+        patch check, which reads neither; phase 0 makes a client set its session
+        identity from this on connect, so both have to be true.
+        """
         return {
             'game_id': self._gameId(),
             'game_name': self._gameName(),
             'patch_id': self._patchId(),
             'patch_version': self._patchVersion(),
-            'level_name': str(getattr(globals_, 'levelName', '') or ''),
-            'area': 1,
+            'level_name': self._currentLevelName(),
+            'area': self._areaNumber(),
         }
 
     @staticmethod

@@ -492,6 +492,23 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if not globals_.Dirty:
             return False
 
+        # In a session, only the save authority is asked about unsaved work
+        # (Block C - B3). Everyone else is looking at changes the *session*
+        # authored - a snapshot replaced their area, or a peer's edit arrived -
+        # so prompting them to save is asking them to write work they did not
+        # author over a file that may not even be the session's level.
+        #
+        # This is the root of known-open 10.1b: after a patch transfer the
+        # client was asked to save its own untouched level every time the
+        # session moved, and dismissing the dialog re-ran the load and re-fired
+        # the "tileset not found" warnings.
+        #
+        # Answering False means "no unsaved changes stand in the way", which is
+        # the truthful answer here: the changes exist, but they are the host's
+        # to keep, and it has them.
+        if not self._maySaveInSession():
+            return False
+
         msg = QtWidgets.QMessageBox()
         msg.setText(globals_.trans.string('AutoSaveDlg', 2))
         msg.setInformativeText(globals_.trans.string('AutoSaveDlg', 3))
@@ -740,6 +757,28 @@ class ReggieWindow(QtWidgets.QMainWindow):
         layout.addWidget(buttons)
 
         dlg.exec()
+
+    def _maySaveInSession(self):
+        """
+        Whether this editor may write the level it has open (Block C - B3).
+
+        True whenever no session is running, so the ordinary single-user editor
+        is untouched. In a session it is the host's answer alone: Save is the
+        host's, whatever a client's role (Zement, 2026-08-09).
+
+        Guarded rather than assumed: the controller is created lazily by
+        HandleCollaborate, so it is absent for anyone who has never opened the
+        collaboration dialog, and a fault in it must never stop someone saving
+        their own work.
+        """
+        controller = getattr(self, '_collab', None)
+        if controller is None:
+            return True
+
+        try:
+            return bool(controller.isSaveAuthority())
+        except Exception:
+            return True
 
     def HandleCollaborate(self):
         """
