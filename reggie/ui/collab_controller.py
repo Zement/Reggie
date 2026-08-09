@@ -24,6 +24,7 @@ The controller is also where the two roles diverge:
   told. It re-applies nothing locally that the host has not confirmed.
 """
 
+import base64
 import hmac
 import os
 import time
@@ -293,6 +294,11 @@ class CollabController(QtCore.QObject):
         # repeated on every snapshot. Cleared when the content matches again.
         self._reported_mismatch = ''
 
+        # A level the host announced it had saved and whose bytes are still
+        # arriving: {'level', 'sha256', 'size', 'parts'}. None when no save is
+        # in flight, which is the normal state (Block C - B3, phase 3c).
+        self._expected_save = None
+
         self._connect_signals()
 
     # -- signal wiring ------------------------------------------------------
@@ -317,6 +323,7 @@ class CollabController(QtCore.QObject):
         self.signals.fileRequested.connect(self._onFileRequested)
         self.signals.manifestReceived.connect(self._onManifest)
         self.signals.fileChunkReceived.connect(self._onFileChunk)
+        self.signals.levelSaved.connect(self._onLevelSaved)
         self.signals.transferFinished.connect(self._onTransferFinished)
 
     @property
@@ -721,6 +728,7 @@ class CollabController(QtCore.QObject):
         self._is_save_authority = False
         self._host_fingerprint = {}
         self._reported_mismatch = ''
+        self._expected_save = None
 
         # The session's Stage/Texture override goes with it, so the editor
         # returns to the user's own folders the moment the session ends. This
@@ -2353,6 +2361,13 @@ class CollabController(QtCore.QObject):
         self._finishTransfer()
 
     def _onFileChunk(self, payload):
+        # A level the host has just saved arrives outside any TransferSession -
+        # it was announced by T_SAVED rather than offered in a manifest - so it
+        # is recognised and handled before the transfer machinery, which would
+        # otherwise refuse it as a file that was never offered.
+        if self._expected_save is not None and self._collectSavedLevel(payload):
+            return
+
         if self._transfer is None:
             return
 
@@ -2454,6 +2469,263 @@ class CollabController(QtCore.QObject):
         # LoadGameDef, which asks for the patch's Stage folder on first use, so
         # the tilesets it names can actually be found.
         self._resumeDeferredLoad()
+
+    # -- saving (Block C - B3, phase 3c) ------------------------------------
+
+    def notifyLevelSaved(self, data):
+        """
+        Tells the session the host has saved, and sends the file.
+
+        Called from level_io.HandleSave after the bytes are on disk. Only the
+        host gets here: the save gate refuses everyone else, so a client can
+        neither save nor announce one.
+
+        The goal is Zement's - everyone's copy reflects the session - and the
+        safety comes from *where* the write lands rather than from asking. Each
+        client writes into its own assets/mods/_collab/<patch>/Stage, which
+        holds session-derived data by construction, and consents to that on
+        joining. Nothing outside _collab is ever touched.
+
+        The announcement carries the bytes that were written, not a fresh
+        serialisation: re-saving could produce a different file (padding,
+        compression) and the peers would then hold something the host never
+        wrote.
+        """
+        if not self.is_active or not self.is_host:
+            return False
+
+        if self.server is None or not data:
+            return False
+
+        level = self._currentLevelName()
+        if not level:
+            # A level that has never been saved has no name for a peer to
+            # resolve, and LoadLevel(None) would blank their editor.
+            return False
+
+        payload = {
+            'level': level,
+            'area': self._areaNumber(),
+            'sha256': files.sha256_bytes(data),
+            'size': len(data),
+            'nick': self._hostNick(),
+        }
+
+        message = protocol.make_message(protocol.T_SAVED, payload)
+        sent = 0
+        for connection in self.server.authenticated_connections():
+            connection.send(message)
+            sent += 1
+
+        if not sent:
+            return False
+
+        # The file itself follows as ordinary stage-section chunks, so there is
+        # one transfer path rather than a second one to keep correct. Authorised
+        # per peer exactly like any other file: the manifest record is what
+        # lets a client fetch it at all.
+        self._offerSavedLevel(level, data)
+
+        self._appendStatus('Saved %s and sent it to everyone.' % level)
+        debuglog.log('host', 'level saved', level=level, bytes=len(data))
+        return True
+
+    def _offerSavedLevel(self, level, data):
+        """
+        Records the saved level as fetchable, then pushes it to every client.
+
+        Pushed rather than offered-and-waited-for: the client already knows it
+        wants this file - it was told so by T_SAVED - and a request round trip
+        would only add a state machine for the case where it declines, which
+        cannot happen.
+        """
+        if self.host_session is None:
+            return False
+
+        name = level + '.arc'
+
+        for participant in list(getattr(self.host_session, 'participants', ())
+                                or ()):
+            session_id = (participant.get('session_id')
+                          if isinstance(participant, dict)
+                          else getattr(participant, 'session_id', ''))
+            if not session_id:
+                continue
+
+            for chunk in files.chunks_from_bytes(name, data):
+                chunk['kind'] = files.KIND_STAGE
+                self._sendToPeer(session_id, protocol.T_FILE_CHUNK, chunk)
+
+        return True
+
+    def _collectSavedLevel(self, payload):
+        """
+        Accumulates the chunks of a level the host saved, then writes it.
+
+        Returns True when the chunk belonged to that file, so the caller knows
+        not to hand it to the patch-transfer machinery as well.
+
+        Everything about the destination is decided locally: the folder from
+        our own patch name, the filename from the level name in T_SAVED, which
+        was validated as a single component on the way in. Nothing the host
+        sends can move the write, and safe_join checks it once more before it
+        happens.
+        """
+        expected = self._expected_save
+        if expected is None:
+            return False
+
+        name = expected['level'] + '.arc'
+        if str(payload.get('path', '')).replace('\\', '/') != name:
+            return False
+
+        index = payload.get('index')
+        total = payload.get('total')
+        if not isinstance(index, int) or not isinstance(total, int):
+            self._expected_save = None
+            return True
+
+        if index != len(expected.get('parts', ())):
+            # In-order only, for the same reason TransferSession insists on it:
+            # a sender that chooses offsets chooses what ends up where.
+            debuglog.log('client', 'saved level out of order',
+                         level=expected['level'], index=index)
+            self._expected_save = None
+            return True
+
+        try:
+            block = base64.b64decode(str(payload.get('data', '')), validate=True)
+        except (ValueError, TypeError):
+            self._expected_save = None
+            return True
+
+        parts = expected.setdefault('parts', [])
+        parts.append(block)
+
+        # Bounded as it arrives, so a host cannot announce a small file and
+        # then stream indefinitely.
+        if expected['size'] and sum(len(part) for part in parts) > expected['size']:
+            self._appendStatus(
+                'The host sent more data than it announced for %s; it was not '
+                'saved.' % expected['level'])
+            self._expected_save = None
+            return True
+
+        if index + 1 < total:
+            return True
+
+        self._expected_save = None
+        self._writeSavedLevel(expected, b''.join(parts))
+        return True
+
+    def _writeSavedLevel(self, expected, data):
+        """
+        Writes the host's saved level into this peer's own session folder.
+
+        The one place in the whole feature where a message from another machine
+        causes a local file to be written, so the constraints are worth stating
+        plainly:
+
+        - the folder is derived here, from our patch name and our _collab root;
+        - the filename comes from a validated single component;
+        - safe_join re-checks the result against that root before opening it;
+        - the bytes are verified against the announced hash first, so a
+          corrupted or altered transfer is discarded rather than written.
+
+        Never touches the user's own game data: _collab holds session-derived
+        files only, which is what makes an automatic write acceptable at all.
+        """
+        level = expected['level']
+
+        announced = str(expected.get('sha256', '') or '')
+        if announced and files.sha256_bytes(data) != announced:
+            self._appendStatus(
+                '%s did not arrive intact and was not saved.' % level)
+            debuglog.log('client', 'saved level checksum mismatch', level=level)
+            return False
+
+        patch_id = self._patchId()
+        if not patch_id:
+            # Retail has no _collab folder of its own, and writing into the
+            # user's real stage folder is exactly what must never happen.
+            self._appendStatus(
+                'The host saved %s. It was not copied here, because this '
+                'session uses the retail game and there is no session folder '
+                'to write into.' % level)
+            return False
+
+        try:
+            stage = files.collab_stage_directory(patch_id)
+            os.makedirs(stage, exist_ok=True)
+            target = identity.safe_join(stage, level + '.arc')
+        except Exception as exc:
+            debuglog.log('client', 'saved level path refused', level=level,
+                         error=str(exc))
+            return False
+
+        try:
+            with open(target, 'wb') as handle:
+                handle.write(data)
+        except OSError as exc:
+            self._appendStatus('%s could not be written here: %s'
+                               % (level, exc))
+            return False
+
+        self._appendStatus('%s was updated in your session folder.' % level)
+        debuglog.log('client', 'saved level written', level=level,
+                     bytes=len(data), path=target)
+
+        # Point the patch at the session folder if it is not already, so the
+        # file just written is the one this editor would open.
+        self._useSessionGamePaths(patch_id, stage,
+                                  files.collab_texture_directory(patch_id))
+        return True
+
+    def _onLevelSaved(self, payload):
+        """
+        The host saved; write the same file into our own session folder.
+
+        Automatic, per Zement (2026-08-09), and safe because of where it lands:
+        assets/mods/_collab/<patch>/Stage holds only session-derived data, the
+        client agreed to that on joining, and the user's own game files are a
+        different folder entirely.
+
+        The path is derived *here*, from our own patch name and our own _collab
+        root. The host supplies a level *name*, which is validated as a single
+        filename component on the way in and again by safe_join at the write.
+        A host that could name a path could choose which of our files to
+        overwrite, which is the bug class this whole block is built against.
+        """
+        if not self.is_active or self.is_host:
+            return False
+
+        level = str((payload or {}).get('level', '') or '')
+        if not level:
+            return False
+
+        nick = str((payload or {}).get('nick', '') or 'The host')
+        self._appendStatus('%s saved %s.' % (nick, level))
+
+        # The bytes arrive as stage-section chunks; this only records what to
+        # expect, so the chunk handler can verify and place them.
+        self._expected_save = {
+            'level': level,
+            'sha256': str((payload or {}).get('sha256', '') or ''),
+            'size': int((payload or {}).get('size', 0) or 0),
+        }
+
+        # Our copy no longer has unsaved work of its own worth guarding: the
+        # session's state is what is on screen, and it has just been written by
+        # the peer that owns it. This is also what stops CheckDirty prompting a
+        # client about changes it did not author.
+        globals_.Dirty = False
+        globals_.AutoSaveDirty = False
+        window = self.window
+        if hasattr(window, 'UpdateTitle'):
+            window.UpdateTitle()
+
+        debuglog.log('client', 'host saved', level=level, nick=nick)
+        return True
 
     # -- content mismatch (Block C - B3, phase 2) ---------------------------
 

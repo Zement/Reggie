@@ -515,6 +515,31 @@ def chunk_count(size, chunk_bytes=protocol.MAX_CHUNK_BYTES):
     return (size + chunk_bytes - 1) // chunk_bytes
 
 
+def chunks_from_bytes(relative_path, data,
+                      chunk_bytes=protocol.MAX_CHUNK_BYTES):
+    """
+    Yields file_chunk payloads for bytes already in memory.
+
+    The in-memory twin of read_chunks, for a level the host has just saved
+    (Block C - B3). Sending the bytes that were written, rather than re-reading
+    the file, means the peers cannot end up with a file the host never wrote -
+    a re-read could pick up a later save, and a re-serialisation could differ in
+    padding or compression.
+    """
+    payload = bytes(data or b'')
+    total = chunk_count(len(payload), chunk_bytes)
+
+    for index in range(total):
+        start = index * chunk_bytes
+        yield {
+            'path': str(relative_path).replace('\\', '/'),
+            'index': index,
+            'total': total,
+            'data': base64.b64encode(
+                payload[start:start + chunk_bytes]).decode('ascii'),
+        }
+
+
 def read_chunks(patch_dir, relative_path, chunk_bytes=protocol.MAX_CHUNK_BYTES):
     """
     Yields file_chunk payloads for one file.

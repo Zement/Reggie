@@ -951,7 +951,11 @@ class CollabSettingsTab(QtWidgets.QWidget):
             'player, and installing from it is asked for separately. A host '
             'transfer runs without asking - joining a session is the consent - '
             'and never accepts program code, so custom sprite previews are not '
-            'included.')
+            'included.\n\n'
+            'While you are in a session, the levels and tilesets it uses are '
+            'kept in assets/mods/_collab, and files there may be created or '
+            'replaced by the session - including when the host saves. Your own '
+            'game folders are never written to.')
         patchHint.setWordWrap(True)
 
         self.banList = QtWidgets.QListWidget()

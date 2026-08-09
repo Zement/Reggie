@@ -172,7 +172,31 @@ class LevelIO:
 
         # Saving resets the undo history (Block C - A1)
         self.win.undoStack.clear()
+
+        # Tell the session, so the other participants end up with the same file
+        # on disk (Block C - B3). Only the host reaches this - the gate above
+        # is what makes that true - and the announcement carries the bytes that
+        # were just written, not a re-serialisation.
+        self._NotifyCollabSaved(data)
         return True
+
+    def _NotifyCollabSaved(self, data):
+        """
+        Publishes a save to the collaboration session.
+
+        Guarded and lazy for the same reason as _NotifyCollabLevelChanged: a
+        networking problem must never turn a successful save into a failure. The
+        file is already on disk by the time this runs.
+        """
+        controller = getattr(self.win, '_collab', None)
+        if controller is None:
+            return
+
+        try:
+            controller.notifyLevelSaved(data)
+        except Exception:
+            pass
+
     def HandleSaveAs(self, copy = False, _from_save = False):
         """
         Save a level back to the archive, with a new filename. Returns whether

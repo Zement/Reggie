@@ -215,6 +215,12 @@ T_FILE_REQ = 'file_req'
 T_FILE_CHUNK = 'file_chunk'
 T_FILE_DONE = 'file_done'
 
+# The host saved the session's level (Block C - B3). Announces *that* a save
+# happened and what the resulting file is; the bytes follow as ordinary
+# file_chunks, in the stage section, so there is one transfer mechanism rather
+# than two.
+T_SAVED = 'saved'
+
 # Roles (spec section 5.1). Ordered least to most privileged.
 CHAT_KIND_USER = 'user'
 CHAT_KIND_SYSTEM = 'system'
@@ -258,6 +264,13 @@ _HOST_SENDABLE = frozenset({
     # its own type would mean a client had two terminators to handle and could
     # forget the second, leaving a transfer that never finishes.
     T_FILE_DONE,
+
+    # Host-only, and deliberately absent from _CLIENT_SENDABLE: this is the one
+    # message that causes another machine to write a file. The host is the
+    # session's save authority (Block C - B3), so nobody else may announce a
+    # save - a client that sent one would be asking every peer to overwrite a
+    # level on its say-so.
+    T_SAVED,
 })
 
 KNOWN_TYPES = _CLIENT_SENDABLE | _HOST_SENDABLE
@@ -721,6 +734,30 @@ def _v_manifest(p):
     return {'files': out, 'patch_id': _get_str(p, 'patch_id', 128, required=False)}
 
 
+def _v_saved(p):
+    """
+    The host announcing that it saved the session's level.
+
+    `level` is a bare level *name*, exactly as area_switch carries one, and the
+    receiver resolves it inside its own _collab folder. It is never a path: the
+    host says *what* it saved, never *where* the receiver should put it. That
+    rule is enforced again at the write, by identity.safe_join - two independent
+    checks, because this one turns a name from the network into a disk write.
+
+    As with every validator here, the payload is rebuilt rather than filtered,
+    so an unlisted field is dropped in flight. See the note in _v_room_info.
+    """
+    return {
+        'level': _get_str(p, 'level', 200),
+        'area': _get_int(p, 'area', minimum=1, maximum=4, required=False,
+                         default=1),
+        'sha256': _get_str(p, 'sha256', 64, required=False),
+        'size': _get_int(p, 'size', minimum=0,
+                         maximum=MAX_MANIFEST_TOTAL_BYTES, required=False),
+        'nick': _get_str(p, 'nick', MAX_NICK_CHARS, required=False),
+    }
+
+
 def _v_file_req(p):
     # 'kind' names the manifest section (patch/stage/texture) since Block
     # C - B3. Optional, and bounded only as a short string here: the closed set
@@ -791,6 +828,7 @@ _VALIDATORS = {
     T_FILE_REQ: _v_file_req,
     T_FILE_CHUNK: _v_file_chunk,
     T_FILE_DONE: _v_file_done,
+    T_SAVED: _v_saved,
 }
 
 

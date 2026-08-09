@@ -49,6 +49,7 @@ class CollabSignals(QtCore.QObject):
     operationReceived = QtCore.pyqtSignal(dict, str)   # op payload, sender id
     presenceReceived = QtCore.pyqtSignal(dict, str)    # presence payload, sender
     snapshotReceived = QtCore.pyqtSignal(dict)
+    levelSaved = QtCore.pyqtSignal(dict)          # the host saved the level
     snapshotRequested = QtCore.pyqtSignal(str, int)    # session id, area
     levelSwitchRequested = QtCore.pyqtSignal(str, int)  # level name, area
     operationRejected = QtCore.pyqtSignal(str)         # reason
@@ -280,6 +281,9 @@ class CollabBridge(QtCore.QObject):
 
         elif kind == 'file_chunk':
             self.signals.fileChunkReceived.emit(dict(data or {}))
+
+        elif kind == 'saved':
+            self.signals.levelSaved.emit(dict(data or {}))
 
         elif kind == 'file_done':
             # Sent by the host both to refuse a transfer and to end one, so the

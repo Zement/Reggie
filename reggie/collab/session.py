@@ -1210,6 +1210,12 @@ class ClientSession:
             # only the success path.
             self._emit('file_done', payload)
 
+        elif msg_type == protocol.T_SAVED:
+            # The host saved the session's level; its bytes follow as ordinary
+            # file_chunks. Named explicitly for the same reason as the transfer
+            # messages above: the controller needs a stable event name.
+            self._emit('saved', payload)
+
         elif msg_type == protocol.T_PRESENCE:
             # Presence needs its sender, and the generic branch below drops it:
             # the host relays every peer's presence through one connection, so
