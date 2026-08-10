@@ -70,6 +70,11 @@ class CollabSignals(QtCore.QObject):
     # it. Client side: the manifest arrived, a chunk arrived, the host finished.
     patchNeeded = QtCore.pyqtSignal(str, str)          # session id, patch id
     fileRequested = QtCore.pyqtSignal(str, str, str)   # session id, path, kind
+
+    # Host side: a client reported its transfer finished (or failed). The host
+    # holds level publications back while a peer is mid-transfer, so it needs to
+    # know when that ends. session id, ok.
+    peerTransferFinished = QtCore.pyqtSignal(str, bool)
     manifestReceived = QtCore.pyqtSignal(dict)
     fileChunkReceived = QtCore.pyqtSignal(dict)
     transferFinished = QtCore.pyqtSignal(bool, str)    # ok, error
@@ -192,13 +197,22 @@ class CollabBridge(QtCore.QObject):
                 % (nick, data.get('path', '')))
 
         elif kind == 'file_done':
-            if data.get('ok', True):
+            ok = bool(data.get('ok', True))
+            if ok:
                 self.signals.statusMessage.emit(
                     '%s finished downloading the patch.' % nick)
             else:
                 self.signals.statusMessage.emit(
                     "%s could not download the patch: %s"
                     % (nick, data.get('error', 'unknown error')))
+
+            # Either way this peer is no longer mid-transfer, so the host can
+            # resume publishing levels to it. Emitted on failure too: a
+            # transfer that failed is still over, and holding publications back
+            # for a peer that will never report success would silence it for
+            # the rest of the session.
+            self.signals.peerTransferFinished.emit(
+                str(getattr(participant, 'session_id', '') or ''), ok)
 
     def on_host_roster(self, participants):
         self.signals.rosterChanged.emit(

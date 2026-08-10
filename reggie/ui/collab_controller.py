@@ -329,6 +329,13 @@ class CollabController(QtCore.QObject):
         # host's - two loads, the first of them wrong.
         self._pending_publication = False
 
+        # Host side: session ids currently being sent a patch. A publication
+        # must not be pushed into the middle of one, because both travel as
+        # stage-section chunks on the same connection and the client drops a
+        # publication while a transfer is running. Populated when a manifest is
+        # sent, emptied when the client reports the transfer done or failed.
+        self._transferring_peers = set()
+
         self._connect_signals()
 
     # -- signal wiring ------------------------------------------------------
@@ -356,6 +363,7 @@ class CollabController(QtCore.QObject):
         self.signals.fileChunkReceived.connect(self._onFileChunk)
         self.signals.levelSaved.connect(self._onLevelSaved)
         self.signals.transferFinished.connect(self._onTransferFinished)
+        self.signals.peerTransferFinished.connect(self._onPeerTransferFinished)
 
     @property
     def is_active(self):
@@ -756,6 +764,11 @@ class CollabController(QtCore.QObject):
         # out, and with it the only record of what anyone said. Written first so
         # a fault later in teardown cannot cost the log.
         self._writeChatLog()
+
+        # A peer that disconnected mid-transfer never sends file_done, so
+        # without this the set keeps an id that will never be discarded and the
+        # host stays silent about level changes for the rest of the session.
+        self._transferring_peers.clear()
 
         self._stopPresence()
 
@@ -1793,6 +1806,22 @@ class CollabController(QtCore.QObject):
     def _onRoster(self, participants):
         if self.status_window is not None:
             self.status_window.setRoster(participants)
+
+        # Drop transfer state for peers that are no longer here. A client that
+        # disconnects mid-transfer never sends file_done, and a stale id in this
+        # set makes _transferInProgress() permanently true - which would stop
+        # the host publishing level files for the rest of the session, silently.
+        # The roster is the authoritative list of who is present, so it is the
+        # right place to notice.
+        if self.is_host and self._transferring_peers:
+            present = {str(entry.get('session_id', ''))
+                       for entry in (participants or [])
+                       if isinstance(entry, dict)}
+            departed = self._transferring_peers - present
+            if departed:
+                self._transferring_peers -= departed
+                debuglog.log('host', 'dropped transfer state for departed peers',
+                             count=len(departed))
 
         # The overlay needs it too: nicknames and colours come from the roster,
         # and a peer that left must lose its cursor.
@@ -2835,7 +2864,21 @@ class CollabController(QtCore.QObject):
         # it was announced by T_SAVED rather than offered in a manifest - so it
         # is recognised and handled before the transfer machinery, which would
         # otherwise refuse it as a file that was never offered.
-        if self._expected_save is not None and self._collectSavedLevel(payload):
+        #
+        # But *not* while a patch transfer is running. The two streams are both
+        # stage-section chunks on one connection, and mixing them breaks both:
+        # a published level's chunks entered the TransferSession's in-order
+        # accounting and tripped "the host sent more data than announced", after
+        # which the transfer could never finish and the next attempt reported
+        # one already in progress (Zement's 3b, 2026-08-10). A patch transfer
+        # legitimately carrying a file of the same name would be stolen in the
+        # other direction.
+        #
+        # The transfer wins because it was requested and is tracked file by
+        # file; a publication is unsolicited and is re-sent on the next change.
+        if (self._transfer is None
+                and self._expected_save is not None
+                and self._collectSavedLevel(payload)):
             return
 
         if self._transfer is None:
@@ -2972,6 +3015,15 @@ class CollabController(QtCore.QObject):
         if not self.is_active or not self.is_host or self.server is None:
             return False
 
+        # Not while a patch transfer is running. Both travel as stage-section
+        # chunks on the same connection, and a client mid-transfer drops a
+        # publication rather than mixing the two streams - so sending one now is
+        # bandwidth spent on bytes that will be discarded, in the middle of the
+        # transfer competing for that bandwidth.
+        if self._transferInProgress():
+            debuglog.log('host', 'publication deferred, transfer running')
+            return False
+
         level = self._currentLevelName()
         if not level:
             # Never saved, so there is no name for a peer to resolve and no file
@@ -3007,6 +3059,40 @@ class CollabController(QtCore.QObject):
         debuglog.log('host', 'published level file', level=level,
                      bytes=len(data))
         return True
+
+    def _transferInProgress(self):
+        """
+        Whether any peer is currently being sent a patch.
+
+        Host side. A publication pushed into the middle of a transfer is
+        discarded by the receiving client, so it is bandwidth spent competing
+        with the transfer it would be interrupting.
+        """
+        return bool(self._transferring_peers)
+
+    def _onPeerTransferFinished(self, session_id, ok):
+        """
+        A peer finished (or failed) its patch transfer, so it may be published
+        to again.
+
+        Followed by an immediate publication: the client has just acquired the
+        host's Stage folder and is almost certainly looking at the wrong level
+        or none at all, and waiting for the *next* level change to correct that
+        would leave it stale for as long as the host stays put.
+        """
+        if not self.is_host:
+            return False
+
+        self._transferring_peers.discard(str(session_id))
+
+        if self._transferInProgress():
+            # Another peer is still receiving; publishing now would land in the
+            # middle of that one instead.
+            return False
+
+        debuglog.log('host', 'peer transfer finished', ok=ok,
+                     publishing=True)
+        return self._publishLevelFile()
 
     def _serialiseLevel(self):
         """
@@ -3100,19 +3186,49 @@ class CollabController(QtCore.QObject):
 
         name = level + '.arc'
 
-        for participant in list(getattr(self.host_session, 'participants', ())
-                                or ()):
+        # HostSession.participants is a *method*. This used to read
+        # getattr(self.host_session, 'participants', ()) and iterate the result
+        # without calling it - iterating a bound method yields nothing, so the
+        # loop body never ran and not one byte was ever sent.
+        #
+        # That single missing '()' is why every client sat through the full
+        # 20-second publication timeout and then fell back to a snapshot: the
+        # announcement arrived, the file never did. It is also why the whole
+        # level-file-first path looked unimplemented in Zement's test run
+        # (2026-08-10) - the code was there and never delivered anything.
+        #
+        # Called defensively because the attribute is a method on HostSession
+        # but a list on ClientSession, and this must not depend on which.
+        participants = getattr(self.host_session, 'participants', None)
+        if callable(participants):
+            participants = participants()
+
+        sent_to = 0
+        chunks = [dict(chunk, kind=files.KIND_STAGE)
+                  for chunk in files.chunks_from_bytes(name, data)]
+
+        for participant in list(participants or ()):
             session_id = (participant.get('session_id')
                           if isinstance(participant, dict)
                           else getattr(participant, 'session_id', ''))
             if not session_id:
                 continue
 
-            for chunk in files.chunks_from_bytes(name, data):
-                chunk['kind'] = files.KIND_STAGE
-                self._sendToPeer(session_id, protocol.T_FILE_CHUNK, chunk)
+            # The host is in its own roster and must be skipped: it already has
+            # the file it just wrote, and sending to it is a send to nobody.
+            is_host = (participant.get('is_host')
+                       if isinstance(participant, dict)
+                       else getattr(participant, 'is_host', False))
+            if is_host:
+                continue
 
-        return True
+            for chunk in chunks:
+                self._sendToPeer(session_id, protocol.T_FILE_CHUNK, chunk)
+            sent_to += 1
+
+        debuglog.log('host', 'level file sent', level=level, peers=sent_to,
+                     chunks=len(chunks), bytes=len(data))
+        return sent_to > 0
 
     def _collectSavedLevel(self, payload):
         """
@@ -3746,6 +3862,10 @@ class CollabController(QtCore.QObject):
                                % (summary, ', '.join(skipped[:5])))
         else:
             self._appendStatus('Sending %s.' % summary)
+
+        # This peer is now mid-transfer, so level publications are held back
+        # until it reports done - see _publishLevelFile.
+        self._transferring_peers.add(str(session_id))
 
         self._sendToPeer(session_id, protocol.T_MANIFEST,
                          files.manifest_payload(manifest))
