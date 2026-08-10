@@ -1955,7 +1955,75 @@ class ReggieWindow(QtWidgets.QMainWindow):
         setSetting('AutoSaveFilePath', None)
         setSetting('AutoSaveFileData', 'x')
 
+        # Stop every timer that could still fire after this point.
+        #
+        # These are parentless QTimers, so Qt does not own them - Python does,
+        # and it frees them in its own order during interpreter shutdown, which
+        # is not Qt's order. A timer that is still running when its target's C++
+        # half has gone calls a slot on a dangling pointer, and on Windows that
+        # is an access violation with no Python traceback: the process simply
+        # dies after the last unrelated line of output.
+        #
+        # Autosave in particular reads globals_.Level and this window's own
+        # fileSavePath, so it is not merely a stray callback - it dereferences
+        # exactly the objects being torn down.
+        #
+        # This is hardening against a class of crash, not a proven fix for the
+        # intermittent one Zement sees at roughly one exit in twenty-five: both
+        # timers here are gated by flags (AutoSaveDirty, TilesetsAnimating) that
+        # are false in the case he reported. crash.log will say whether it
+        # recurs.
+        self._StopBackgroundTimers()
+
         event.accept()
+
+    def _StopBackgroundTimers(self):
+        """
+        Stops the timers that outlive the window, before teardown starts.
+
+        Each is guarded separately: a timer that was never created, or already
+        destroyed, must not stop the others from being stopped. Closing the
+        editor has to succeed whatever state these are in.
+        """
+        timer = getattr(self, 'AutosaveTimer', None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except (RuntimeError, AttributeError):
+                # RuntimeError is PyQt's "wrapped C/C++ object has been
+                # deleted", which is precisely the condition being defended
+                # against - so it is expected here, not exceptional.
+                pass
+
+        # The tileset animation timer is the one with the most reach. It is a
+        # *global* (globals_.TilesetAnimTimer), so it certainly outlives this
+        # window; it fires every 90 ms, so the shutdown window it can land in is
+        # wide; and its callback does globals_.mainWindow.scene.update() - it
+        # dereferences this window and its scene directly. Nothing stopped it
+        # anywhere in the codebase before now.
+        #
+        # Not established as *the* cause of the shutdown crash: its callback
+        # returns immediately unless globals_.TilesetsAnimating is on, which is
+        # a user toggle that defaults to off. Stopping it is correct either way
+        # - a timer aimed at a window being destroyed should not still be
+        # running - but the intermittent exit crash may yet have another source.
+        anim = getattr(globals_, 'TilesetAnimTimer', None)
+        if anim is not None:
+            try:
+                anim.stop()
+            except (RuntimeError, AttributeError):
+                pass
+
+        # The status-bar warning icons each carry their own single-shot
+        # dismissal timer, which can be pending when the editor is closed.
+        for label in list(getattr(self, 'warningIcons', ()) or ()):
+            dismiss = getattr(label, 'dismissTimer', None)
+            if dismiss is None:
+                continue
+            try:
+                dismiss.stop()
+            except (RuntimeError, AttributeError):
+                pass
 
     def ResetPalette(self):
         """

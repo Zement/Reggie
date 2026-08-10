@@ -1150,10 +1150,30 @@ def IncrementTilesetFrame():
     Moves each tileset to the next frame
     """
     if not globals_.TilesetsAnimating: return
+
+    # Belt and braces against a shutdown crash. The window's closeEvent stops
+    # this timer, which handles the ordinary path; this covers the rest, because
+    # the timer is a global that fires every 90 ms and its target is a window
+    # that can be torn down between two ticks.
+    #
+    # Reading a destroyed widget's C++ half is an access violation, not a Python
+    # exception - the process dies with no traceback - so this cannot be left to
+    # a try/except around the update alone. The window reference is checked
+    # first, and RuntimeError ("wrapped C/C++ object has been deleted") is
+    # caught because PyQt raises it for a wrapper whose C++ object is already
+    # gone, which is exactly the state being guarded against.
+    window = getattr(globals_, 'mainWindow', None)
+    if window is None:
+        return
+
     for tile in globals_.Tiles:
         if tile is not None: tile.nextFrame()
-    globals_.mainWindow.scene.update()
-    globals_.mainWindow.objPicker.update()
+
+    try:
+        window.scene.update()
+        window.objPicker.update()
+    except (RuntimeError, AttributeError):
+        pass
 
 
 def CheckTilesetAnimated(tileset):

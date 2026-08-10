@@ -518,6 +518,24 @@ def main():
     #
     # Dropping the global reference is enough: it lets the normal shutdown run
     # in Qt's order rather than a hand-forced one.
+    #
+    # The window goes first, and the order matters. globals_.mainWindow holds
+    # the entire widget tree, so while it is set, that tree outlives the
+    # QApplication and is then freed by Python during interpreter shutdown -
+    # after the Qt machinery those widgets depend on has gone. Releasing it here
+    # lets the tree be destroyed while Qt is still alive to destroy it.
+    #
+    # crash.log from Zement's run named this statement, which is what showed the
+    # earlier deleteLater() removal had moved the crash rather than fixed it:
+    # the access violation happens as the interpreter tears down, not inside
+    # anything the editor explicitly calls.
+    # Level and Area hold the scene's items (objects, sprites, entrances,
+    # zones), which belong to the window's QGraphicsScene. Released before the
+    # window for the same reason the window is released before the application:
+    # each is destroyed while the thing that owns it still exists.
+    globals_.Area = None
+    globals_.Level = None
+    globals_.mainWindow = None
     globals_.app = None
 
     sys.exit(exitcodesys)
