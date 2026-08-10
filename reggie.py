@@ -87,6 +87,27 @@ def _enable_crash_traces():
 
 _enable_crash_traces()
 
+
+def _start_terminal_log():
+    """
+    Tees stdout and stderr to logs/terminal.log.
+
+    Temporary scaffolding for the Block C collaboration testing, and meant to be
+    removed by the universal logging block - see reggie/core/session_log.py.
+    Started here, before anything else is imported, so the boot output it exists
+    to capture is not already gone by the time it runs.
+    """
+    try:
+        from reggie.core import session_log
+
+        session_log.start()
+    except Exception:
+        # A logging fault must never stop the editor launching.
+        pass
+
+
+_start_terminal_log()
+
 from reggie.app import main
 
 if __name__ == '__main__':

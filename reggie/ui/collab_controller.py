@@ -693,6 +693,50 @@ class CollabController(QtCore.QObject):
         self._teardown()
         self._closeStatusWindow()
 
+    def _writeChatLog(self):
+        """
+        Saves the session's chat to logs/chat_<timestamp>.log.
+
+        Temporary scaffolding for the Block C testing, like the terminal tee -
+        see reggie/core/session_log.py. The chat is the human record of what was
+        said and decided during a session, and today it lives only in a
+        QTextEdit that is destroyed when the status window closes.
+
+        Fully guarded: a session must end cleanly whatever happens here, and
+        sockets and threads are still to be shut down after this returns.
+        """
+        window = self.status_window
+        if window is None:
+            return ''
+
+        widget = getattr(window, 'chatLog', None)
+        if widget is None:
+            return ''
+
+        try:
+            # toPlainText, not toHtml: the log is for reading, and appendChat
+            # writes markup for emphasis that would only be noise in a file.
+            text = widget.toPlainText()
+        except Exception:
+            return ''
+
+        # Which side wrote this, not who: the controller does not keep its own
+        # nick, and when two logs from one session are read side by side "host"
+        # and "client" is the distinction that actually matters.
+        role = 'host' if self.is_host else 'client'
+
+        try:
+            from reggie.core import session_log
+
+            path = session_log.write_session_chat(text, role)
+        except Exception:
+            return ''
+
+        if path:
+            debuglog.log('controller', 'chat saved', path=path)
+
+        return path
+
     def _closeStatusWindow(self):
         if self.status_window is None:
             return
@@ -708,6 +752,11 @@ class CollabController(QtCore.QObject):
         window.deleteLater()
 
     def _teardown(self):
+        # Before anything is torn down: the chat window is closed on the way
+        # out, and with it the only record of what anyone said. Written first so
+        # a fault later in teardown cannot cost the log.
+        self._writeChatLog()
+
         self._stopPresence()
 
         # A transfer cannot outlive the connection carrying it, and staged
