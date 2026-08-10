@@ -317,6 +317,18 @@ class CollabController(QtCore.QObject):
         # stacking a second dialog on the host. '' when none is open.
         self._resolving_proposal = ''
 
+        # -- level-file-first (Block C - B3, Fact 3) -------------------------
+        #
+        # Client side: set when the session has moved and the host's copy of the
+        # level is expected to arrive, so the client waits for the file instead
+        # of opening whatever its own stage folder happens to hold under that
+        # name. Cleared once the file is open, or when the wait gives up.
+        #
+        # This is what removes the double load Zement saw: the client used to
+        # open its own '01-01', then have a snapshot overwrite it with the
+        # host's - two loads, the first of them wrong.
+        self._pending_publication = False
+
         self._connect_signals()
 
     # -- signal wiring ------------------------------------------------------
@@ -1248,9 +1260,16 @@ class CollabController(QtCore.QObject):
         # snapshot without knowing which level it belongs to cannot update its
         # own title bar or file path.
         self._broadcastLevelChange()
-        self._broadcastSnapshot()
 
-        level = str(getattr(globals_, 'levelName', '') or 'the level')
+        # Send the file itself, and let the clients open it (Block C - B3,
+        # Fact 3). Falls back to the snapshot when there is no file to send.
+        if not self._publishLevelFile():
+            self._broadcastSnapshot()
+
+        # _currentLevelName, not globals_.levelName - the latter has never
+        # existed, so this line said "the level" every time (the same missing
+        # attribute that made room_info's level_name empty in phase 0).
+        level = self._currentLevelName() or 'the level'
         self._appendStatus('Shared %s with everyone.' % level)
         debuglog.log('controller', 'level changed', level=level,
                      refs=self.refmap.size())
@@ -1493,6 +1512,24 @@ class CollabController(QtCore.QObject):
                 return False
             return self._afterSessionLoad()
 
+        # The host publishes its copy of the level on every change (Fact 3), so
+        # wait for that rather than opening whatever this machine has under the
+        # same name. Two reasons, and the second is the important one:
+        #
+        #  - it is the same file, so the load is right rather than approximately
+        #    right. Resolving '01-01' locally is what let two peers open
+        #    different levels while the session reported a match (known open
+        #    10.1);
+        #  - it avoids loading twice. The client used to open its own copy and
+        #    then have the host's state applied over it, which is the "loads his
+        #    own level first, then syncs" Zement described.
+        #
+        # Bounded, and it falls back: if the file does not arrive, the local
+        # copy is opened as before, because a slow or missing publication must
+        # not leave a client with no level at all.
+        if self._awaitPublishedLevel(level):
+            return True
+
         self._appendStatus('Loading %s from the session.' % level)
 
         if not self._loadLevelQuietly(level, False, area):
@@ -1502,6 +1539,62 @@ class CollabController(QtCore.QObject):
             return False
 
         return self._afterSessionLoad()
+
+    PUBLICATION_TIMEOUT_SECONDS = 20.0
+
+    def _awaitPublishedLevel(self, level):
+        """
+        Waits briefly for the host's copy of a level it has just moved to.
+
+        Returns True if the file arrived and was opened, so the caller should
+        not load a local copy.
+
+        Keeps the event loop running, for the same reason the switch proposal
+        does: the file arrives on the session's reader thread and is delivered
+        through the bridge, so blocking here would stop the very delivery being
+        waited for.
+
+        Declines immediately when the host cannot publish, so a retail session
+        or a host on an unsaved level goes straight to the old path instead of
+        stalling for the timeout on every switch.
+        """
+        if self.is_host or not self.is_active:
+            return False
+
+        if not self._patchId():
+            # No _collab folder to receive it - retail. The local copy is all
+            # there is.
+            return False
+
+        self._pending_publication = True
+        deadline = time.monotonic() + self.PUBLICATION_TIMEOUT_SECONDS
+        arrived = False
+
+        try:
+            with _BusyIndicator(self.window,
+                                'Getting %s from the host...' % level):
+                while self._pending_publication:
+                    if time.monotonic() >= deadline:
+                        debuglog.log('client', 'publication timed out',
+                                     level=level)
+                        break
+
+                    if not self.is_active:
+                        break
+
+                    QtWidgets.QApplication.processEvents(
+                        QtCore.QEventLoop.ProcessEventsFlag
+                        .ExcludeUserInputEvents, 50)
+                else:
+                    # The loop ended because _openPublishedLevel cleared the
+                    # flag, which it only does after the file is open.
+                    arrived = True
+        finally:
+            # Cleared however this ended, so a timed-out wait cannot leave the
+            # client believing a publication is still coming.
+            self._pending_publication = False
+
+        return arrived
 
     def _loadLevelQuietly(self, name, is_full_path, area):
         """
@@ -1542,7 +1635,8 @@ class CollabController(QtCore.QObject):
             self._seedRefMap()
             self.host_session.set_room_info(self._roomInfo())
             self._broadcastLevelChange()
-            self._broadcastSnapshot()
+            if not self._publishLevelFile():
+                self._broadcastSnapshot()
         else:
             # Now that the level is open, the fingerprints describe the files
             # this peer is actually looking at. Comparing any earlier would
@@ -2797,6 +2891,92 @@ class CollabController(QtCore.QObject):
         # the tilesets it names can actually be found.
         self._resumeDeferredLoad()
 
+    # -- level-file-first (Block C - B3, Fact 3) ----------------------------
+    #
+    # Zement's measurement is the whole reason this exists: an 8000-item level
+    # takes 3-5 s to load from disk and about *two minutes* to rebuild from a
+    # snapshot, because apply_snapshot builds one real Qt item per object on the
+    # main thread. The cost is structural, not a bug to optimise away.
+    #
+    # So on a level change the host sends the level *file* and the client opens
+    # it the ordinary way. The snapshot does not go away - it is still how a
+    # client joining mid-edit gets the host's unsaved work, and still how a
+    # resync works - it stops being on the hot path.
+    #
+    # The bytes are taken from Level.save() rather than read back off disk, and
+    # that is what makes the delta empty in the common case: the serialisation
+    # includes edits the host has not saved, so the client's file matches what
+    # the host actually has on screen rather than what it last wrote.
+
+    def _publishLevelFile(self):
+        """
+        Sends the current level as a file, so clients can open it directly.
+
+        Returns True when the file was sent and the caller should skip the
+        snapshot; False to fall back to snapshot-only behaviour.
+
+        Falling back rather than failing is deliberate. Every reason this can
+        decline - a level with no name, an area that cannot be serialised, no
+        clients yet - is a case the snapshot path already handles correctly, and
+        a client left with nothing at all is far worse than a slow load.
+        """
+        if not self.is_active or not self.is_host or self.server is None:
+            return False
+
+        level = self._currentLevelName()
+        if not level:
+            # Never saved, so there is no name for a peer to resolve and no file
+            # to write. The snapshot is the only way to share this.
+            return False
+
+        data = self._serialiseLevel()
+        if not data:
+            return False
+
+        payload = {
+            'level': level,
+            'area': self._areaNumber(),
+            'sha256': files.sha256_bytes(data),
+            'size': len(data),
+            'nick': self._hostNick(),
+        }
+
+        message = protocol.make_message(protocol.T_SAVED, payload)
+        sent = 0
+        for connection in self.server.authenticated_connections():
+            connection.send(message)
+            sent += 1
+
+        if not sent:
+            # Nobody to send to. Reported as "not published" so a later join
+            # takes the snapshot path rather than waiting for a file that was
+            # never offered.
+            return False
+
+        self._offerSavedLevel(level, data)
+
+        debuglog.log('host', 'published level file', level=level,
+                     bytes=len(data))
+        return True
+
+    def _serialiseLevel(self):
+        """
+        The current level as bytes, including edits that were never saved.
+
+        Guarded: serialising touches every area and can raise on a level that is
+        half-loaded or malformed, and a level change must not fail because the
+        file could not be built - the snapshot still works.
+        """
+        level = getattr(globals_, 'Level', None)
+        if level is None:
+            return b''
+
+        try:
+            return bytes(level.save() or b'')
+        except Exception as exc:
+            debuglog.log('host', 'level could not be serialised', error=str(exc))
+            return b''
+
     # -- saving (Block C - B3, phase 3c) ------------------------------------
 
     def notifyLevelSaved(self, data):
@@ -3006,6 +3186,60 @@ class CollabController(QtCore.QObject):
         # file just written is the one this editor would open.
         self._useSessionGamePaths(patch_id, stage,
                                   files.collab_texture_directory(patch_id))
+
+        # Open it, if this is the level the session is on and we are not already
+        # showing it (Block C - B3, Fact 3). This is the whole point of sending
+        # the file: loading it takes seconds where rebuilding the same level
+        # from a snapshot takes minutes.
+        self._openPublishedLevel(level, target)
+        return True
+
+    def _openPublishedLevel(self, level, path):
+        """
+        Opens a level the host just published, when it is the one the session
+        is on.
+
+        Returns True if it was opened.
+
+        Two conditions, and both matter:
+
+        - the session has to actually be on this level. The host also publishes
+          on an ordinary Save, and a client that is deliberately looking
+          somewhere else must not be yanked away from it.
+        - we must not already be showing it. Reloading a level the user is
+          working in would discard their view, their selection, and - if the
+          file is one they already have open - is simply wasted work.
+        """
+        if self.is_host or not self.is_active:
+            return False
+
+        if level != self._session_level:
+            return False
+
+        if self._areaNumber() != self._session_area:
+            # Same level, different area: the file is right but the view is not,
+            # so it still needs opening at the session's area.
+            pass
+        elif self.hasSessionFile() and not self._pending_publication:
+            # Already showing this level, and nothing told us it changed.
+            return False
+
+        # Loaded by full path, not by name: the file we just wrote is the one to
+        # open, and resolving the name again could find a different file through
+        # a stage path that has not been switched over yet.
+        if not self._loadLevelQuietly(path, True, self._session_area):
+            self._appendStatus(
+                'The host sent %s, but it could not be opened here.' % level)
+            return False
+
+        self._pending_publication = False
+        self._appendStatus('Opened %s from the host.' % level)
+        debuglog.log('client', 'opened published level', level=level, path=path)
+
+        # The file is byte-identical to the host's, so there is nothing left to
+        # reconcile - which is exactly what makes this fast. A resync here would
+        # ask for the snapshot this path exists to avoid.
+        self._checkContentMatches()
         return True
 
     def _onLevelSaved(self, payload):
