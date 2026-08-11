@@ -648,14 +648,32 @@ class ReggieGameDefinition:
     # answering when it ends. Nothing here is ever written to disk.
     _sessionGamePaths = {}
 
+    # The key a retail session's game data is stored under (Block C - B3, R6).
+    #
+    # Retail needs a key of its own because it has no patch id, and it must not
+    # be `self.name`: a retail gamedef's name is trans.string('Gamedefs', 13),
+    # a *translated* display string, so keying on it would work in English and
+    # silently fail in any other language. It is also the exact confusion
+    # _patchId() exists to avoid - a retail session claiming to need a patch
+    # named after the base game.
+    #
+    # A sentinel that cannot collide with a patch name: a patch id comes from
+    # the `name` attribute of a main.xml root node, and no real one looks like
+    # this.
+    RETAIL_SESSION_KEY = '\x00retail'
+
     @classmethod
     def SetSessionGamePaths(cls, patch_name, stage, texture):
         """
         Points a patch at a session's copy of its game data, for as long as the
         session lasts. Both paths may be empty to record only one of them.
+
+        An empty `patch_name` means the retail game, which is stored under
+        RETAIL_SESSION_KEY rather than under '' - so that a caller passing an
+        empty string by mistake cannot silently claim the retail slot.
         """
-        cls._sessionGamePaths[str(patch_name)] = (str(stage or ''),
-                                                  str(texture or ''))
+        key = str(patch_name) or cls.RETAIL_SESSION_KEY
+        cls._sessionGamePaths[key] = (str(stage or ''), str(texture or ''))
 
     @classmethod
     def ClearSessionGamePaths(cls):
@@ -669,13 +687,22 @@ class ReggieGameDefinition:
         """
         The session's stage (0) or texture (1) path for this gamedef, or ''.
 
-        Only ever consulted for a *custom* gamedef: the retail game is not a
-        patch and has no per-patch key to shadow.
-        """
-        if not self.custom:
-            return ''
+        Retail is included (R6). It used to be excluded on the reasoning that
+        the base game is not a patch and has no per-patch key to shadow - true
+        as far as it goes, but it meant a retail session could not receive the
+        host's levels at all, so every retail join fell back to a snapshot and
+        the host froze waiting for an acknowledgement that could not come.
 
-        paths = ReggieGameDefinition._sessionGamePaths.get(self.name)
+        The override is still session-scoped and never written to disk, which is
+        what makes it safe here: the user's own StageGamePath keeps whatever it
+        always had, and a retail session simply answers first until it ends.
+        That matters more for retail than for a patch, because editing the base
+        game's folders in place is discouraged - Zement's position, 2026-08-11 -
+        and this guarantees a session never does.
+        """
+        key = self.name if self.custom else self.RETAIL_SESSION_KEY
+
+        paths = ReggieGameDefinition._sessionGamePaths.get(key)
         if not paths:
             return ''
 
@@ -748,18 +775,35 @@ class ReggieGameDefinition:
     def GetTexturePaths(self):
         """
         Returns the texture game paths of this globals_.gamedef and its bases
+
+        The session's own Texture folder is appended last, so it wins: tiles.py
+        searches these in reverse. Without it a session's tilesets were not on
+        the search path at all (Block C - B3, R6) - which worked for a
+        transferred patch only because the install also writes
+        TextureGamePath_<patch>, and did not work for retail at all, since
+        retail has no such key to write.
         """
-        paths = [setting('TextureGamePath')]
+        session = self._sessionPath(1)
 
         if not self.custom:
+            paths = [setting('TextureGamePath')]
+            if session:
+                paths.append(session)
             return paths
 
         stg = setting('TextureGamePath_' + self.name)
 
         if self.base is not None:
             paths = self.base.GetTexturePaths()
+        else:
+            paths = [setting('TextureGamePath')]
 
         paths.append(stg)
+
+        # After the patch's own path, so a session copy shadows it rather than
+        # being shadowed by it.
+        if session:
+            paths.append(session)
 
         return paths
 

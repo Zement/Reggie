@@ -1700,16 +1700,10 @@ class CollabController(QtCore.QObject):
         if self.is_host or not self.is_active:
             return False
 
-        if not self._sessionPatchId():
-            # Retail: no folder under _collab to receive a file into, and no
-            # session path override for a non-custom gamedef even if there
-            # were. The snapshot is the answer there.
-            #
-            # Asked of the *session* rather than of this editor, which is the
-            # fix: at join the client is still on whatever patch it had open,
-            # so _patchId() here answered for the wrong game and declined a
-            # file the session could perfectly well send.
-            return False
+        # Retail is no longer excluded here (R6): it has a session folder of its
+        # own under _collab, and the retail gamedef now honours a session path
+        # override. Only a host with no level name left to publish under can
+        # make a file impossible now, and that is the caller's test.
 
         self._pending_publication = True
 
@@ -2052,11 +2046,11 @@ class CollabController(QtCore.QObject):
         # want_file False on joins that needed no transfer, so the file path was
         # reached only by the route that happens to run after the patch loads.
         #
-        # Retail still declines, and correctly: it has no folder under _collab
-        # to receive a file into, and no session path override even if it did.
-        # A retail session therefore still joins by snapshot, which works - it
-        # is only slow. Deferred as its own phase (Zement, 2026-08-11).
-        want_file = bool(level and self._sessionPatchId())
+        # Retail asks for a file too now (R6). It has a session folder under
+        # _collab and the retail gamedef honours a session path override, so
+        # the only thing that can still make a file impossible is the host
+        # having no name to publish under.
+        want_file = bool(level)
 
         debuglog.log('client', 'asking for the session level',
                      level=level or '?', area=int(area), want_file=want_file,
@@ -2946,14 +2940,17 @@ class CollabController(QtCore.QObject):
         move to next". Transferring once and being certain is the cheaper
         answer, and it is what makes the file-first path reliable.
 
-        Retail is skipped: there is no patch, so there is no `_collab` folder to
-        receive anything, and the base game is identical on both sides by
-        definition.
+        Retail is included (R6). "The base game is identical on both sides by
+        definition" was the old reasoning for skipping it, and it is true of the
+        *shipped* game and false of the folders people actually point at: a
+        retail Stage folder can hold edited levels, which is exactly known open
+        10.1 arrived at from the other direction. Editing retail in place is
+        discouraged rather than impossible, so a session must handle it.
+
+        Keyed under '' for retail, which is a real key here - the session either
+        has a patch or does not, and both answers are synced once.
         """
         if self.is_host or self.client is None or not self.is_active:
-            return False
-
-        if not patch_id:
             return False
 
         if patch_id in self._synced_asset_patches:
@@ -3388,13 +3385,6 @@ class CollabController(QtCore.QObject):
             'reason': 'publish',
         }
 
-        # Whether a peer can be expected to answer this at all. A retail session
-        # has no _collab folder, so a client refuses the file rather than
-        # opening it, and there is nothing to acknowledge. The file is still
-        # sent - a client that gains somewhere to put it should have it - but
-        # the host does not block on a reply that cannot come.
-        awaits_ack = bool(self._patchId())
-
         message = protocol.make_message(protocol.T_SAVED, payload)
         sent = 0
         for connection in self.server.authenticated_connections():
@@ -3417,18 +3407,17 @@ class CollabController(QtCore.QObject):
             # for - the same ordering trap that let a duplicate patch_need
             # through twice.
             #
-            # Not on retail, where the client has nowhere to write the file and
-            # so declines it - a wait armed there can only ever end in the
-            # timeout. That is the 30 s lock after every level and area change
-            # on a retail session (Zement, 2026-08-11): two publications, two
-            # full timeouts, and the moment the session moved to a patch every
-            # publication was answered in under a second.
-            #
-            # R6 makes retail able to receive these, at which point this
-            # condition stops excluding anything.
-            if awaits_ack:
-                self._loading_peers[peer] = (
-                    str(getattr(connection, 'nick', '') or '') or peer)
+            # Every session, including retail. This was briefly conditional on
+            # the session having a patch, because a retail client had nowhere to
+            # write the file and declined it in silence - so a wait armed there
+            # could only end in the timeout, which was the 30 s lock after every
+            # level and area change on retail (Zement, 2026-08-11). R6 gave
+            # retail a session folder, so the condition no longer excludes
+            # anything and is gone. The client's own guard - answering when it
+            # declines - stays, because it costs nothing and covers the case
+            # where a peer genuinely cannot take the file.
+            self._loading_peers[peer] = (
+                str(getattr(connection, 'nick', '') or '') or peer)
 
         if not sent:
             # Nobody to send to. Reported as "not published" so a later join
@@ -3963,26 +3952,16 @@ class CollabController(QtCore.QObject):
         # The session's patch, not this editor's: at join the two differ, and
         # the file has to land where the session's data lives, not where this
         # editor's current gamedef happens to point.
+        # The session's patch, not this editor's: at join the two differ, and
+        # the file has to land where the session's data lives.
+        #
+        # Empty for retail, which now has a session folder of its own (R6):
+        # collab_game_directory maps it to _collab/_retail. Retail used to be
+        # refused here, which is what kept every retail session on the snapshot
+        # path. The write is as safe there as anywhere else under _collab - and
+        # safer than the alternative, since the base game's own folders are
+        # never touched.
         patch_id = self._sessionPatchId()
-        if not patch_id:
-            # Retail has no _collab folder of its own, and writing into the
-            # user's real stage folder is exactly what must never happen.
-            self._appendStatus(
-                'The host saved %s. It was not copied here, because this '
-                'session uses the retail game and there is no session folder '
-                'to write into.' % level)
-
-            # Answered rather than dropped in silence. The host may be waiting
-            # for this peer to report the level open, and declining is still an
-            # answer - reported as a failure, because this peer genuinely does
-            # not have the host's file. The host stops waiting either way.
-            #
-            # The host also avoids arming that wait on retail, so this is the
-            # second of two guards; it covers a host that has not been updated.
-            # Both exist because the failure mode is a 30-second freeze on
-            # every level change (Zement, 2026-08-11).
-            self._reportLevelLoaded(level, False)
-            return False
 
         try:
             stage = files.collab_stage_directory(patch_id)
@@ -4296,18 +4275,12 @@ class CollabController(QtCore.QObject):
         if 'level_sha256' not in host and 'tileset_sha256' not in host:
             return True
 
-        # Retail does not compare (round 2, R4). There is no session folder for
-        # the base game, so nothing is ever synced into one and there is nothing
-        # this warning could ask the user to do - "check that this patch points
-        # at the session's Stage and Texture folders" names folders that do not
-        # exist for retail. Both peers are on the shipped game, and any
-        # difference is one the user made in their own copy deliberately.
-        #
-        # This is the case that fired when a Full client changed level on a
-        # retail session, with no action available to anyone.
-        if not self._sessionPatchId():
-            debuglog.log('client', 'content check skipped on retail')
-            return True
+        # Retail used to be skipped here (R4), because there was no session
+        # folder for the base game - nothing was synced into one, so the warning
+        # could not name an action. R6 removed that: a retail session syncs its
+        # Stage and Texture into _collab/_retail like any other, so the
+        # comparison means the same thing it means everywhere else and the
+        # answer to a mismatch is the same too.
 
         stage, texture = self._localGameDataDirectories()
         level = self._session_level or self._currentLevelName()
@@ -4468,10 +4441,13 @@ class CollabController(QtCore.QObject):
         from the network would be changing a preference on someone else's
         machine and leaving it changed. The override does neither: it answers
         first while the session runs and is forgotten in _teardown.
-        """
-        if not patch_id:
-            return False
 
+        Retail is included (R6), with `patch_id` empty. It matters *more* there
+        than for a patch: editing the base game's folders in place is
+        discouraged, so a retail session must never write into them, and a
+        session-scoped override is exactly the mechanism that guarantees it
+        cannot. SetSessionGamePaths maps the empty id to its own reserved key.
+        """
         try:
             from reggie.io.gamedef import ReggieGameDefinition
 

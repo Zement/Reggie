@@ -881,8 +881,14 @@ class HostSession:
         payload = message['p']
         wanted = str(payload.get('patch_id', '') or '')
         current = str(self.room_info.get('patch_id', '') or '')
+        assets_only = bool(payload.get('assets_only', False))
 
-        if not current:
+        # A retail session has no patch, and used to refuse here outright. That
+        # is right for a request for the *patch* - there is none to send - but
+        # wrong for a request for the host's game data, which retail has like
+        # any other session (R6). Its Stage folder can hold edited levels, which
+        # is known open 10.1 reached from the other direction.
+        if not current and not assets_only:
             self._refuse_transfer(participant,
                                   'This session does not use a patch.')
             return
@@ -896,11 +902,10 @@ class HostSession:
                 'This session uses %s, not %s.' % (current, wanted))
             return
 
-        # Whether the client wants the patch itself or only the game data. A
+        # `assets_only` was read above, because the retail check needs it: a
         # client that already has the patch - from the catalog, or already on
         # disk - still needs the host's Stage and Texture, or the two peers
         # resolve the same level name to different bytes (Block C - B3, round 2).
-        assets_only = bool(payload.get('assets_only', False))
 
         debuglog.log('host', 'patch_need', nick=participant.nick,
                      patch_id=current, assets_only=assets_only)

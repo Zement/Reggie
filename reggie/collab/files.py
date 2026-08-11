@@ -1403,6 +1403,21 @@ def collab_mods_directory(base_dir=''):
         else COLLAB_MODS_RELATIVE_DIR
 
 
+# Where a retail session's game data goes (Block C - B3, R6).
+#
+# Retail has no patch id, so it has no folder name derived from one - and for
+# most of this block that meant it had nowhere to receive a level file, which
+# excluded every retail session from the file-first path.
+#
+# A fixed name rather than '', which would collapse to a bare _collab/Stage and
+# put the base game's levels where a patch folder is expected. It cannot
+# collide with a patch: folder_name_for_patch sanitises a patch *id*, and
+# retail has none.
+#
+# The underscore matches _collab's own convention for "not a patch".
+RETAIL_COLLAB_FOLDER = '_retail'
+
+
 def collab_game_directory(patch_id, base_dir=''):
     """
     The folder holding a transferred patch's game data.
@@ -1412,14 +1427,26 @@ def collab_game_directory(patch_id, base_dir=''):
     Prankster Comets') lands somewhere real - and so the two folders for one
     patch are named consistently.
 
-    Retail has no id and therefore no folder here. That is why a retail session
-    cannot receive the host's level file and falls back to the snapshot; giving
-    it one is not enough on its own, because ReggieGameDefinition._sessionPath
-    refuses an override for a non-custom gamedef, so the client would write a
-    file it then would not read. Deferred as its own phase (2026-08-11).
+    Retail gets a reserved name of its own (R6). The base game is not a patch
+    and has no id, but a retail session still has levels to share, and this is
+    what keeps them out of the user's own game folders: editing retail in place
+    is discouraged, so a session must never write there - it writes here
+    instead, under _collab, exactly like every other session.
     """
-    return os.path.join(collab_mods_directory(base_dir),
-                        folder_name_for_patch(patch_id))
+    if not patch_id:
+        return os.path.join(collab_mods_directory(base_dir),
+                            RETAIL_COLLAB_FOLDER)
+
+    folder = folder_name_for_patch(patch_id)
+
+    # A patch actually named '_retail' would otherwise be given the retail
+    # session's folder, and the two would overwrite each other's levels. Vanish-
+    # ingly unlikely and cheap to close - a session that mixed the base game's
+    # levels with a patch's would be very hard to diagnose from the symptoms.
+    if folder == RETAIL_COLLAB_FOLDER:
+        folder += '_patch'
+
+    return os.path.join(collab_mods_directory(base_dir), folder)
 
 
 def collab_stage_directory(patch_id, base_dir=''):
