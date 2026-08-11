@@ -187,9 +187,27 @@ class GameDefMenu(QtWidgets.QMenu):
         if not checked or self.update_flag: return
 
         name = self.actGroup.checkedAction().data()
+
+        # Unsaved work is settled before the patch changes (Block C - B3,
+        # round 2, R5), for the same reason as the patch combo box: prompting
+        # afterwards would offer to save the old patch's level through the new
+        # patch's paths, and Cancel would have nothing left to cancel.
+        window = globals_.mainWindow
+        if window is not None and window.CheckDirty():
+            # Put the menu's tick back on the patch still loaded, or it would
+            # show a switch that did not happen.
+            self._recheckLoadedGameDef()
+            return
+
         success = loadNewGameDef(name)
         if success:
             self.gameChanged.emit()
+
+            # Open the new patch's first level, rather than keeping one whose
+            # tilesets belong to the patch just unloaded - the pink-placeholder
+            # state Zement described.
+            if window is not None:
+                window.LoadFirstLevelOfPatch()
             return
 
         # Setting the new gamedef failed for some reason, so load back the old
@@ -199,11 +217,22 @@ class GameDefMenu(QtWidgets.QMenu):
         if not success:
             raise Exception("Restoring the previous game def (%r) failed after failing to load new game def (%r)" % (real_gamedef, name))
 
+        self._recheckLoadedGameDef()
+
+    def _recheckLoadedGameDef(self):
+        """
+        Puts the menu's tick back on the patch that is actually loaded.
+
+        The update_flag guard is what stops setChecked re-entering
+        handleGameDefClicked, which would restart the switch this is undoing.
+        """
+        real_gamedef = setting('LastGameDef')
+
         self.update_flag = True
         for act in self.actGroup.actions():
             act.setChecked(act.data() == real_gamedef)
         self.update_flag = False
-    
+
     def refreshMenu(self):
         """
         Refresh the menu to show newly added patches

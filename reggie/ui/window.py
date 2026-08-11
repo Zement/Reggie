@@ -358,26 +358,32 @@ class ReggieWindow(QtWidgets.QMainWindow):
             self.HandlePatchManager()
             # Reset to current patch
             self.updatePatchComboBox()
-        elif patch_data is None:
-            # Switch to base game
-            from reggie.io.gamedef import loadNewGameDef
-            success = loadNewGameDef(None)
-            if success:
-                # Update combo box to reflect the change
-                self.updatePatchComboBox()
-            else:
-                # Reset to current patch on failure
-                self.updatePatchComboBox()
-        elif patch_data is not None:
-            # Switch to selected patch
-            from reggie.io.gamedef import loadNewGameDef
-            success = loadNewGameDef(patch_data)
-            if success:
-                # Update combo box to reflect the change
-                self.updatePatchComboBox()
-            else:
-                # Reset to current patch on failure
-                self.updatePatchComboBox()
+            return
+
+        # Unsaved work is settled *before* the patch changes (Block C - B3,
+        # round 2, R5). Asking afterwards would offer to save the old patch's
+        # level through the new patch's paths, and Cancel would have nothing to
+        # cancel - the switch would already have happened.
+        #
+        # Cancel is right here, unlike the join dialog: the user started this
+        # and may reasonably change their mind.
+        if self.CheckDirty():
+            self.updatePatchComboBox()
+            return
+
+        from reggie.io.gamedef import loadNewGameDef
+
+        # patch_data is None for the base game, which loadNewGameDef takes as-is.
+        success = loadNewGameDef(patch_data)
+
+        # Either way the combo box is put back in step: with the new patch on
+        # success, with the restored one on failure.
+        self.updatePatchComboBox()
+
+        if success:
+            # Open the new patch's own first level, rather than keeping one
+            # whose tilesets belong to the patch that was just unloaded.
+            self.LoadFirstLevelOfPatch()
 
     def updatePatchComboBox(self):
         """
@@ -1594,6 +1600,45 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if not ok:
             # loading the new area failed, so reset the combobox
             self.areaComboBox.setCurrentIndex(old_idx)
+
+    def LoadFirstLevelOfPatch(self):
+        """
+        Opens the current patch's first level after a patch switch.
+
+        Block C - B3, round 2, R5. Switching patch used to keep the previous
+        patch's level open, whose tilesets belong to a game that is no longer
+        loaded - so the scene filled with pink placeholder tiles and a row of
+        "tileset not found" warnings. Correct behaviour given the old design,
+        and a bad experience; it is also, as Zement put it, one of the biggest
+        sources of confusion when a session and a patch switch coincide.
+
+        Applies even when no level is open. "Switching patch puts you on that
+        patch's first level" is one rule with no exception to remember, which is
+        Zement's call and the right one.
+
+        Returns True if a level was loaded.
+
+        The caller must have handled unsaved changes already: this is reached
+        only after a *successful* switch, and prompting here would put the
+        dialog after the patch had changed, when saving would write the old
+        level through the new patch's paths.
+        """
+        from reggie.io.misc import FirstLevelName
+
+        name = FirstLevelName()
+        if not name:
+            # A patch with no level list of its own falls back to retail's
+            # through getResourcePaths, so reaching this means the list is
+            # genuinely empty or unreadable. Leave the editor where it is
+            # rather than guessing at a name.
+            return False
+
+        try:
+            return bool(self.LoadLevel(name, False, 1))
+        except Exception:
+            # A patch whose first level cannot be opened is not a reason to
+            # abandon the patch switch that already succeeded.
+            return False
 
     def _SyncAreaComboBox(self):
         """
