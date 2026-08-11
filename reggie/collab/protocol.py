@@ -231,6 +231,38 @@ ROLE_FULL = 'full'
 ROLE_HOST = 'host'
 ROLES = (ROLE_EDITOR, ROLE_FULL, ROLE_HOST)
 
+# What a peer is busy with (Block C - B3, presence).
+#
+# Three states rather than one per operation. Zement listed nine things a peer
+# can be busy with, but the receiving UI only ever asks two questions - "is
+# anyone busy" and "what should I say" - so the operation itself travels as free
+# text in `detail`, and only the *category* is a protocol value. A tenth
+# operation then needs no protocol change at all, which nine enumerated states
+# would have forced.
+#
+# The split that matters is who is blocked:
+#
+#   BUSY_LOADING and BUSY_SAVING are blocking - somebody is waiting on this peer
+#   and edits are held. These are worth interrupting the canvas for.
+#
+#   BUSY_DOWNLOAD is background - the peer is catching up on its own time and
+#   nobody is blocked. A quiet status line is the right weight for it.
+BUSY_NONE = ''
+BUSY_LOADING = 'loading'
+BUSY_SAVING = 'saving'
+BUSY_DOWNLOAD = 'download'
+
+BUSY_STATES = (BUSY_NONE, BUSY_LOADING, BUSY_SAVING, BUSY_DOWNLOAD)
+
+# The states that mean someone is waiting. Named rather than open-coded so the
+# canvas border and the status colour cannot drift apart from each other.
+BUSY_BLOCKING = frozenset({BUSY_LOADING, BUSY_SAVING})
+
+# Presence kinds. `busy` is the only one that is not a coordinate.
+PRESENCE_KINDS = ('cursor', 'click', 'selection', 'view', 'busy')
+
+MAX_BUSY_DETAIL_CHARS = 80
+
 # Operation kinds, mapped from the A1 undo command classes.
 OP_KINDS_EDITOR = frozenset({
     'move', 'add', 'remove', 'property', 'resize',
@@ -628,11 +660,42 @@ def _v_area_switch(p):
 
 
 def _v_presence(p):
+    # Note for anyone adding a field: this rebuilds the payload from scratch, so
+    # anything not listed here is *deleted in flight* with no error anywhere.
+    # That is deliberate - unknown keys must not ride along - but it cost a live
+    # bug once already, when the manifest validator dropped 'kind' and every
+    # level arrived labelled as a patch file. Add the field here, and test
+    # through validate_message rather than the payload builder.
     kind = _get_str(p, 'kind', 16)
-    _require(kind in ('cursor', 'click', 'selection', 'view'),
-             'unknown presence kind %r' % kind)
+    _require(kind in PRESENCE_KINDS, 'unknown presence kind %r' % kind)
+
+    state = _get_str(p, 'state', 16, required=False)
+    _require(state in BUSY_STATES, 'unknown busy state %r' % state)
+
     return {
         'kind': kind,
+
+        # Busy (Block C - B3, presence): what this peer is doing, if anything.
+        #
+        # `state` is validated against a closed set rather than sanitized - an
+        # unknown state is a protocol error, not text to be cleaned up.
+        #
+        # `detail` is the opposite: free text that lands in another machine's
+        # status bar, so it is sanitized exactly as a nick is. A peer must not
+        # be able to put control characters or a 5,000-character line into
+        # someone else's UI.
+        'state': state,
+        'detail': sanitize_text(
+            _get_str(p, 'detail', MAX_BUSY_DETAIL_CHARS, required=False),
+            MAX_BUSY_DETAIL_CHARS),
+
+        # Progress, where the operation has one. -1 rather than 0 for "no
+        # percentage": a download that has genuinely reached 0% is a different
+        # thing from one that cannot report progress, and 0 would render as
+        # "(0%)" on an operation that never shows a number.
+        'pct': _get_int(p, 'pct', minimum=-1, maximum=100, required=False,
+                        default=-1),
+
         'x': _get_int(p, 'x', minimum=-(1 << 24), maximum=1 << 24, required=False),
         'y': _get_int(p, 'y', minimum=-(1 << 24), maximum=1 << 24, required=False),
 

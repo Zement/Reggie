@@ -2119,6 +2119,39 @@ def encode_presence_selection(refmap, items):
     return {'kind': 'selection', 'refs': refs[:512]}
 
 
+def encode_presence_busy(state, detail='', pct=-1):
+    """
+    What this peer is busy with, for the other peers' status bars.
+
+    Unlike every other presence kind this carries no coordinates and needs no
+    refmap: it describes the *peer*, not a place in the level. That matters for
+    when it can be sent - a peer downloading a patch has no refmap at all, and
+    that is precisely when the others most need to be told what it is doing.
+
+    `detail` is truncated rather than refused here, because the sender is us:
+    the receiving validator rejects an over-long field, so letting a long patch
+    name through would silently drop our own status message instead of
+    shortening it.
+    """
+    detail = str(detail or '')[:protocol.MAX_BUSY_DETAIL_CHARS]
+
+    try:
+        pct = int(pct)
+    except (TypeError, ValueError):
+        pct = -1
+
+    return {
+        'kind': 'busy',
+        'state': str(state or ''),
+        'detail': detail,
+
+        # Clamped rather than validated: a progress figure is decoration, and
+        # refusing to say "busy" because a byte count produced 101% would lose
+        # the message that matters for the sake of the number that does not.
+        'pct': max(-1, min(100, pct)),
+    }
+
+
 def decode_presence(payload, refmap):
     """
     Turns a presence payload into something the canvas overlay can draw.
@@ -2128,8 +2161,29 @@ def decode_presence(payload, refmap):
     the payload is still useful.
     """
     kind = payload.get('kind')
-    if kind not in ('cursor', 'click', 'selection', 'view'):
+    if kind not in protocol.PRESENCE_KINDS:
         raise SyncError('unknown presence kind %r' % (kind,))
+
+    if kind == 'busy':
+        # Handled before anything that touches the refmap, and deliberately so:
+        # this is the one presence kind that describes the peer rather than a
+        # place in the level, and the peer most worth reporting on - one
+        # downloading a patch - is exactly the one with no refmap yet.
+        state = str(payload.get('state') or '')
+        if state not in protocol.BUSY_STATES:
+            raise SyncError('unknown busy state %r' % (state,))
+
+        try:
+            pct = int(payload.get('pct', -1))
+        except (TypeError, ValueError):
+            pct = -1
+
+        return {
+            'kind': kind,
+            'state': state,
+            'detail': str(payload.get('detail') or ''),
+            'pct': max(-1, min(100, pct)),
+        }
 
     if kind == 'selection':
         refs = payload.get('refs') or []

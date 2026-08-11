@@ -274,6 +274,21 @@ class CollabController(QtCore.QObject):
         # load it triggers must not stop to ask the host for another copy.
         self._replaying_held_level = None
 
+        # -- busy presence (Block C - B3) ------------------------------------
+        #
+        # What each *other* peer is doing, keyed by session id. Absence is idle,
+        # which is what makes a peer that never sends presence - an older build,
+        # or one that crashed mid-download - indistinguishable from one that
+        # told us it had finished. Any other choice invents a stuck-busy state.
+        self._peer_busy = {}
+        self._busy_observers = []
+
+        # What we last told everyone else, so an unchanged state is not resent
+        # and a changed one always is.
+        self._local_busy_state = protocol.BUSY_NONE
+        self._local_busy_detail = ''
+        self._local_busy_sent = 0.0
+
         # -- session file identity (Block C - B3, phase 0) -------------------
         #
         # Which level and area the *session* is on, tracked explicitly rather
@@ -917,6 +932,16 @@ class CollabController(QtCore.QObject):
         self._opened_from_host = False
         self._opened_patch = None
         self._replaying_held_level = None
+
+        # Nobody is busy once the session is over. Left populated, the next
+        # session would open with the last one's peers still shown as
+        # downloading - and those session ids will never be seen again, so
+        # nothing would ever arrive to clear them.
+        self._peer_busy = {}
+        self._local_busy_state = protocol.BUSY_NONE
+        self._local_busy_detail = ''
+        self._local_busy_sent = 0.0
+        self._busyChanged()
 
         # The session's Stage/Texture override goes with it, so the editor
         # returns to the user's own folders the moment the session ends. This
@@ -2059,6 +2084,24 @@ class CollabController(QtCore.QObject):
 
             self._stale_peers &= present
 
+        # Busy state goes the same way, and deliberately outside the is_host
+        # guard above: a client watching another client download is just as able
+        # to be left showing someone who has gone. A peer that disconnects
+        # mid-download never sends the idle that would clear it, so the roster -
+        # the authoritative list of who is present - has to do it.
+        if self._peer_busy:
+            here = {str(entry.get('session_id', ''))
+                    for entry in (participants or [])
+                    if isinstance(entry, dict)}
+
+            left = set(self._peer_busy) - here
+            for session_id in left:
+                self._peer_busy.pop(session_id, None)
+            if left:
+                debuglog.log('client', 'dropped busy state for departed peers',
+                             count=len(left))
+                self._busyChanged()
+
         # The overlay needs it too: nicknames and colours come from the roster,
         # and a peer that left must lose its cursor.
         if self.presence is not None:
@@ -2669,13 +2712,22 @@ class CollabController(QtCore.QObject):
         """
         Draws a peer's cursor or click. Main thread, via the bridge.
         """
-        if self.presence is None or self.refmap is None:
-            return
-
         # The host relays a client's presence to the others, so a peer can see
         # its own payload come back. Drawing it would put a second cursor under
         # the user's real one.
         if sender_id and self._isOwnSessionId(sender_id):
+            return
+
+        # Busy is handled ahead of the guards below, which is the whole point of
+        # it: a peer that is downloading a patch has no refmap and no overlay,
+        # and that is exactly the peer whose state the others need to see. The
+        # cursor kinds genuinely cannot be drawn without those, so they keep the
+        # guard - it just cannot come first any more.
+        if isinstance(payload, dict) and payload.get('kind') == 'busy':
+            self._onPeerBusy(payload, sender_id)
+            return
+
+        if self.presence is None or self.refmap is None:
             return
 
         try:
@@ -2694,6 +2746,159 @@ class CollabController(QtCore.QObject):
         elif kind == 'view':
             self.presence.showView(sender_id, decoded['x'], decoded['y'],
                                    decoded['w'], decoded['h'])
+
+    # -- busy presence (Block C - B3) ---------------------------------------
+    #
+    # The state with no signal today: when a peer is downloading a patch or
+    # loading a level, everything here looks idle and normal while operations
+    # are quietly held back. Local busy is already covered by _BusyIndicator's
+    # wait cursor and status message, and the editor is frozen anyway.
+
+    # Percentage updates are throttled; state *changes* never are.
+    BUSY_THROTTLE_SECONDS = 0.5
+
+    def _setLocalBusy(self, state, detail='', pct=-1):
+        """
+        Tells the other peers what this editor is doing.
+
+        Send policy is the whole of the rate limiting, and the asymmetry is
+        deliberate: a change of state goes out immediately, while a percentage
+        ticking upward inside the same state is throttled. A download reports
+        per file, which on a 725-file patch would otherwise be 725 messages
+        nobody can read.
+
+        The message that clears a state is never throttled. A peer left showing
+        "busy" forever is the one failure here that actually matters - it is
+        indistinguishable from a peer that has hung, and it never resolves on
+        its own.
+        """
+        if not self.is_active:
+            return
+
+        state = str(state or protocol.BUSY_NONE)
+        if state not in protocol.BUSY_STATES:
+            state = protocol.BUSY_NONE
+
+        detail = str(detail or '')
+        changed = (state != self._local_busy_state
+                   or detail != self._local_busy_detail)
+
+        if not changed and state != protocol.BUSY_NONE:
+            # Same state, new number: throttled.
+            now = time.monotonic()
+            if now - self._local_busy_sent < self.BUSY_THROTTLE_SECONDS:
+                return
+            self._local_busy_sent = now
+        else:
+            self._local_busy_sent = time.monotonic()
+
+        self._local_busy_state = state
+        self._local_busy_detail = detail
+
+        self._sendPresence(sync.encode_presence_busy(state, detail, pct))
+
+    def _clearLocalBusy(self):
+        """
+        Says this editor is idle again, unconditionally.
+
+        Not routed through _setLocalBusy's change check: this is called from
+        finally blocks, and "I am done" must go out even if the bookkeeping
+        thinks we were already idle. A duplicate idle costs one small message; a
+        missing one leaves every other peer showing us as busy indefinitely.
+        """
+        self._local_busy_state = protocol.BUSY_NONE
+        self._local_busy_detail = ''
+        self._local_busy_sent = 0.0
+
+        if self.is_active:
+            self._sendPresence(
+                sync.encode_presence_busy(protocol.BUSY_NONE))
+
+    def _onPeerBusy(self, payload, sender_id):
+        """
+        Records what a peer is doing. Main thread, via the bridge.
+        """
+        session_id = str(sender_id or '')
+        if not session_id:
+            return
+
+        try:
+            decoded = sync.decode_presence(payload, None)
+        except sync.SyncError:
+            # Malformed presence from a peer is not worth reporting - it cannot
+            # hurt anything, and presence arrives constantly.
+            return
+
+        state = decoded.get('state') or protocol.BUSY_NONE
+
+        if state == protocol.BUSY_NONE:
+            # Absence is idle. Stored as "no entry" rather than as an explicit
+            # idle record, so a peer that never sends presence at all - an older
+            # build, or one that crashed mid-download - reads exactly the same
+            # as one that told us it finished.
+            self._peer_busy.pop(session_id, None)
+        else:
+            self._peer_busy[session_id] = {
+                'state': state,
+                'detail': decoded.get('detail', ''),
+                'pct': decoded.get('pct', -1),
+            }
+
+        self._busyChanged()
+
+    def _forgetPeerBusy(self, session_id):
+        """
+        Drops a peer's busy state when it leaves.
+
+        Without this the status bar goes on naming someone who has disconnected,
+        and a peer that left mid-download leaves a permanent "downloading" line
+        - the stuck-busy failure, arrived at from the other direction.
+        """
+        if self._peer_busy.pop(str(session_id or ''), None) is not None:
+            self._busyChanged()
+
+    def busyPeers(self):
+        """
+        Every peer currently busy, as {session_id: {state, detail, pct}}.
+
+        A copy: the UI reads this while messages keep arriving, and handing out
+        the live dict would let it change under a repaint.
+        """
+        return {key: dict(value) for key, value in self._peer_busy.items()}
+
+    def isAnyoneBlocking(self):
+        """
+        Whether any peer is in a state that holds up everyone else.
+
+        This is what the canvas border asks. A background download is somebody
+        catching up on their own time and deliberately does not count.
+        """
+        return any(entry.get('state') in protocol.BUSY_BLOCKING
+                   for entry in self._peer_busy.values())
+
+    def _busyChanged(self):
+        """
+        Notifies the UI that some peer's state changed.
+
+        A plain callback rather than a Qt signal, because the controller is not
+        where this session's signals live - they are all on the bridge, and
+        adding one here would put the same concern in two places. Phases 2 and 3
+        attach the status strip, canvas border and roster styling to this.
+
+        Never fatal: a failing observer must not break the session that fed it.
+        """
+        for observer in list(self._busy_observers):
+            try:
+                observer()
+            except Exception:
+                debuglog.log('client', 'busy observer failed')
+
+    def addBusyObserver(self, callback):
+        """
+        Registers something to be told when any peer's busy state changes.
+        """
+        if callback not in self._busy_observers:
+            self._busy_observers.append(callback)
 
     def _isOwnSessionId(self, session_id):
         if self.client_session is not None:
