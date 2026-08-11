@@ -1925,9 +1925,61 @@ class CollabController(QtCore.QObject):
             self._deferred_snapshot_area = area
             return
 
-        if self.client is not None:
-            self.client.send(protocol.make_message(
-                protocol.T_SNAPSHOT_REQUEST, {'area': area}))
+        self._acquireSessionLevel(area)
+
+    def _acquireSessionLevel(self, area):
+        """
+        Client side: gets the level the session is on, at join (R2).
+
+        File first, snapshot second - the same order every other route has used
+        since round 1, and joining was the last place still doing it the other
+        way round. The difference is not small: Zement measured an 8000-item
+        level at 3-5 s to open as a file and about two minutes to rebuild from a
+        snapshot, because apply_snapshot builds one Qt item per object on the
+        main thread.
+
+        The snapshot is not removed. It is still the only way to receive work
+        the host has not saved and chose not to save, still the answer when the
+        host cannot publish at all (retail, a never-saved level), and still what
+        a resync uses. It stops being what a join normally costs.
+        """
+        if self.client is None:
+            return False
+
+        level = self._session_level
+
+        # One request, two possible answers. `want_file` says a file is
+        # preferred; the host publishes if it can and sends a snapshot if it
+        # cannot, so there is no second request on the timeout path and no way
+        # for the two sides to disagree about which is coming.
+        #
+        # The client still cannot *demand* a file: a host on a never-saved
+        # level, or a retail session with no session folder to write into, has
+        # only the snapshot to give.
+        want_file = bool(level and self._patchId())
+
+        debuglog.log('client', 'asking for the session level',
+                     level=level or '?', area=int(area), want_file=want_file)
+
+        self.client.send(protocol.make_message(
+            protocol.T_SNAPSHOT_REQUEST,
+            {'area': int(area), 'want_file': want_file}))
+
+        if not want_file:
+            return False
+
+        # Wait for the file rather than returning into an idle editor. The
+        # snapshot needs no wait - it arrives as a signal and applies itself -
+        # but the file has to be opened, and _awaitPublishedLevel is what turns
+        # the arrival into an open level. A snapshot arriving instead is applied
+        # by its own slot inside this same loop, which ends the wait early
+        # rather than making it useless.
+        if self._awaitPublishedLevel(level):
+            debuglog.log('client', 'joined file-first', level=level)
+            return True
+
+        debuglog.log('client', 'join publication did not arrive', level=level)
+        return False
 
     def _onRoomInfoChanged(self, room_info):
         """
@@ -2461,6 +2513,16 @@ class CollabController(QtCore.QObject):
                 self.refmap.bind(ref, item)
 
     def _onSnapshot(self, payload):
+        # A snapshot answers the same request a file would have (R2), so its
+        # arrival ends any wait for a publication. Without this a host that
+        # chose the snapshot - a never-saved level, a failed save - would leave
+        # the client sitting out the full publication timeout *after* its level
+        # had already been delivered.
+        #
+        # Cleared before the early returns below, because a snapshot that is
+        # deliberately discarded is still the host's answer.
+        self._pending_publication = False
+
         if self.refmap is None:
             return
 
@@ -2525,12 +2587,18 @@ class CollabController(QtCore.QObject):
         except Exception:
             return 0
 
-    def _onSnapshotRequested(self, session_id, area):
+    def _onSnapshotRequested(self, session_id, area, want_file=False):
         """
         Sends the current level to a client that asked for it.
 
         Host only, and on the main thread: build_snapshot walks the scene, which
         is exactly what must not happen on a reader thread.
+
+        `want_file` is a joining client saying it would rather have the level
+        file, which is minutes cheaper for a large level (R2). The snapshot is
+        still the answer when the file cannot be produced - a never-saved level,
+        a retail session, a serialisation that failed - so this chooses between
+        them rather than replacing one with the other.
 
         The requested `area` is deliberately ignored. The host can only share
         the area it currently has open - serving a different one would mean
@@ -2539,6 +2607,9 @@ class CollabController(QtCore.QObject):
         contains, so a client that wanted another one can see that it did not
         get it.
         """
+        if want_file and self._publishForJoin(session_id):
+            return
+
         self._broadcastSnapshot(session_id)
 
     def _requestResync(self, force=False):
@@ -2698,8 +2769,12 @@ class CollabController(QtCore.QObject):
             return
 
         if area is not None and self.client is not None:
-            self.client.send(protocol.make_message(
-                protocol.T_SNAPSHOT_REQUEST, {'area': int(area)}))
+            # Through the same file-first path as an immediate join (R2), not a
+            # bare snapshot request. A client that had to fetch the patch is the
+            # one that most needs the file: it has just acquired the host's
+            # Stage folder, so the level is there to open, and it is also the
+            # client that has already waited longest.
+            self._acquireSessionLevel(int(area))
 
     def _switchToPatch(self, patch_id):
         """
@@ -3143,12 +3218,16 @@ class CollabController(QtCore.QObject):
     # includes edits the host has not saved, so the client's file matches what
     # the host actually has on screen rather than what it last wrote.
 
-    def _publishLevelFile(self):
+    def _publishLevelFile(self, session_id=''):
         """
         Sends the current level as a file, so clients can open it directly.
 
         Returns True when the file was sent and the caller should skip the
         snapshot; False to fall back to snapshot-only behaviour.
+
+        With `session_id` the publication goes to that one peer, which is what a
+        join needs (R2): everyone else already has this level and re-sending it
+        would reload the level under their cursor for someone else's benefit.
 
         Falling back rather than failing is deliberate. Every reason this can
         decline - a level with no name, an area that cannot be serialised, no
@@ -3185,10 +3264,14 @@ class CollabController(QtCore.QObject):
         message = protocol.make_message(protocol.T_SAVED, payload)
         sent = 0
         for connection in self.server.authenticated_connections():
+            peer = str(getattr(connection, 'session_id', ''))
+
             # Same rule as the save path: a peer mid-transfer is neither told
             # nor sent the file, and receives it when its download finishes.
-            if str(getattr(connection, 'session_id', '')) in \
-                    self._transferring_peers:
+            if peer in self._transferring_peers:
+                continue
+
+            if session_id and peer != str(session_id):
                 continue
 
             connection.send(message)
@@ -3200,10 +3283,10 @@ class CollabController(QtCore.QObject):
             # never offered.
             return False
 
-        self._offerSavedLevel(level, data)
+        self._offerSavedLevel(level, data, session_id)
 
         debuglog.log('host', 'published level file', level=level,
-                     bytes=len(data))
+                     bytes=len(data), to=str(session_id) or 'everyone')
         return True
 
     def _transferInProgress(self):
@@ -3236,6 +3319,97 @@ class CollabController(QtCore.QObject):
         # no longer a reason to leave *this* one on a stale level.
         debuglog.log('host', 'peer transfer finished', ok=ok, publishing=True)
         return self._publishLevelFile()
+
+    def _publishForJoin(self, session_id):
+        """
+        Host side: sends the level to one peer that has just asked for it (R2).
+
+        This replaces the joining snapshot, which was the last routine one left
+        and by far the most expensive: an 8000-item level takes about two
+        minutes to rebuild item by item and a few seconds to open as a file.
+        Every other route to a level went file-first after round 1; joining was
+        the hole.
+
+        Driven by the client's request rather than pushed at 'join', and the
+        difference is not cosmetic. A push races the client's own patch check:
+        the host emits 'join' immediately after auth_ok, while the client is
+        still deciding whether it needs a transfer, so the chunks could arrive
+        either side of the manifest - and a publication landing after one is
+        dropped by design, leaving the client waiting out its whole timeout for
+        a file that was already sent. Asking is the client saying it is ready.
+
+        The host's *unsaved* work is the one thing a file cannot carry, so it is
+        asked about here: Save publishes what is on screen, Discard publishes
+        what is on disk. No Cancel - see resolve_join_publication.
+
+        Returns False when nothing was sent, and the caller falls back to the
+        snapshot. Every reason this declines is one the snapshot handles.
+        """
+        if not self.is_active or not self.is_host:
+            return False
+
+        session_id = str(session_id or '')
+
+        if session_id in self._transferring_peers:
+            # Downloading the patch. A level file pushed into that would be
+            # refused as a file it never asked for, and the publication that
+            # follows its file_done covers it - so this is not a fallback to
+            # the snapshot either, which is why it reports success.
+            debuglog.log('host', 'join publication deferred to transfer',
+                         peer=session_id)
+            return True
+
+        if globals_.Dirty and self._maySave():
+            nick = self._nickFor(session_id)
+            choice = collab_dialogs.resolve_join_publication(self.window, nick)
+
+            if choice == 'save':
+                if not self._saveForProposal():
+                    # Publishing anyway would send the on-disk file, which is
+                    # exactly what the host just declined to do. Reported, and
+                    # the caller falls back to the snapshot - which does carry
+                    # the unsaved work.
+                    self._appendStatus(
+                        'Your level could not be saved, so %s is being sent '
+                        'the level the slower way.' % nick)
+                    return False
+
+                # HandleSave published to everyone through notifyLevelSaved,
+                # which includes the peer that just asked.
+                debuglog.log('host', 'join publication via save', peer=nick)
+                return True
+
+        published = self._publishLevelFile(session_id)
+        debuglog.log('host', 'join publication', peer=session_id, ok=published)
+        return published
+
+    def _nickFor(self, session_id):
+        """
+        A participant's nickname, for a dialog that has to name who is waiting.
+
+        Falls back to a neutral phrase rather than an empty string: 'joined, and
+        you have unsaved changes' with nobody named reads like a fault.
+        """
+        if self.host_session is None:
+            return 'Someone'
+
+        participants = getattr(self.host_session, 'participants', None)
+        if callable(participants):
+            participants = participants()
+
+        for participant in list(participants or ()):
+            peer = (participant.get('session_id')
+                    if isinstance(participant, dict)
+                    else getattr(participant, 'session_id', ''))
+            if str(peer) != str(session_id):
+                continue
+
+            nick = (participant.get('nick')
+                    if isinstance(participant, dict)
+                    else getattr(participant, 'nick', ''))
+            return str(nick or '') or 'Someone'
+
+        return 'Someone'
 
     def _serialiseLevel(self):
         """
@@ -3324,9 +3498,14 @@ class CollabController(QtCore.QObject):
         debuglog.log('host', 'level saved', level=level, bytes=len(data))
         return True
 
-    def _offerSavedLevel(self, level, data):
+    def _offerSavedLevel(self, level, data, session_id=''):
         """
         Records the saved level as fetchable, then pushes it to every client.
+
+        With `session_id` only that peer is sent the bytes, matching the
+        announcement _publishLevelFile just made. The two must agree: a peer
+        sent chunks it was never told about would refuse them as a file it did
+        not ask for, which aborts whatever else it has running.
 
         Pushed rather than offered-and-waited-for: the client already knows it
         wants this file - it was told so by T_SAVED - and a request round trip
@@ -3362,10 +3541,14 @@ class CollabController(QtCore.QObject):
         skipped = 0
 
         for participant in list(participants or ()):
-            session_id = (participant.get('session_id')
-                          if isinstance(participant, dict)
-                          else getattr(participant, 'session_id', ''))
-            if not session_id:
+            peer = (participant.get('session_id')
+                    if isinstance(participant, dict)
+                    else getattr(participant, 'session_id', ''))
+            if not peer:
+                continue
+
+            # One peer only, when the caller named one.
+            if session_id and str(peer) != str(session_id):
                 continue
 
             # The host is in its own roster and must be skipped: it already has
@@ -3390,12 +3573,12 @@ class CollabController(QtCore.QObject):
             # Per peer, not per session: a second client that is not
             # downloading still gets the file, and the one that is will receive
             # it from the publication that follows its file_done.
-            if str(session_id) in self._transferring_peers:
+            if str(peer) in self._transferring_peers:
                 skipped += 1
                 continue
 
             for chunk in chunks:
-                self._sendToPeer(session_id, protocol.T_FILE_CHUNK, chunk)
+                self._sendToPeer(peer, protocol.T_FILE_CHUNK, chunk)
             sent_to += 1
 
         if skipped:

@@ -50,7 +50,11 @@ class CollabSignals(QtCore.QObject):
     presenceReceived = QtCore.pyqtSignal(dict, str)    # presence payload, sender
     snapshotReceived = QtCore.pyqtSignal(dict)
     levelSaved = QtCore.pyqtSignal(dict)          # the host saved the level
-    snapshotRequested = QtCore.pyqtSignal(str, int)    # session id, area
+    # session id, area, want_file. want_file asks for the level *file* rather
+    # than a rebuilt snapshot - the client's way of saying it is ready to
+    # receive one, which is why the join publication is answered here rather
+    # than pushed at 'join' (Block C - B3, round 2, R2).
+    snapshotRequested = QtCore.pyqtSignal(str, int, bool)
     levelSwitchRequested = QtCore.pyqtSignal(str, int)  # level name, area
 
     # A Full client is *asking* the host to move the session (Block C - B3,
@@ -156,7 +160,8 @@ class CollabBridge(QtCore.QObject):
             # on the main thread - hence a signal rather than a direct call.
             self.signals.snapshotRequested.emit(
                 getattr(participant, 'session_id', ''),
-                int(data.get('area', 1) or 1))
+                int(data.get('area', 1) or 1),
+                bool(data.get('want_file', False)))
 
         elif kind == 'area_switch':
             # A client is *asking*; the host decides (Block C - B3, phase 3d).

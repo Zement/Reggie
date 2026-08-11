@@ -516,7 +516,21 @@ def _v_bye(p):
 
 
 def _v_snapshot_request(p):
-    return {'area': _get_int(p, 'area', minimum=1, maximum=4, required=False, default=1)}
+    """
+    "Send me the level." `want_file` asks for the level *file* rather than a
+    rebuilt snapshot (Block C - B3, round 2, R2).
+
+    Optional and defaulting to False, so an older client asking the old way
+    still gets the old answer. It has to be declared here or it would not
+    survive: every validator rebuilds its payload from scratch, so a field that
+    is not named is deleted in flight - the trap that has now caught 'kind',
+    'assets_only' and 'reason'.
+    """
+    return {
+        'area': _get_int(p, 'area', minimum=1, maximum=4, required=False,
+                         default=1),
+        'want_file': bool(p.get('want_file', False)),
+    }
 
 
 # A full level of items. Mirrors sync.MAX_SNAPSHOT_ITEMS, which is the value

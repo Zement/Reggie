@@ -780,10 +780,13 @@ class HostSession:
 
     def _handle_snapshot_request(self, participant, message):
         # sync.py builds and sends the snapshot; this module only reports the
-        # request so the owner can service it.
+        # request so the owner can service it. `want_file` asks for the level
+        # file instead, which the owner also services - the choice between the
+        # two is the controller's, not this module's.
         self._emit('snapshot_request', {
             'participant': participant,
             'area': message['p'].get('area', 1),
+            'want_file': bool(message['p'].get('want_file', False)),
         })
 
     # -- patch transfer -----------------------------------------------------

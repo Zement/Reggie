@@ -1236,6 +1236,59 @@ def resolve_switch_proposal(parent, nick, destination):
     return 'cancel'
 
 
+def resolve_join_publication(parent, nick):
+    """
+    Asks the host what to do about its unsaved work when someone joins
+    (Block C - B3, round 2, R2). Returns 'save' or 'discard'.
+
+    **There is deliberately no Cancel**, and this is the one place in the
+    feature where a dialog cannot be dismissed without answering. The reason is
+    what the answer decides: the joining client is waiting for a level file, and
+    both answers produce one - Save publishes what the host has now, Discard
+    publishes what is on disk. A third "do nothing" would leave the new peer with
+    no level at all, which is the state R2 exists to remove.
+
+    Zement's first instinct was Save / Discard / Cancel-terminates-session, and
+    on reflection neither of us wanted a session killed by a dialog nobody asked
+    for. Save and Discard both leave everyone consistent, so no third option is
+    needed.
+
+    Escape and the title-bar X both return Rejected from a QMessageBox, so
+    omitting Cancel is not enough on its own - the dialog would still be
+    dismissable into exactly the state that must not happen. Discard is
+    therefore installed as the escape button, and anything unrecognised falls
+    through to it below. Discard is the safe default here precisely because it
+    is not destructive in the usual sense: the host keeps its unsaved work on
+    screen, and only the *published copy* is the on-disk one.
+    """
+    box = QtWidgets.QMessageBox(parent)
+    box.setWindowTitle('Someone joined the session')
+    box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+    box.setText('%s joined, and you have unsaved changes.' % nick)
+    box.setInformativeText(
+        'They need a copy of the level to start from.\n\n'
+        'Save writes your changes and sends everyone that file. Discard sends '
+        'the level as it is on disk instead - your unsaved changes stay open '
+        'here, but the others will not see them until you save.')
+
+    save = box.addButton(QtWidgets.QMessageBox.StandardButton.Save)
+    discard = box.addButton(QtWidgets.QMessageBox.StandardButton.Discard)
+    box.setDefaultButton(save)
+
+    # Escape and the window's close button now mean Discard rather than
+    # "no answer". Without this the dialog returns Rejected and the caller
+    # cannot tell a deliberate Discard from a dismissal.
+    box.setEscapeButton(discard)
+
+    box.exec()
+
+    # Compared by identity, and Save has to be the *positive* test: anything
+    # else - Discard, Escape, the title bar - is a discard. Reading it the other
+    # way round would turn an unexpected result into a save the host never asked
+    # for.
+    return 'save' if box.clickedButton() is save else 'discard'
+
+
 def report_pin_mismatch(parent, message):
     """
     Reports a certificate pin mismatch.
