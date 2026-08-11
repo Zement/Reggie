@@ -1060,6 +1060,31 @@ def _colorSwatch(color, size=12):
 # Prompts
 # ---------------------------------------------------------------------------
 
+def _exec_with_pointer(box):
+    """
+    Shows a modal without inheriting a wait cursor.
+
+    Qt's override cursor is application-wide, so a dialog opened from inside a
+    _BusyIndicator - and every prompt in a session can be, because those waits
+    run processEvents and deliver the message that raises the prompt - shows
+    the hourglass for its whole lifetime. The user is being asked a question
+    while the editor claims to be busy, and the answer is what it is waiting
+    for. Zement reported exactly that on the catalog route: the prompt, and
+    then the Patch Manager, both busy for ten seconds or more (2026-08-11).
+
+    Pushing an arrow on top for the dialog's lifetime is Qt's own idiom for
+    this - the stack is restored exactly as it was, so an outer wait keeps its
+    cursor afterwards. Applied even when nothing is overridden, which is
+    harmless: push and pop are symmetrical either way.
+    """
+    QtWidgets.QApplication.setOverrideCursor(
+        QtCore.Qt.CursorShape.ArrowCursor)
+    try:
+        return box.exec()
+    finally:
+        QtWidgets.QApplication.restoreOverrideCursor()
+
+
 def confirm_catalog_install(parent, patch_id, patch_version=''):
     """
     The consent prompt before installing a patch from the Patch Manager catalog.
@@ -1090,7 +1115,7 @@ def confirm_catalog_install(parent, patch_id, patch_version=''):
                            | QtWidgets.QMessageBox.StandardButton.No)
     box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
 
-    return box.exec() == QtWidgets.QMessageBox.StandardButton.Yes
+    return _exec_with_pointer(box) == QtWidgets.QMessageBox.StandardButton.Yes
 
 
 def report_patch_unavailable(parent, message):
@@ -1107,7 +1132,7 @@ def report_patch_unavailable(parent, message):
     box.setText('You have left the session.')
     box.setInformativeText(message)
     box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
-    box.exec()
+    _exec_with_pointer(box)
 
 
 # report_content_mismatch was here, and is deliberately gone (round 2, R4).
@@ -1166,7 +1191,7 @@ def confirm_large_transfer(parent, total_bytes, file_count):
                   QtWidgets.QMessageBox.ButtonRole.RejectRole)
     box.setDefaultButton(download)
 
-    box.exec()
+    _exec_with_pointer(box)
 
     # Compared by identity rather than by standard button, because both are
     # custom buttons here. Anything other than Download - including the dialog
@@ -1208,7 +1233,7 @@ def resolve_switch_proposal(parent, nick, destination):
                            | QtWidgets.QMessageBox.StandardButton.Cancel)
     box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Cancel)
 
-    answer = box.exec()
+    answer = _exec_with_pointer(box)
 
     if answer == QtWidgets.QMessageBox.StandardButton.Save:
         return 'save'
@@ -1275,7 +1300,7 @@ def resolve_join_publication(parent, nick):
     # cannot tell a deliberate Discard from a dismissal.
     box.setEscapeButton(discard)
 
-    box.exec()
+    _exec_with_pointer(box)
 
     # Compared by identity, and Save has to be the *positive* test: anything
     # else - Discard, Escape, the title bar - is a discard. Reading it the other
@@ -1302,7 +1327,7 @@ def report_pin_mismatch(parent, message):
         '%s\n\nNothing was sent to it. Ask the host for a fresh join code '
         'through a channel you trust, and do not reuse the old one.' % message)
     box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
-    box.exec()
+    _exec_with_pointer(box)
 
 
 def show_join_code(parent, join_code):
@@ -1349,7 +1374,7 @@ def show_join_code(parent, join_code):
     # Copying is what the dialog is for, and it is what the user almost always
     # wants next - dismissing without copying means retyping a long code.
     box.setDefaultButton(copyButton)
-    box.exec()
+    _exec_with_pointer(box)
 
     if box.clickedButton() is copyButton:
         clipboard = QtWidgets.QApplication.clipboard()

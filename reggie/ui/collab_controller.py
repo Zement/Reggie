@@ -3108,7 +3108,20 @@ class CollabController(QtCore.QObject):
             opener = getattr(self.window, 'HandlePatchManager', None)
             if opener is None:
                 raise RuntimeError('the Patch Manager is not available')
-            opener()
+
+            # The Patch Manager is a whole interactive dialog, and it can be
+            # reached from inside a wait loop, whose _BusyIndicator has an
+            # application-wide wait cursor set. Without this the user browses
+            # and downloads a patch with the hourglass on, which reads as a
+            # frozen editor when it is in fact waiting for them (Zement,
+            # 2026-08-11). Restored exactly as it was, so an outer wait keeps
+            # its own cursor afterwards.
+            QtWidgets.QApplication.setOverrideCursor(
+                QtCore.Qt.CursorShape.ArrowCursor)
+            try:
+                opener()
+            finally:
+                QtWidgets.QApplication.restoreOverrideCursor()
         except Exception as exc:
             debuglog.log('client', 'patch manager failed', error=str(exc))
             self._leaveOverPatch(
@@ -4911,10 +4924,18 @@ class CollabController(QtCore.QObject):
         # (kind, path) pairs: the same name can appear in two sections, and
         # authorising on the name alone would let a client fetch one section's
         # file by asking for it as another's.
+        #
+        # The directories go with it, so every chunk is read from where the
+        # manifest was built. Without that, switching the session's patch
+        # mid-transfer redirected the stage and texture sections to the new
+        # game's folders and the host failed to read its own offered file.
         self.host_session.record_manifest(
             session_id, patch_id,
             [(entry.get('kind', files.KIND_PATCH), entry['path'])
-             for entry in entries])
+             for entry in entries],
+            roots={files.KIND_PATCH: directory,
+                   files.KIND_STAGE: stage_dir,
+                   files.KIND_TEXTURE: texture_dir})
 
         # skipped entries are dicts ({'path', 'reason'}), not names.
         skipped = [str(entry.get('path', '')) for entry in
@@ -4970,7 +4991,17 @@ class CollabController(QtCore.QObject):
 
         offered = self.host_session.offered_patch(session_id)
 
-        directory = self._sourceDirectoryForKind(kind, offered)
+        # Served from where the manifest was built, not from wherever the host
+        # points now. The host can switch patch mid-transfer, and the stage and
+        # texture sections used to follow it - so a client downloading Another
+        # Mario Wii while the session moved to retail was told the host could
+        # not read 'Pa1_e3setsugen.arc', and left over it.
+        directory = self.host_session.offered_roots(session_id).get(kind, '')
+
+        if not directory:
+            # No recorded root: an offer from before this was tracked. Fall
+            # back to the old behaviour rather than refusing a live transfer.
+            directory = self._sourceDirectoryForKind(kind, offered)
         if not directory:
             self._refuseTransfer(
                 session_id,

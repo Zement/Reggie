@@ -857,7 +857,7 @@ class HostSession:
         with self._lock:
             return session_id in self._transfers
 
-    def record_manifest(self, session_id, patch_id, paths):
+    def record_manifest(self, session_id, patch_id, paths, roots=None):
         """
         Records what the host is offering a participant, so later file_reqs can
         be checked against it. Called by the owner after it builds a manifest.
@@ -866,6 +866,19 @@ class HostSession:
         as a patch file, which is what every manifest was before Block C - B3.
         Both are normalised to pairs here, so the authorisation check has one
         shape to compare against.
+
+        `roots` is {kind: directory}: where each section was read from when the
+        manifest was built. Recorded with the offer for the same reason the
+        patch id is - the host can switch patch mid-transfer, and serving the
+        rest of a download from wherever it points *now* sends files that do
+        not match the manifest the client is verifying against.
+
+        That was not hypothetical. Zement switched the session to retail while
+        a client was downloading Another Mario Wii, and the stage and texture
+        sections - which read the host's current paths rather than the offer's
+        - started resolving against retail. 'Pa1_e3setsugen.arc' exists only in
+        Another Mario Wii, so the host reported it could not read its own
+        offered file and the client was disconnected over it (2026-08-11).
 
         Replaces any previous offer for that participant: a peer gets one
         transfer at a time, and a second manifest supersedes the first rather
@@ -882,9 +895,22 @@ class HostSession:
             self._transfers[session_id] = {
                 'patch_id': str(patch_id or ''),
                 'paths': offered,
+                'roots': {str(k): str(v) for k, v in (roots or {}).items()},
                 'started': time.monotonic(),
                 'sent': 0,
             }
+
+    def offered_roots(self, session_id):
+        """
+        The directories a participant's offer was built from, as {kind: path}.
+
+        Empty when there is no offer, or when it was recorded without them -
+        the caller falls back to the host's current paths in that case, which
+        is the pre-fix behaviour and correct as long as nothing switched.
+        """
+        with self._lock:
+            state = self._transfers.get(session_id)
+            return dict(state.get('roots') or {}) if state else {}
 
     def clear_transfer(self, session_id):
         with self._lock:
