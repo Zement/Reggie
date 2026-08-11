@@ -397,15 +397,14 @@ class CollabController(QtCore.QObject):
         # still syncs the *new* patch's data.
         self._synced_asset_patches = set()
 
-        # Which patch the catalog consent prompt is currently asking about, or
-        # None. Same hazard as the line above and the same cause: room_info
-        # re-runs the patch check, and this prompt keeps the event loop running
-        # while it waits for an answer, so a second one could ask the same
-        # question again.
+        # Whether a catalog install is queued or running. Same hazard as the
+        # line above and the same cause: room_info re-runs the patch check, and
+        # the install's dialogs keep the event loop running while they wait.
         #
-        # The patch id rather than a bare flag, so a session that needs a
-        # *second* patch can still ask for it - see _installFromCatalog.
-        self._catalog_prompt_patch = None
+        # The install itself is deferred to the event loop rather than run
+        # inside the handler that asked for it - see _installFromCatalog for
+        # why that ordering is the whole problem.
+        self._catalog_install_pending = False
 
         self._connect_signals()
 
@@ -3056,45 +3055,62 @@ class CollabController(QtCore.QObject):
         """
         patch_id = requirement['patch_id']
 
-        # One prompt at a time, for *this* patch.
+        # One install at a time, and never inside the handler that asked for
+        # it. Both halves of that matter, and the second is the one three
+        # earlier attempts missed.
         #
-        # _checkPatch runs on every room_info, and the host republishes that on
-        # every level and area change - so a second one arriving while the
-        # prompt is open re-entered here and asked again. Both dialogs keep the
-        # event loop running, which is exactly what lets the message be
-        # delivered mid-question.
+        # _checkPatch runs from _onRoomInfoChanged, a signal handler. Running
+        # the install there means the prompt, the Patch Manager and the wait
+        # after them all pump the event loop *inside* that handler - so every
+        # message that arrives during the install is delivered nested within
+        # it. That is why the symptoms kept moving as each fix landed: a
+        # publication held by R7 during the install, another room_info, a level
+        # change, all reentering while the outer call sat on a dialog.
         #
-        # The host-transfer route has been immune since it started recording
-        # _transfer_patch (what _patchPending reads); this route had no
-        # equivalent. Zement saw the doubled prompt on a first catalog install
-        # (2026-08-11).
+        # Guarding harder only pushed the problem around. The prompt showed a
+        # wait cursor because the handler that raised it was itself inside a
+        # _BusyIndicator; the held level was not replayed because the replay
+        # ran while the install was still on screen; the second patch was
+        # dropped because the guard could not tell a stale re-entry from a new
+        # request. One cause.
         #
-        # Keyed on the patch id, not a bare flag, and this is the whole point:
-        # the first version guarded the entire install - prompt, Patch Manager
-        # and the wait after it - so a *different* patch requested during that
-        # window was silently dropped. Zement hit that installing MidnightWii
-        # as the second catalog patch of a session: the request vanished, the
-        # client kept the old patch's tilesets, and it sat mismatched until he
-        # finished the install by hand. A dropped install is a worse failure
-        # than a repeated question, so the guard now only refuses the same
-        # question twice.
-        #
-        # Cleared in a finally: a value left set would make the client silently
-        # refuse to ever ask about that patch again.
-        if getattr(self, '_catalog_prompt_patch', None) == patch_id:
-            debuglog.log('client', 'duplicate catalog prompt ignored',
+        # Deferring to the event loop with a zero-timer ends all of it: the
+        # handler returns immediately, the transport thread is unblocked, any
+        # cursor set by a wait is gone, and the install runs on a clean stack
+        # where nothing is nested inside anything.
+        if self._catalog_install_pending:
+            debuglog.log('client', 'catalog install already queued',
                          patch_id=patch_id)
             return
 
-        previous = getattr(self, '_catalog_prompt_patch', None)
-        self._catalog_prompt_patch = patch_id
+        self._catalog_install_pending = True
+        debuglog.log('client', 'catalog install queued', patch_id=patch_id)
+
+        QtCore.QTimer.singleShot(
+            0, lambda: self._startQueuedCatalogInstall(dict(requirement),
+                                                       patch_id))
+
+    def _startQueuedCatalogInstall(self, requirement, patch_id):
+        """
+        Runs the queued install, on a clean stack.
+
+        Reached only from the timer in _installFromCatalog, so nothing here is
+        nested inside a signal handler or a wait loop.
+        """
         try:
+            # The session can have ended, or moved on to another patch, in the
+            # moment between queueing and running. Asking again is cheap and
+            # avoids installing something nobody needs any more.
+            if not self.is_active or self.client is None:
+                return
+
+            if self._patchId() == patch_id:
+                # It arrived by some other route while this was queued.
+                return
+
             self._runCatalogInstall(requirement, patch_id)
         finally:
-            # Restored rather than blanked: this can be re-entered for another
-            # patch, and blanking would release the outer one's guard while it
-            # is still asking.
-            self._catalog_prompt_patch = previous
+            self._catalog_install_pending = False
 
     def _runCatalogInstall(self, requirement, patch_id):
         """
