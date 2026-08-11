@@ -1703,8 +1703,33 @@ class CollabController(QtCore.QObject):
             # Now that the level is open, the fingerprints describe the files
             # this peer is actually looking at. Comparing any earlier would
             # hash whatever it had open before the session moved it.
-            self._checkContentMatches()
-            self._requestResync(force=True)
+            # Distinguished carefully: _checkContentMatches returns True both
+            # for "verified identical" and for "could not verify" (no host
+            # fingerprint, an older host, retail). Those want opposite answers
+            # here - a peer that could not verify must still be sent the items,
+            # or it sits on an empty or stale level forever. So the snapshot is
+            # skipped only on a *positive* verification against a file this peer
+            # actually opened from the host.
+            matches = (self._checkContentMatches()
+                       and bool(self._host_fingerprint)
+                       and self.hasSessionFile())
+
+            # Only ask for the items if this peer might actually be missing
+            # something. Before Fact 3 the snapshot was the *only* way a client
+            # got a level's contents, so resyncing here was unconditional and
+            # correct. It is not any more: when the file this peer just opened
+            # is byte-identical to the host's, the snapshot that comes back
+            # rebuilds a scene it already has - item by item, on the main
+            # thread, which is the two-minute cost the whole feature exists to
+            # avoid. Zement saw exactly this on 2026-08-11: "content matches
+            # the host" immediately followed by a resync and a 729-item
+            # snapshot.
+            #
+            # A mismatch still resyncs, and so does a peer that could not
+            # verify at all: being slow is recoverable, showing a level the
+            # rest of the session is not editing is not.
+            if not matches:
+                self._requestResync(force=True)
 
         return True
 
@@ -3356,10 +3381,10 @@ class CollabController(QtCore.QObject):
         # showing it (Block C - B3, Fact 3). This is the whole point of sending
         # the file: loading it takes seconds where rebuilding the same level
         # from a snapshot takes minutes.
-        self._openPublishedLevel(level, target)
+        self._openPublishedLevel(level, target, expected.get('area', 0))
         return True
 
-    def _openPublishedLevel(self, level, path):
+    def _openPublishedLevel(self, level, path, area=0):
         """
         Opens a level the host just published, when it is the one the session
         is on.
@@ -3381,25 +3406,37 @@ class CollabController(QtCore.QObject):
         if level != self._session_level:
             return False
 
-        if self._areaNumber() != self._session_area:
+        # The announced area wins over the session's own record. On an area
+        # switch the announcement is what carries the *new* area, and
+        # _session_area may not have caught up yet - which is how the client
+        # ended up showing Area 2 while the host was on Area 3.
+        target_area = _clamp_area(area or self._session_area)
+
+        if self._areaNumber() != target_area:
             # Same level, different area: the file is right but the view is not,
-            # so it still needs opening at the session's area.
+            # so it still needs opening at the announced area.
             pass
         elif self.hasSessionFile() and not self._pending_publication:
-            # Already showing this level, and nothing told us it changed.
+            # Already showing this level and area, and nothing told us it
+            # changed.
             return False
 
         # Loaded by full path, not by name: the file we just wrote is the one to
         # open, and resolving the name again could find a different file through
         # a stage path that has not been switched over yet.
-        if not self._loadLevelQuietly(path, True, self._session_area):
+        if not self._loadLevelQuietly(path, True, target_area):
             self._appendStatus(
                 'The host sent %s, but it could not be opened here.' % level)
             return False
 
+        # The session is on the area we just opened. Recorded from the
+        # announcement so a later dirty check or save agrees with the view.
+        self._setSessionLevel(level, target_area)
+
         self._pending_publication = False
         self._appendStatus('Opened %s from the host.' % level)
-        debuglog.log('client', 'opened published level', level=level, path=path)
+        debuglog.log('client', 'opened published level', level=level,
+                     area=target_area, path=path)
 
         # The file is byte-identical to the host's, so there is nothing left to
         # reconcile - which is exactly what makes this fast. A resync here would
@@ -3434,8 +3471,14 @@ class CollabController(QtCore.QObject):
 
         # The bytes arrive as stage-section chunks; this only records what to
         # expect, so the chunk handler can verify and place them.
+        # The announced area is kept, not just the level. T_SAVED has always
+        # carried it and this ignored it, so a publication opened at whatever
+        # _session_area happened to hold - which on an area switch is not yet
+        # the area being switched to. That is the client showing "Area 2" while
+        # the host is on Area 3 (Zement, 2026-08-11).
         self._expected_save = {
             'level': level,
+            'area': _clamp_area((payload or {}).get('area', 1)),
             'sha256': str((payload or {}).get('sha256', '') or ''),
             'size': int((payload or {}).get('size', 0) or 0),
         }

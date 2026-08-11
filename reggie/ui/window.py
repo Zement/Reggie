@@ -1572,12 +1572,21 @@ class ReggieWindow(QtWidgets.QMainWindow):
             return
 
         # In a session, a client asks the host before moving everyone, and the
-        # host's broadcast is what loads it (Block C - B3, phase 3d). The combo
-        # box goes back to where it was either way: on a refusal because we are
-        # staying, and on acceptance because the incoming switch sets it.
+        # host's broadcast is what loads it (Block C - B3, phase 3d).
+        #
+        # The combo box is put back to the area actually loaded, not to old_idx.
+        # Proposing keeps the event loop running, so the host's answer - and the
+        # level load that follows it - can complete *before* this returns.
+        # Stamping old_idx over that would leave the box showing an area the
+        # editor is not on: Zement's client sat on "Area 2" while both peers had
+        # correctly loaded Area 1 (2026-08-11). The scene was right; only the
+        # dropdown lied.
+        #
+        # globals_.Area is re-read rather than reusing old_idx precisely because
+        # it may have changed while we waited.
         if not self._levelio._ProposeCollabSwitch(self._CollabLevelName(),
                                                   idx + 1):
-            self.areaComboBox.setCurrentIndex(old_idx)
+            self._SyncAreaComboBox()
             return
 
         ok = self.LoadLevel(self.fileSavePath, True, idx + 1)
@@ -1585,6 +1594,26 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if not ok:
             # loading the new area failed, so reset the combobox
             self.areaComboBox.setCurrentIndex(old_idx)
+
+    def _SyncAreaComboBox(self):
+        """
+        Puts the area selector back in step with the area actually loaded.
+
+        Read from globals_.Area rather than from a value captured earlier: in a
+        session the area can change while a switch is being resolved, and a
+        captured index would put the box back to where the editor *was* instead
+        of where it is (Block C - B3).
+        """
+        area = getattr(globals_, 'Area', None)
+        number = getattr(area, 'areanum', 0)
+
+        try:
+            index = int(number) - 1
+        except (TypeError, ValueError):
+            return
+
+        if 0 <= index < self.areaComboBox.count():
+            self.areaComboBox.setCurrentIndex(index)
 
     def HandleUpdateLayer0(self, checked):
         """
