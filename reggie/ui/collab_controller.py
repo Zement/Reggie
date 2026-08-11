@@ -347,6 +347,17 @@ class CollabController(QtCore.QObject):
         # arrived at what it is showing.
         self._opened_from_host = False
 
+        # Which game the file we are showing was opened under, as a patch id
+        # ('' is retail, and a real answer). None means nothing from the host
+        # is open.
+        #
+        # The level *name* is not enough to decide "already showing it":
+        # '01-01' exists in every patch, so switching patch while both peers
+        # sit on 01-01 left the client showing the outgoing patch's 01-01 and
+        # reporting it as loaded (R5, found by Zement 2026-08-11). Comparing
+        # the game as well as the name is what tells the two files apart.
+        self._opened_patch = None
+
         # When that wait gives up, as a monotonic timestamp. Held here rather
         # than as a local so an arriving announcement can push it back: the host
         # may be waiting on a Save/Discard dialog, and a person deciding is not
@@ -890,6 +901,7 @@ class CollabController(QtCore.QObject):
         # session ends, so the next session's first publication opens rather
         # than being refused on a name match against a leftover file.
         self._opened_from_host = False
+        self._opened_patch = None
 
         # The session's Stage/Texture override goes with it, so the editor
         # returns to the user's own folders the moment the session ends. This
@@ -4144,10 +4156,23 @@ class CollabController(QtCore.QObject):
             # Save/Discard dialog - the host published on Discard and the client
             # sat on its own copy (2026-08-11).
             pass
+        elif self._opened_patch != self._sessionPatchId():
+            # Same level name, different game. '01-01' exists in every patch,
+            # so the name alone cannot tell the outgoing patch's 01-01 from the
+            # incoming one - and hasSessionFile() compares names only, as its
+            # own docstring says.
+            #
+            # This is R5's automatic switch to 01-01 failing exactly when both
+            # peers were already *on* 01-01: the client concluded it was
+            # already showing the level, reported it loaded, and stayed on the
+            # previous patch's file. Zement pinned the pattern precisely -
+            # switching worked from any other level and failed from 01-01
+            # (2026-08-11).
+            pass
         elif self.hasSessionFile() and not self._pending_publication:
             # Already showing this level and area, and nothing told us it
             # changed. Trustworthy now in a way it is not above: the file we are
-            # showing is one the host sent us.
+            # showing is one the host sent us, under this same game.
             #
             # Acknowledged rather than answered with silence, and this is not a
             # detail: "I already have it" is a *success*, and the host is
@@ -4184,9 +4209,18 @@ class CollabController(QtCore.QObject):
 
         self._pending_publication = False
         self._opened_from_host = True
+
+        # Which game this file belongs to, so the next publication can tell a
+        # genuine "already showing it" from a same-named level in another
+        # patch. Taken from the session rather than the editor: they agree by
+        # the time we get here (R7 defers otherwise), and the session is the
+        # authority on what the file was sent for.
+        self._opened_patch = self._sessionPatchId()
+
         self._appendStatus('Opened %s from the host.' % level)
         debuglog.log('client', 'opened published level', level=level,
-                     area=target_area, path=path)
+                     area=target_area, path=path,
+                     patch=self._opened_patch or 'retail')
 
         # Rebuild the host's references for the level we just opened (R3).
         #

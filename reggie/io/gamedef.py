@@ -1132,8 +1132,21 @@ def LoadGameDef(name=None, dlg=None):
         if dlg: dlg.setLabelText(globals_.trans.string('Gamedefs', 10))  # Reloading tilesets...
 
         LoadObjDescriptions(True)  # reloads ts1_descriptions
-        if globals_.mainWindow is not None:
-            globals_.mainWindow.ReloadTilesets(True)
+
+        # The level still open belongs to the game being unloaded, so its
+        # tilesets are about to be looked up under the *incoming* game's paths.
+        # Whatever is missing there is missing from a level that is on its way
+        # out - R5 replaces it immediately after - so the modal would report a
+        # state the user never sees. Restored in a finally: a suppression left
+        # on would hide a genuine missing tileset for the rest of the run.
+        previous_suppression = globals_.SuppressMissingTilesetWarnings
+        globals_.SuppressMissingTilesetWarnings = True
+        try:
+            if globals_.mainWindow is not None:
+                globals_.mainWindow.ReloadTilesets(True)
+        finally:
+            globals_.SuppressMissingTilesetWarnings = previous_suppression
+
         LoadTilesetNames(True)  # reloads tileset names
         LoadTilesetInfo(True)  # reloads tileset info
 

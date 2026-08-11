@@ -943,8 +943,21 @@ def LoadTileset(idx, name, reload_=False):
 
     # warning if not found
     if not found:
-        QtWidgets.QMessageBox.warning(None, globals_.trans.string('Err_MissingTileset', 0),
-                                      globals_.trans.string('Err_MissingTileset', 1, '[file]', name))
+        # Silent while a patch switch is in flight: the level still open
+        # belongs to the *outgoing* game, and its tilesets are being looked up
+        # under the incoming game's paths. A patch inherits retail as a base,
+        # so its search list is a superset and the lookup happens to succeed -
+        # but retail has no base, so switching *to* retail from a patch warned
+        # about every tileset unique to that patch ('Pa1_TenkyuStone' and
+        # friends). The level is replaced moments later by R5, so the warning
+        # describes a state that never reaches the user (Zement, 2026-08-11).
+        #
+        # Suppressed, not skipped: the tileset genuinely is not there, and the
+        # caller still gets False. Only the modal is withheld, and only for
+        # the one moment when it can be about a level on its way out.
+        if not globals_.SuppressMissingTilesetWarnings:
+            QtWidgets.QMessageBox.warning(None, globals_.trans.string('Err_MissingTileset', 0),
+                                          globals_.trans.string('Err_MissingTileset', 1, '[file]', name))
         return False
 
     # if this file's already loaded, return
