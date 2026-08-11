@@ -4801,10 +4801,16 @@ class CollabController(QtCore.QObject):
         if self.host_session is None:
             return
 
-        offered = self.host_session.offered_patch(session_id)
-        if not offered:
+        # Presence, not contents. A retail offer is a real offer whose patch id
+        # is '', so testing `offered` for truthiness refused every file request
+        # in a retail transfer with "No transfer is in progress" - and the
+        # client leaves over a refusal, correctly, since a refused transfer
+        # means it cannot hold the session's level.
+        if not self.host_session.has_offer(session_id):
             self._refuseTransfer(session_id, 'No transfer is in progress.')
             return
+
+        offered = self.host_session.offered_patch(session_id)
 
         directory = self._sourceDirectoryForKind(kind, offered)
         if not directory:

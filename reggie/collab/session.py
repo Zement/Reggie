@@ -830,10 +830,32 @@ class HostSession:
         match the manifest the client is verifying against, so it would fail on
         a hash mismatch - a corruption error for what is really a stale offer.
         The sender reads from the patch it offered, and the offer is what ends.
+
+        Callers must NOT test this for truthiness to decide whether an offer
+        exists: a retail offer is a real offer whose patch id is '', which is
+        indistinguishable here from "no offer at all". Use has_offer() for that
+        question. See the note there.
         """
         with self._lock:
             state = self._transfers.get(session_id)
             return state['patch_id'] if state else ''
+
+    def has_offer(self, session_id):
+        """
+        Whether a participant has an offer open at all.
+
+        Separate from offered_patch because the two questions stopped having
+        the same answer at R6. A retail session's offer carries patch_id '', so
+        `if not offered_patch(...)` read it as "no transfer is in progress" and
+        refused every file request the client made after the host switched back
+        to retail - which the client, correctly, treats as fatal and leaves
+        over. Zement's live test, 2026-08-11.
+
+        Presence, not contents: an empty patch id is data about the offer, not
+        the absence of one.
+        """
+        with self._lock:
+            return session_id in self._transfers
 
     def record_manifest(self, session_id, patch_id, paths):
         """
