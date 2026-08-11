@@ -340,6 +340,19 @@ class CollabController(QtCore.QObject):
         # host's - two loads, the first of them wrong.
         self._pending_publication = False
 
+        # Whether anything this client is showing came from the host in this
+        # session. Until it has, a same-named level open here is this machine's
+        # own resolution of that name and cannot be assumed to be the host's
+        # file - so the first publication always opens, however the client
+        # arrived at what it is showing.
+        self._opened_from_host = False
+
+        # When that wait gives up, as a monotonic timestamp. Held here rather
+        # than as a local so an arriving announcement can push it back: the host
+        # may be waiting on a Save/Discard dialog, and a person deciding is not
+        # a timeout (round 2, R2).
+        self._publication_deadline = 0.0
+
         # Host side: session ids currently being sent a patch. A publication
         # must not be pushed into the middle of one, because both travel as
         # stage-section chunks on the same connection and the client drops a
@@ -852,6 +865,13 @@ class CollabController(QtCore.QObject):
         self._host_fingerprint = {}
         self._reported_mismatch = ''
         self._expected_save = None
+        self._pending_publication = False
+        self._publication_deadline = 0.0
+
+        # Whatever this editor is showing stops being the host's the moment the
+        # session ends, so the next session's first publication opens rather
+        # than being refused on a name match against a leftover file.
+        self._opened_from_host = False
 
         # The session's Stage/Texture override goes with it, so the editor
         # returns to the user's own folders the moment the session ends. This
@@ -1653,20 +1673,37 @@ class CollabController(QtCore.QObject):
         if self.is_host or not self.is_active:
             return False
 
-        if not self._patchId():
+        if not self._sessionPatchId():
             # No _collab folder to receive it - retail. The local copy is all
             # there is.
+            #
+            # Asked of the session rather than of this editor: at join the
+            # client is still on whatever patch it had open, so _patchId() here
+            # answered for the wrong game and declined a file the session could
+            # perfectly well send (Zement, 2026-08-11).
             return False
 
         self._pending_publication = True
-        deadline = time.monotonic() + self.PUBLICATION_TIMEOUT_SECONDS
+
+        # Reset by _onLevelSaved whenever the host announces a file, which is
+        # what makes the timeout survivable: the host may be sitting on a
+        # Save/Discard dialog with nobody at the keyboard, and that is not a
+        # failure, it is a person deciding. Zement's host took 277 s to answer
+        # one, by which time the client had given up 257 s earlier and ignored
+        # the file when it finally came (2026-08-11).
+        #
+        # The announcement is the honest signal to extend on: the host only
+        # sends it once it has committed to sending the bytes, so it cannot be
+        # used to hold a client indefinitely without actually publishing.
+        self._publication_deadline = (time.monotonic()
+                                      + self.PUBLICATION_TIMEOUT_SECONDS)
         arrived = False
 
         try:
             with _BusyIndicator(self.window,
                                 'Getting %s from the host...' % level):
                 while self._pending_publication:
-                    if time.monotonic() >= deadline:
+                    if time.monotonic() >= self._publication_deadline:
                         debuglog.log('client', 'publication timed out',
                                      level=level)
                         break
@@ -1685,6 +1722,7 @@ class CollabController(QtCore.QObject):
             # Cleared however this ended, so a timed-out wait cannot leave the
             # client believing a publication is still coming.
             self._pending_publication = False
+            self._publication_deadline = 0.0
 
         return arrived
 
@@ -1956,7 +1994,17 @@ class CollabController(QtCore.QObject):
         # The client still cannot *demand* a file: a host on a never-saved
         # level, or a retail session with no session folder to write into, has
         # only the snapshot to give.
-        want_file = bool(level and self._patchId())
+        #
+        # The patch is read from the *session*, not from _patchId(). Those are
+        # different questions and the difference is the whole bug: _patchId()
+        # answers "what is loaded in this editor right now", which at join time
+        # is whatever the user happened to have open - the session's patch is
+        # not loaded until _switchToPatch has run. Asking the local question
+        # made want_file False on every join that did not need a transfer, so
+        # the file path was reached only by the one route that happens to run
+        # after the patch loads (Zement, 2026-08-11: want_file=False on six
+        # consecutive joins).
+        want_file = bool(level and self._sessionPatchId())
 
         debuglog.log('client', 'asking for the session level',
                      level=level or '?', area=int(area), want_file=want_file)
@@ -3750,9 +3798,22 @@ class CollabController(QtCore.QObject):
             # Same level, different area: the file is right but the view is not,
             # so it still needs opening at the announced area.
             pass
+        elif not self._opened_from_host:
+            # Nothing this client is showing came from the host yet, so
+            # whatever it has open under this name is its own resolution of it -
+            # which is precisely the file that can differ (known open 10.1).
+            #
+            # Without this the first publication of a session was dropped
+            # whenever the client happened to have a same-named level open and
+            # the wait had already expired: written to disk, never opened, and
+            # no message either way. Zement hit exactly that after answering a
+            # Save/Discard dialog - the host published on Discard and the client
+            # sat on its own copy (2026-08-11).
+            pass
         elif self.hasSessionFile() and not self._pending_publication:
             # Already showing this level and area, and nothing told us it
-            # changed.
+            # changed. Trustworthy now in a way it is not above: the file we are
+            # showing is one the host sent us.
             return False
 
         # Loaded by full path, not by name: the file we just wrote is the one to
@@ -3768,6 +3829,7 @@ class CollabController(QtCore.QObject):
         self._setSessionLevel(level, target_area)
 
         self._pending_publication = False
+        self._opened_from_host = True
         self._appendStatus('Opened %s from the host.' % level)
         debuglog.log('client', 'opened published level', level=level,
                      area=target_area, path=path)
@@ -3801,6 +3863,14 @@ class CollabController(QtCore.QObject):
             return False
 
         nick = str((payload or {}).get('nick', '') or 'The host')
+
+        # The host has committed to sending this file, so a wait already running
+        # gets its full patience back rather than expiring while the bytes are
+        # in flight. This is what makes a host that spent minutes on a
+        # Save/Discard dialog still able to deliver.
+        if self._pending_publication:
+            self._publication_deadline = (time.monotonic()
+                                          + self.PUBLICATION_TIMEOUT_SECONDS)
 
         # 'the host saved 01-01' for a level change nobody saved is actively
         # misleading - it cost one B3 investigation a wrong diagnosis - so the
@@ -4540,6 +4610,25 @@ class CollabController(QtCore.QObject):
             return ''
 
         return str(getattr(gamedef, 'name', '') or '')
+
+    def _sessionPatchId(self):
+        """
+        The patch the *session* uses, as the host reported it.
+
+        Not the same question as _patchId(), which answers "what is loaded in
+        this editor right now". At join time those routinely differ: the client
+        is on whatever it had open, and the session's patch is not loaded until
+        _switchToPatch has run - or, on the transfer route, until the download
+        finishes. Anything deciding what the session needs must ask this one;
+        anything deciding where a local file goes must ask _patchId().
+
+        Falls back to the loaded patch on the host, which has no room info of
+        its own to read and *is* the authority on what the session uses.
+        """
+        if self.is_host or not self._host_fingerprint:
+            return self._patchId()
+
+        return str(self._host_fingerprint.get('patch_id', '') or '')
 
     @staticmethod
     def _patchVersion():
