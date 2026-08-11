@@ -3103,11 +3103,15 @@ class CollabController(QtCore.QObject):
         Split from _installFromCatalog only so the re-entrancy guard there has
         somewhere to wrap; everything that decides anything is here.
 
-        Not deferred the way a host transfer is, even though this keeps the
-        event loop running: a catalog install sets the patch's Stage and
-        Texture paths itself, so there is no unanswered path question for a
-        level load to run ahead of (Zement, 2026-08-09). Nothing is held back
-        here, and nothing needs replaying afterwards.
+        A level switch is not deferred *by this route*: a catalog install sets
+        the patch's Stage and Texture paths itself, so there is no unanswered
+        path question for a level load to run ahead of (Zement, 2026-08-09).
+
+        That is not the same as nothing being held. R7 holds a publication
+        whenever the editor is still on another game, which it certainly is
+        while this dialog is open - so one can be waiting by the time the
+        install finishes, and it has to be replayed here exactly as
+        _finishTransfer replays its own.
         """
         if not collab_dialogs.confirm_catalog_install(
                 self.window, patch_id, requirement.get('patch_version', '')):
@@ -3163,6 +3167,18 @@ class CollabController(QtCore.QObject):
             # and version on both sides, different level bytes. So this route
             # syncs game data too (round 2, R1).
             self._requestSessionAssets(patch_id)
+
+            # Anything R7 held while the dialog was open. Without this the
+            # publication that arrived mid-install sat until its 20 s timeout
+            # and then reported a content mismatch against the patch that had
+            # just been replaced - which is what Zement saw as "level changes
+            # going on in the background" during a catalog install.
+            #
+            # After _requestSessionAssets, not before: the assets request is
+            # what points the session at the host's game data, and replaying
+            # the level first would open it through the catalog's own copy.
+            if self._deferred_level is not None:
+                self._resumeDeferredLoad()
             return
 
         self._leaveOverPatch(
