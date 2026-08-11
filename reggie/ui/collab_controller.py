@@ -3094,6 +3094,36 @@ class CollabController(QtCore.QObject):
 
     # -- patch transfer, client side ----------------------------------------
 
+    @staticmethod
+    def _transferDestinations(patch_id, entries):
+        """
+        Where each section of a transfer should be installed.
+
+        A root is resolved only for a section the manifest actually carries.
+        That is not an optimisation - it is the difference between a retail
+        session working and not. Retail has no patch id, so patch_directory('')
+        raises 'empty patch id' by design, and resolving all three roots
+        eagerly killed every retail transfer at the manifest with "the host's
+        patch name cannot be used as a folder" - while computing a destination
+        for a patch section that a retail manifest never contains (it is always
+        assets_only) and that commit() would therefore never have asked for.
+
+        commit() already refuses a root that is missing for a section it is
+        holding, so nothing is weakened by resolving lazily: a patch transfer
+        with no patch root still fails, and fails there rather than here.
+        """
+        roots = {
+            files.KIND_STAGE: files.collab_stage_directory,
+            files.KIND_TEXTURE: files.collab_texture_directory,
+            files.KIND_PATCH: files.patch_directory,
+        }
+
+        needed = {str(entry.get('kind', files.KIND_PATCH))
+                  for entry in entries}
+
+        return {kind: resolve(patch_id)
+                for kind, resolve in roots.items() if kind in needed}
+
     def _onManifest(self, payload):
         """
         The host listed what it is offering. Validate it, then start fetching.
@@ -3146,11 +3176,7 @@ class CollabController(QtCore.QObject):
         # session-derived by construction, so overwriting it is always safe,
         # while overwriting the user's own levels never is.
         try:
-            destination = {
-                files.KIND_PATCH: files.patch_directory(patch_id),
-                files.KIND_STAGE: files.collab_stage_directory(patch_id),
-                files.KIND_TEXTURE: files.collab_texture_directory(patch_id),
-            }
+            destination = self._transferDestinations(patch_id, entries)
         except Exception as exc:
             self._failTransfer(
                 'The host\'s patch name cannot be used as a folder: %s' % exc)
@@ -3279,19 +3305,27 @@ class CollabController(QtCore.QObject):
         # Resolved in _onManifest; recomputed only if that somehow did not run,
         # and as the same {kind: root} mapping, because a bare directory would
         # give commit() nowhere to put the levels and tilesets.
-        destination = self._transfer_destination or {
-            files.KIND_PATCH: files.patch_directory(patch_id),
-            files.KIND_STAGE: files.collab_stage_directory(patch_id),
-            files.KIND_TEXTURE: files.collab_texture_directory(patch_id),
-        }
+        #
+        # Rebuilt from what the transfer is holding, for the same reason
+        # _transferDestinations exists: a retail transfer has no patch root to
+        # resolve, and asking for one here would fail the install after every
+        # byte had already arrived and verified.
+        destination = self._transfer_destination or self._transferDestinations(
+            patch_id, [{'kind': kind} for kind, _path in transfer.entries])
+
+        # A retail session has no patch id, and saying "Installing the  patch"
+        # would be both wrong and visibly broken. What arrives is the same
+        # either way - the host's game data - so only the name changes.
+        what = ('the retail game data' if not patch_id
+                else 'the %s patch' % patch_id)
 
         try:
-            with _BusyIndicator(self.window,
-                                'Installing the %s patch...' % patch_id):
+            with _BusyIndicator(self.window, 'Installing %s...' % what):
                 transfer.commit(destination)
         except Exception as exc:
             debuglog.log('client', 'patch commit failed', error=str(exc))
-            self._failTransfer('The patch could not be installed: %s' % exc)
+            self._failTransfer('%s could not be installed: %s'
+                               % (what.capitalize(), exc))
             return
 
         self._clearTransfer()
@@ -3300,7 +3334,7 @@ class CollabController(QtCore.QObject):
             self.client.send(protocol.make_message(
                 protocol.T_FILE_DONE, {'ok': True}))
 
-        self._appendStatus('The %s patch was installed.' % patch_id)
+        self._appendStatus('%s was installed.' % what.capitalize())
 
         # Point the patch at the game data that just arrived, *before*
         # _reloadPatch runs. LoadGameDef asks the user to pick a Stage folder
@@ -3312,11 +3346,17 @@ class CollabController(QtCore.QObject):
         # Said plainly rather than buried, because it is the one thing a
         # transferred patch cannot give the user and they will otherwise
         # report it as a bug: sprites.py is Python and never travels.
-        self._appendStatus(
-            'Note: custom sprite previews are not included in a transferred '
-            'patch. Sprites will still be placed and saved correctly, but '
-            'some will show default images. Install %s normally for full '
-            'previews.' % patch_id)
+        #
+        # Retail is exempt, and not merely for tidiness: retail's sprite
+        # previews are the ones already built into the editor, so nothing is
+        # missing and the warning would send the user looking for a cause that
+        # does not exist.
+        if patch_id:
+            self._appendStatus(
+                'Note: custom sprite previews are not included in a '
+                'transferred patch. Sprites will still be placed and saved '
+                'correctly, but some will show default images. Install %s '
+                'normally for full previews.' % patch_id)
 
         self._reloadPatch(patch_id)
 
