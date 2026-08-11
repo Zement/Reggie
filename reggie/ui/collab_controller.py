@@ -1743,6 +1743,26 @@ class CollabController(QtCore.QObject):
         if self.is_host or not self.is_active:
             return False
 
+        # Never while a patch is being installed.
+        #
+        # This loop runs processEvents with ExcludeUserInputEvents for up to 20
+        # seconds, under a _BusyIndicator - so it shows the hourglass *and*
+        # swallows clicks. Started while the catalog prompt or the Patch
+        # Manager is on screen, it makes the dialog the user is being asked to
+        # answer look frozen, and then times out because they could not answer
+        # it. That is the busy cursor Zement kept seeing on a first catalog
+        # install, and the held level that expired while he was still reading
+        # the prompt (2026-08-11).
+        #
+        # Waiting is pointless here in any case: the file cannot be opened
+        # until the patch it belongs to is loaded, which is what the install is
+        # for. R7 holds the publication and the install replays it afterwards,
+        # so declining now loses nothing.
+        if self._catalog_install_pending or self._patchPending():
+            debuglog.log('client', 'not waiting for the file during an install',
+                         level=level)
+            return False
+
         # Retail is no longer excluded here (R6): it has a session folder of its
         # own under _collab, and the retail gamedef now honours a session path
         # override. Only a host with no level name left to publish under can
@@ -4522,6 +4542,16 @@ class CollabController(QtCore.QObject):
         already closes.
         """
         if not self.is_active or self.is_host:
+            return True
+
+        # Not while a patch is on its way in. Whatever is open belongs to the
+        # game being replaced, so comparing it against the host reports a
+        # mismatch that is real, expected, and about to be resolved by the
+        # install already running - and the resync it asks for fetches a level
+        # this peer still cannot render. Zement saw exactly that during a
+        # catalog install: three tilesets reported as differing, twice, for a
+        # patch that was mid-download (2026-08-11).
+        if self._catalog_install_pending or self._patchPending():
             return True
 
         host = self._host_fingerprint
