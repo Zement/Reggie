@@ -2941,6 +2941,15 @@ class CollabController(QtCore.QObject):
         game. A level switch takes precedence over a bare snapshot request:
         loading the level ends in _afterSessionLoad, which asks for the items
         itself, and doing both would fetch the same area twice.
+
+        A replay that opens nothing keeps the hold. _onLevelSwitchRequested
+        declines when it decides there is nothing to do, and clearing first
+        made that decision permanent: the deferral was consumed, the level was
+        never opened, and the *next* publication had nothing left to trigger a
+        replay - so it was held again and sat out the full 20 s timeout. That
+        is the stall Zement measured switching to Prankster Comets
+        (2026-08-11). Re-armed instead, so the next publication can finish the
+        job.
         """
         level = self._deferred_level
         area = self._deferred_snapshot_area
@@ -2949,7 +2958,10 @@ class CollabController(QtCore.QObject):
         self._deferred_snapshot_area = None
 
         if level is not None:
-            self._onLevelSwitchRequested(level[0], level[1])
+            if self._onLevelSwitchRequested(level[0], level[1]) is False:
+                debuglog.log('client', 'deferred load still not possible',
+                             level=level[0], area=level[1])
+                self._deferred_level = level
             return
 
         if area is not None and self.client is not None:
@@ -2959,6 +2971,23 @@ class CollabController(QtCore.QObject):
             # Stage folder, so the level is there to open, and it is also the
             # client that has already waited longest.
             self._acquireSessionLevel(int(area))
+
+    def _retryDeferredLoad(self):
+        """
+        Tries a held level again, once the stack is clear.
+
+        Queued from the hold in _writeSavedLevel. Does nothing unless the
+        editor has caught up with the session in the meantime, so a publication
+        that arrives while a patch is still loading simply re-arms the hold
+        rather than spinning on it.
+        """
+        if not self.is_active or self._deferred_level is None:
+            return
+
+        if self._patchPending() or not self._sessionGameIsLoaded():
+            return
+
+        self._resumeDeferredLoad()
 
     def _switchToPatch(self, patch_id):
         """
@@ -4226,6 +4255,17 @@ class CollabController(QtCore.QObject):
                          loaded_patch=self._patchId() or '-')
             self._deferred_level = (level, expected.get('area', 0) or 1)
 
+            # The bytes are already on disk, so a publication arriving *after*
+            # the patch finally loads can finish the job itself rather than
+            # waiting for another trigger. Without this a re-armed deferral
+            # could sit indefinitely: the replay declined, the hold was kept,
+            # and nothing else was going to call it.
+            #
+            # Queued rather than run here, for the reason the catalog install
+            # is: this is reached from a signal handler, and opening a level
+            # inside one is what nested every earlier ordering bug.
+            QtCore.QTimer.singleShot(0, self._retryDeferredLoad)
+
             # Answered rather than left silent: the host is waiting for this
             # peer (R3), and a deferral is not a failure to report - it is a
             # "not yet". Reported as not-loaded so the host stops waiting and
@@ -4850,6 +4890,16 @@ class CollabController(QtCore.QObject):
                     loaded = loadNewGameDef(folder)
 
                 if loaded:
+                    # Whatever is on screen now belongs to the game just
+                    # unloaded, so it is no longer "a file the host sent us
+                    # under this game". Leaving _opened_patch stale made
+                    # _sessionGameIsLoaded() answer False after a successful
+                    # switch, and the next publication was held with
+                    # loaded_patch and session_patch already identical - a
+                    # second stall on top of the one below (Zement, the
+                    # Prankster Comets switch, 2026-08-11).
+                    self._opened_patch = None
+
                     self._appendStatus('Switched to %s.' % name)
                     return
 
