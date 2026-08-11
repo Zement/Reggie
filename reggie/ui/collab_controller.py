@@ -1628,7 +1628,22 @@ class CollabController(QtCore.QObject):
         # window must not be told "wherever this editor happens to be".
         self._setSessionLevel(level, area)
 
-        if level == self._currentLevelName() and area == self._areaNumber():
+        # "Already there" needs the game as well as the name. '01-01' exists in
+        # every patch, so a switch that follows a patch change is a real move
+        # even when the name has not changed - the file behind it has.
+        #
+        # This is the same name-only comparison as the "already showing it"
+        # guard (R8), in the other function. It swallowed the deferred load on
+        # the "needs patch and assets" route: the client finished downloading
+        # Prankster Comets, R7's held publication was replayed through here,
+        # and this returned early because Newer's 01-01 was still open - so R5
+        # never fired and the client sat on the old patch's level with
+        # everything else correctly synced (Zement, 2026-08-11).
+        same_game = (self._opened_patch is not None
+                     and self._opened_patch == self._sessionPatchId())
+
+        if (same_game and level == self._currentLevelName()
+                and area == self._areaNumber()):
             return False
 
         if self._patchPending():
@@ -1688,6 +1703,13 @@ class CollabController(QtCore.QObject):
                 'Could not load %s - check that you have the same patch.'
                 % level)
             return False
+
+        # Which game this level was opened under, so the "already there" check
+        # above and the "already showing it" check in _openPublishedLevel agree
+        # about what is on screen. Not the host's file, but it is the session's
+        # level resolved under the session's game, which is what both are
+        # asking about.
+        self._opened_patch = self._sessionPatchId()
 
         return self._afterSessionLoad()
 
