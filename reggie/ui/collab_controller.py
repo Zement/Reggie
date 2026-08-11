@@ -4008,6 +4008,16 @@ class CollabController(QtCore.QObject):
             return False
 
         if level != self._session_level:
+            # A publication for a level the session is not on - the host saved
+            # something else, or we have already moved on. Not opened here, and
+            # answered as a failure rather than a success: the host may be
+            # waiting, and telling it "loaded" about a level this peer is not
+            # showing would be a lie that R3's freeze is built on. Reported as
+            # not-loaded, the host stops waiting and the roster shows the peer
+            # is elsewhere, which is exactly the warn-not-drop outcome.
+            debuglog.log('client', 'publication ignored, session is elsewhere',
+                         level=level, session_level=self._session_level or '-')
+            self._reportLevelLoaded(level, False)
             return False
 
         # The announced area wins over the session's own record. On an area
@@ -4036,6 +4046,18 @@ class CollabController(QtCore.QObject):
             # Already showing this level and area, and nothing told us it
             # changed. Trustworthy now in a way it is not above: the file we are
             # showing is one the host sent us.
+            #
+            # Acknowledged rather than answered with silence, and this is not a
+            # detail: "I already have it" is a *success*, and the host is
+            # blocked waiting to hear it (R3). Returning quietly made every
+            # join publication that followed an earlier one - which is most of
+            # them, since a peer typically gets the level once on the transfer
+            # path and again from the join request - freeze the host for the
+            # full 30 s. Zement saw exactly that twice: the file arrived and was
+            # written, and the host still waited it out (2026-08-11).
+            debuglog.log('client', 'published level already open', level=level,
+                         area=target_area)
+            self._reportLevelLoaded(level, True)
             return False
 
         # Loaded by full path, not by name: the file we just wrote is the one to
@@ -4064,10 +4086,26 @@ class CollabController(QtCore.QObject):
         debuglog.log('client', 'opened published level', level=level,
                      area=target_area, path=path)
 
-        # Tell the host the scene is built, so it can resume (R3). Sent before
-        # the content check, which only reports and can prompt: the host is
-        # blocked on this and must not wait for a dialog on someone else's
-        # machine.
+        # Rebuild the host's references for the level we just opened (R3).
+        #
+        # Without this the file gives us the right items and no way to name
+        # them: references only ever arrived in a snapshot, so the first op
+        # after a file load failed with UnknownRefError and asked for exactly
+        # the snapshot the file exists to replace. That is the "requesting
+        # resync" 141 ms after a *successful* load, on every level change
+        # (Zement, 2026-08-11).
+        #
+        # Sound because the bytes are the host's own, verified against the hash
+        # it announced: the same walk over the same items yields the same
+        # numbers. See RefMap.adopt_from_file for why this is not `seed`.
+        self._adoptHostRefs()
+
+        # Tell the host the scene is built, so it can resume (R3). Sent after
+        # the references are bound, so an op arriving the moment the host
+        # resumes has something to resolve against - releasing first would
+        # reopen the very window this closes. Still before the content check,
+        # which only reports and can prompt: the host is blocked on this and
+        # must not wait for a dialog on someone else's machine.
         self._reportLevelLoaded(level, True)
 
         # The file is byte-identical to the host's, so there is nothing left to
@@ -4075,6 +4113,29 @@ class CollabController(QtCore.QObject):
         # ask for the snapshot this path exists to avoid.
         self._checkContentMatches()
         return True
+
+    def _adoptHostRefs(self):
+        """
+        Client side: rebuilds the host's references for a level opened from the
+        host's own file (R3).
+
+        Guarded rather than allowed to fail. A peer with no references asks for
+        a snapshot on its first edit and recovers; a peer that raised here
+        during a load would be left with a half-built map, which is worse -
+        a wrong reference is applied rather than reported.
+        """
+        if self.is_host or self.refmap is None:
+            return 0
+
+        try:
+            bound = self.refmap.adopt_from_file(getattr(globals_, 'Area', None))
+        except Exception as exc:
+            debuglog.log('client', 'could not adopt the host refs',
+                         error=str(exc))
+            return 0
+
+        debuglog.log('client', 'adopted the host refs', refs=bound)
+        return bound
 
     def _reportLevelLoaded(self, level, ok):
         """

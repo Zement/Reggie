@@ -189,6 +189,78 @@ class RefMap:
 
         return count
 
+    def adopt_from_file(self, area, host_origin='host'):
+        """
+        Rebuilds the host's references for an area both peers loaded from the
+        *same file* (Block C - B3, round 2, R3).
+
+        Returns the number of references bound.
+
+        This is what makes file-first complete. Opening the host's level file
+        gives a client the right items and no way to name them: references
+        arrived only in a snapshot, so the first op after a file load failed
+        with UnknownRefError and asked for exactly the snapshot the file was
+        meant to replace. Zement's log shows it as "requesting resync" 141 ms
+        after a successful load, on every level change (2026-08-11).
+
+        **Why this is sound, and why it is not `seed` on a client.** A
+        reference is `origin:counter`, and the counter is assigned by walking
+        `_snapshot_groups(area)` in a fixed order. The host minted its
+        references by that walk over *its* area; the client walks the same
+        order over an area built from byte-identical bytes, so the nth item here
+        is the nth item there and gets the same number. Nothing is invented and
+        nothing is renumbered - it reconstructs names the host has already
+        assigned, which is the opposite of `seed`'s danger.
+
+        The origin is the *host's*, not this peer's, for the same reason: these
+        are the host's references, and minting them under a client origin would
+        produce names the host has never heard of.
+
+        The safety of the whole thing rests on "the same file", so callers must
+        only use it after opening a file the host published. A client that
+        opened its own copy of a same-named level would bind confident,
+        completely wrong references - worse than having none, because a bad
+        reference is applied rather than reported. `_openPublishedLevel` is the
+        one caller, and it runs only on bytes verified against the host's hash.
+        """
+        if area is None:
+            return 0
+
+        origin = str(host_origin or 'host')
+        count = 0
+
+        with self._lock:
+            # Reset rather than merged. A stale reference from the level this
+            # peer is leaving would survive and shadow the new binding, which is
+            # the mis-bound-ref failure that is far harder to notice than a
+            # missing one.
+            self._by_ref = {}
+            self._by_item = {}
+
+            counter = 0
+            for group in _snapshot_groups(area):
+                for item in group:
+                    # Skipped *without* incrementing, exactly as seed() does:
+                    # it calls mint() only for non-None items, and mint()
+                    # increments per call. Counting an empty slot here would
+                    # shift every later reference by one and rebind the whole
+                    # area to the wrong items - confidently, and therefore
+                    # silently. The two walks have to agree number for number.
+                    if item is None:
+                        continue
+
+                    counter += 1
+                    ref = '%s:%d' % (origin, counter)
+                    self._by_ref[ref] = item
+                    self._by_item[id(item)] = ref
+                    count += 1
+
+            # Anything this peer mints from now on must not collide with a
+            # reference the host has already used.
+            self._counter = max(self._counter, counter)
+
+        return count
+
     def bind(self, ref, item):
         """
         Records a host-assigned reference. Used by clients applying a snapshot or
