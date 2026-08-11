@@ -347,6 +347,20 @@ class CollabController(QtCore.QObject):
         # sent, emptied when the client reports the transfer done or failed.
         self._transferring_peers = set()
 
+        # Client side: patch ids whose game data has already been fetched this
+        # session, so the assets sync happens once per patch rather than once
+        # per room_info (Block C - B3, round 2, R1).
+        #
+        # room_info is republished on every level and area change - it carries
+        # the level name and the content fingerprints - which re-runs the patch
+        # check. Without this, that re-ran the whole Stage/Texture download on
+        # every switch: Zement saw a full re-download per level change on
+        # 2026-08-11, for a patch the client already had complete.
+        #
+        # Keyed on the patch id, not a plain flag, so a mid-session patch switch
+        # still syncs the *new* patch's data.
+        self._synced_asset_patches = set()
+
         self._connect_signals()
 
     # -- signal wiring ------------------------------------------------------
@@ -780,6 +794,11 @@ class CollabController(QtCore.QObject):
         # without this the set keeps an id that will never be discarded and the
         # host stays silent about level changes for the rest of the session.
         self._transferring_peers.clear()
+
+        # Per session, not per install: the next session may be with a different
+        # host whose Stage folder differs, so what was synced last time proves
+        # nothing about this time.
+        self._synced_asset_patches.clear()
 
         self._stopPresence()
 
@@ -2735,11 +2754,23 @@ class CollabController(QtCore.QObject):
         if not patch_id:
             return False
 
+        if patch_id in self._synced_asset_patches:
+            # Already have this patch's game data from earlier in the session.
+            # room_info is republished on every level and area change, so
+            # without this check the whole Stage and Texture folder was fetched
+            # again on every switch.
+            return False
+
         if self._transfer is not None or self._transfer_patch:
             # One at a time. A transfer already running will deliver the same
             # files; asking again would interleave two manifests.
             return False
 
+        # Recorded before the request, not after it completes. A transfer takes
+        # seconds and room_info can arrive again inside that window - which is
+        # exactly the repeat this prevents. A failed transfer clears it again,
+        # so a genuine retry is still possible.
+        self._synced_asset_patches.add(patch_id)
         self._transfer_patch = patch_id
         self._appendStatus(
             'Getting the session\'s levels and tilesets from the host...')
@@ -3776,6 +3807,10 @@ class CollabController(QtCore.QObject):
         _onTransferFinished armed, so a later unrelated file_done from the host
         would tear down a session that had finished downloading long ago.
         """
+        # Captured before the fields are reset, so an abort can un-record the
+        # assets sync for the patch it was actually fetching.
+        patch = self._transfer_patch
+
         if abort and self._transfer is not None:
             try:
                 self._transfer.abort()
@@ -3798,6 +3833,12 @@ class CollabController(QtCore.QObject):
             # left behind would be replayed into the *next* session.
             self._deferred_level = None
             self._deferred_snapshot_area = None
+
+            # The assets sync is recorded before the transfer starts, so an
+            # abort has to un-record it - otherwise a transfer that failed once
+            # would be treated as done for the rest of the session and the
+            # client would keep the files it was trying to replace.
+            self._synced_asset_patches.discard(patch)
 
     def _failTransfer(self, message):
         """
