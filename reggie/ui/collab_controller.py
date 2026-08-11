@@ -3158,15 +3158,11 @@ class CollabController(QtCore.QObject):
         if not self.is_active or not self.is_host or self.server is None:
             return False
 
-        # Not while a patch transfer is running. Both travel as stage-section
-        # chunks on the same connection, and a client mid-transfer drops a
-        # publication rather than mixing the two streams - so sending one now is
-        # bandwidth spent on bytes that will be discarded, in the middle of the
-        # transfer competing for that bandwidth.
-        if self._transferInProgress():
-            debuglog.log('host', 'publication deferred, transfer running')
-            return False
-
+        # Peers that are mid-transfer are skipped individually below, rather
+        # than the whole publication being abandoned. Blocking it session-wide
+        # was the first fix and it was too coarse: with two clients, one
+        # downloading and one not, the second would be left on a stale level
+        # for as long as the first was busy.
         level = self._currentLevelName()
         if not level:
             # Never saved, so there is no name for a peer to resolve and no file
@@ -3188,6 +3184,12 @@ class CollabController(QtCore.QObject):
         message = protocol.make_message(protocol.T_SAVED, payload)
         sent = 0
         for connection in self.server.authenticated_connections():
+            # Same rule as the save path: a peer mid-transfer is neither told
+            # nor sent the file, and receives it when its download finishes.
+            if str(getattr(connection, 'session_id', '')) in \
+                    self._transferring_peers:
+                continue
+
             connection.send(message)
             sent += 1
 
@@ -3228,13 +3230,10 @@ class CollabController(QtCore.QObject):
 
         self._transferring_peers.discard(str(session_id))
 
-        if self._transferInProgress():
-            # Another peer is still receiving; publishing now would land in the
-            # middle of that one instead.
-            return False
-
-        debuglog.log('host', 'peer transfer finished', ok=ok,
-                     publishing=True)
+        # Published unconditionally now. Any peer still downloading is skipped
+        # individually inside the publication, so another client's transfer is
+        # no longer a reason to leave *this* one on a stale level.
+        debuglog.log('host', 'peer transfer finished', ok=ok, publishing=True)
         return self._publishLevelFile()
 
     def _serialiseLevel(self):
@@ -3299,6 +3298,14 @@ class CollabController(QtCore.QObject):
         message = protocol.make_message(protocol.T_SAVED, payload)
         sent = 0
         for connection in self.server.authenticated_connections():
+            # Not announced to a peer that is mid-transfer: the bytes are held
+            # back for it too (see _offerSavedLevel), and announcing a file that
+            # will not arrive leaves that client waiting for chunks it will
+            # never be sent.
+            if str(getattr(connection, 'session_id', '')) in \
+                    self._transferring_peers:
+                continue
+
             connection.send(message)
             sent += 1
 
@@ -3350,6 +3357,8 @@ class CollabController(QtCore.QObject):
         chunks = [dict(chunk, kind=files.KIND_STAGE)
                   for chunk in files.chunks_from_bytes(name, data)]
 
+        skipped = 0
+
         for participant in list(participants or ()):
             session_id = (participant.get('session_id')
                           if isinstance(participant, dict)
@@ -3365,9 +3374,31 @@ class CollabController(QtCore.QObject):
             if is_host:
                 continue
 
+            # Never into the middle of that peer's patch transfer. Both travel
+            # as stage-section chunks on one connection, so these would enter
+            # the client's TransferSession and be refused as a file it never
+            # asked for - which aborts the whole download.
+            #
+            # Checked here rather than only in _publishLevelFile because an
+            # ordinary host *Save* reaches this too, and that path had no
+            # transfer check at all: saving while a client was downloading
+            # killed the download with "the host sent 'bga/0104.png' again
+            # after it was complete" (Zement, 2026-08-11).
+            #
+            # Per peer, not per session: a second client that is not
+            # downloading still gets the file, and the one that is will receive
+            # it from the publication that follows its file_done.
+            if str(session_id) in self._transferring_peers:
+                skipped += 1
+                continue
+
             for chunk in chunks:
                 self._sendToPeer(session_id, protocol.T_FILE_CHUNK, chunk)
             sent_to += 1
+
+        if skipped:
+            debuglog.log('host', 'level file held back during transfer',
+                         level=level, peers=skipped)
 
         debuglog.log('host', 'level file sent', level=level, peers=sent_to,
                      chunks=len(chunks), bytes=len(data))
