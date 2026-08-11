@@ -3726,9 +3726,24 @@ class CollabController(QtCore.QObject):
             # its own cursor afterwards.
             QtWidgets.QApplication.setOverrideCursor(
                 QtCore.Qt.CursorShape.ArrowCursor)
+
+            # Tell the others what this peer is doing, for as long as the dialog
+            # is up (Block C - B3, presence). This is the longest a session ever
+            # waits on one participant - it is bounded by how quickly a person
+            # reads a dialog and picks a patch, not by any transfer - and
+            # without it the host sees a peer that has simply stopped
+            # responding. Zement asked for exactly this case.
+            #
+            # Blocking rather than background: everyone else is genuinely held
+            # up, and R7 is holding publications for this peer the whole time.
+            self._setLocalBusy(protocol.BUSY_LOADING,
+                               'in the Patch Manager, installing %s' % patch_id)
+            self._watchPatchManagerProgress()
             try:
                 opener()
             finally:
+                self._unwatchPatchManagerProgress()
+                self._clearLocalBusy()
                 QtWidgets.QApplication.restoreOverrideCursor()
         except Exception as exc:
             debuglog.log('client', 'patch manager failed', error=str(exc))
@@ -4022,6 +4037,60 @@ class CollabController(QtCore.QObject):
                 int(100.0 * max(0, done) / total))
 
         self._requestNextFile()
+
+    def _watchPatchManagerProgress(self):
+        """
+        Relays the Patch Manager's download percentage to the other peers.
+
+        The dialog reports progress for its own status label already; this hangs
+        a second listener on the same point rather than adding a mechanism. The
+        Patch Manager itself learns nothing about collaboration - it calls
+        whatever has been left in its class attribute, or nothing at all.
+        """
+        try:
+            from reggie.patches.patch_manager_dialog import PatchManagerDialog
+        except Exception as exc:
+            debuglog.log('client', 'patch manager progress unavailable',
+                         error=str(exc))
+            return
+
+        standing = ('in the Patch Manager, installing %s'
+                    % (self._sessionPatchId() or 'a patch'))
+
+        def observe(patch_name, percent):
+            if percent is None:
+                # The download ended, but the dialog has not. Back to the
+                # standing line rather than to idle: this peer is still holding
+                # everyone up, and "finished downloading" is not "finished".
+                self._setLocalBusy(protocol.BUSY_LOADING, standing)
+                return
+
+            try:
+                percent = int(percent)
+            except (TypeError, ValueError):
+                percent = -1
+
+            self._setLocalBusy(protocol.BUSY_LOADING,
+                               'downloading %s from the catalog'
+                               % (patch_name or 'a patch'),
+                               percent)
+
+        PatchManagerDialog.progress_observer = observe
+
+    def _unwatchPatchManagerProgress(self):
+        """
+        Stops relaying, whatever happened to the dialog.
+
+        Cleared unconditionally and from a finally: the observer is a class
+        attribute, so one left behind would outlive the session and fire into a
+        controller whose session had ended.
+        """
+        try:
+            from reggie.patches.patch_manager_dialog import PatchManagerDialog
+
+            PatchManagerDialog.progress_observer = None
+        except Exception:
+            pass
 
     def _downloadDescription(self):
         """

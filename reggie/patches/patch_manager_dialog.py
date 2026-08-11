@@ -18,7 +18,22 @@ class PatchManagerDialog(QtWidgets.QDialog):
     """
     Dialog for managing game patches and their folder paths
     """
-    
+
+    # Told what this dialog is doing, so a collaboration session can show the
+    # other participants that this peer is downloading a patch and how far it
+    # has got (Block C - B3, presence).
+    #
+    # A plain class attribute rather than a signal, and set by the collab
+    # controller rather than read from it: the Patch Manager knows nothing
+    # about collaboration and must not start to. It is called with a percentage
+    # while a download runs and with None when one ends, and anything it raises
+    # is swallowed at the call site - a status display must never be able to
+    # break an install.
+    #
+    # Class-level because the dialog is constructed inside HandlePatchManager
+    # and never handed back, so there is no instance to attach to from outside.
+    progress_observer = None
+
     def __init__(self):
         QtWidgets.QDialog.__init__(self)
         self.setWindowTitle('Patch Manager')
@@ -1999,6 +2014,8 @@ class PatchManagerDialog(QtWidgets.QDialog):
         # Update status label (always visible)
         patch_name = getattr(self, 'active_download_patch_name', 'Patch')
         self.downloadStatusLabel.setText(f"📥 Downloading {patch_name}... {percent}%")
+
+        self._notify_progress(patch_name, percent)
         
         # Also update button if it still exists
         if self.active_download_button:
@@ -2010,10 +2027,33 @@ class PatchManagerDialog(QtWidgets.QDialog):
                 # Button was deleted, clear reference
                 self.active_download_button = None
     
+    def _notify_progress(self, patch_name, percent):
+        """
+        Tells the observer, if anything is listening (Block C - B3, presence).
+
+        `percent` is None when a download ends. Never fatal: the observer is a
+        status display on another machine, and a failure there must not disturb
+        an install running here.
+        """
+        observer = PatchManagerDialog.progress_observer
+        if observer is None:
+            return
+
+        try:
+            observer(patch_name, percent)
+        except Exception:
+            pass
+
     def _reset_download_button(self):
         """Reset the download button to its original text"""
         # Clear status label
         self.downloadStatusLabel.setText('')
+
+        # Whatever ended the download - finished, failed, cancelled - passes
+        # through here, which makes it the one place that can guarantee the
+        # other participants stop seeing a download in progress.
+        self._notify_progress(
+            getattr(self, 'active_download_patch_name', ''), None)
         
         # Reset button if it exists
         if self.active_download_button and hasattr(self, 'original_button_text'):
