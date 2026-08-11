@@ -3388,6 +3388,13 @@ class CollabController(QtCore.QObject):
             'reason': 'publish',
         }
 
+        # Whether a peer can be expected to answer this at all. A retail session
+        # has no _collab folder, so a client refuses the file rather than
+        # opening it, and there is nothing to acknowledge. The file is still
+        # sent - a client that gains somewhere to put it should have it - but
+        # the host does not block on a reply that cannot come.
+        awaits_ack = bool(self._patchId())
+
         message = protocol.make_message(protocol.T_SAVED, payload)
         sent = 0
         for connection in self.server.authenticated_connections():
@@ -3409,8 +3416,19 @@ class CollabController(QtCore.QObject):
             # answers unusually fast is already known to be one we are waiting
             # for - the same ordering trap that let a duplicate patch_need
             # through twice.
-            self._loading_peers[peer] = (
-                str(getattr(connection, 'nick', '') or '') or peer)
+            #
+            # Not on retail, where the client has nowhere to write the file and
+            # so declines it - a wait armed there can only ever end in the
+            # timeout. That is the 30 s lock after every level and area change
+            # on a retail session (Zement, 2026-08-11): two publications, two
+            # full timeouts, and the moment the session moved to a patch every
+            # publication was answered in under a second.
+            #
+            # R6 makes retail able to receive these, at which point this
+            # condition stops excluding anything.
+            if awaits_ack:
+                self._loading_peers[peer] = (
+                    str(getattr(connection, 'nick', '') or '') or peer)
 
         if not sent:
             # Nobody to send to. Reported as "not published" so a later join
@@ -3953,6 +3971,17 @@ class CollabController(QtCore.QObject):
                 'The host saved %s. It was not copied here, because this '
                 'session uses the retail game and there is no session folder '
                 'to write into.' % level)
+
+            # Answered rather than dropped in silence. The host may be waiting
+            # for this peer to report the level open, and declining is still an
+            # answer - reported as a failure, because this peer genuinely does
+            # not have the host's file. The host stops waiting either way.
+            #
+            # The host also avoids arming that wait on retail, so this is the
+            # second of two guards; it covers a host that has not been updated.
+            # Both exist because the failure mode is a 30-second freeze on
+            # every level change (Zement, 2026-08-11).
+            self._reportLevelLoaded(level, False)
             return False
 
         try:
