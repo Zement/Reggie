@@ -1,0 +1,38 @@
+# Metadata only - Reggie! Next is not distributed as a Python package.
+#
+# It ships as a PyInstaller bundle (see build_reggie.py and the GitHub Actions
+# workflow), so there is deliberately no [build-system] table here: adding one
+# would advertise a `pip install` that is not supported and has never been
+# tested. What this file is for is stating the things that were previously only
+# implied - the supported Python range and the dependencies - somewhere both
+# people and tools can read them.
+
+[project]
+name = "reggie-next"
+description = "A level editor for New Super Mario Bros. Wii"
+readme = "readme.md"
+license = { file = "license.txt" }
+requires-python = ">=3.9"
+
+# 3.9 is a real floor, not a guess: str.removesuffix() (reggie/io/misc.py) was
+# added in 3.9, and on 3.8 it fails at runtime when a level is opened rather
+# than at startup. The syntax itself is compatible much further back, so this
+# is the only thing standing in the way of 3.8 should anyone ever need it.
+#
+# Enforced at startup in reggie/app.py; keep the two in step.
+#
+# Tested on 3.13, which is what CI builds and what development happens on.
+# 3.9 to 3.12 should work and are unverified - nothing exercises them.
+
+dependencies = [
+    "PyQt6",
+]
+
+[project.optional-dependencies]
+# Optional C extension for faster tileset decompression. The editor falls back
+# to a pure-Python implementation when it is absent, so this is a speed
+# dependency rather than a functional one.
+fast = ["nsmblib"]
+
+[project.urls]
+Homepage = "https://github.com/Zement/Reggie"

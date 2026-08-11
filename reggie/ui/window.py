@@ -30,15 +30,11 @@
 ################################################################
 ################################################################
 
-# Python version: sanity check
-minimum = (3, 5)
+# The version check lives in app.py, which is the entry point: nothing can
+# reach this module without having passed it. A second copy here claimed 3.5,
+# which was both stale and unreachable - and a wrong number in the tree is
+# worse than no number, because it is the one people read.
 import sys
-
-if sys.version_info < minimum:
-    errormsg = 'Please update your copy of Python to ' + '.'.join(map(str, minimum)) + \
-               ' or greater. Currently running on: ' + sys.version[:5]
-
-    raise Exception(errormsg)
 
 # Stdlib imports
 import os.path
