@@ -2048,8 +2048,40 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # are false in the case he reported. crash.log will say whether it
         # recurs.
         self._StopBackgroundTimers()
+        self._StopCollaboration()
 
         event.accept()
+
+    def _StopCollaboration(self):
+        """
+        Ends a running session before the window is destroyed.
+
+        Nothing did this before: the controller is created lazily and then
+        simply kept, so a session's server, client and reader threads outlived
+        closeEvent. Those threads deliver into the controller, which holds this
+        window - so a message arriving during teardown reaches widgets whose
+        C++ halves are being freed, and on Windows that is an access violation
+        with no Python traceback.
+
+        It also matches what the peers see: leaving sends a proper goodbye
+        instead of dropping the connection, so the other side reports a
+        participant who left rather than one who vanished.
+
+        Best-effort and never fatal. Closing the editor has to succeed whatever
+        state the session is in - a failure here would otherwise trap the user
+        in a window they cannot close.
+        """
+        collab = getattr(self, '_collab', None)
+        if collab is None:
+            return
+
+        try:
+            if collab.is_active:
+                collab.leave()
+        except Exception:
+            # Deliberately broad: this runs while the application is going
+            # away, and no session fault is worth blocking that.
+            pass
 
     def _StopBackgroundTimers(self):
         """

@@ -397,11 +397,15 @@ class CollabController(QtCore.QObject):
         # still syncs the *new* patch's data.
         self._synced_asset_patches = set()
 
-        # Whether the catalog consent prompt is already on screen. Same hazard
-        # as the line above and the same cause: room_info re-runs the patch
-        # check, and this prompt keeps the event loop running while it waits
-        # for an answer, so a second one could ask the same question again.
-        self._catalog_prompt_open = False
+        # Which patch the catalog consent prompt is currently asking about, or
+        # None. Same hazard as the line above and the same cause: room_info
+        # re-runs the patch check, and this prompt keeps the event loop running
+        # while it waits for an answer, so a second one could ask the same
+        # question again.
+        #
+        # The patch id rather than a bare flag, so a session that needs a
+        # *second* patch can still ask for it - see _installFromCatalog.
+        self._catalog_prompt_patch = None
 
         self._connect_signals()
 
@@ -3052,7 +3056,7 @@ class CollabController(QtCore.QObject):
         """
         patch_id = requirement['patch_id']
 
-        # One prompt at a time.
+        # One prompt at a time, for *this* patch.
         #
         # _checkPatch runs on every room_info, and the host republishes that on
         # every level and area change - so a second one arriving while the
@@ -3062,24 +3066,35 @@ class CollabController(QtCore.QObject):
         #
         # The host-transfer route has been immune since it started recording
         # _transfer_patch (what _patchPending reads); this route had no
-        # equivalent, as the note above says. Zement saw the doubled prompt on
-        # a first catalog install (2026-08-11).
+        # equivalent. Zement saw the doubled prompt on a first catalog install
+        # (2026-08-11).
         #
-        # Cleared in a finally: a flag left set would make the client silently
-        # refuse to ever ask again, which is worse than asking twice.
-        if getattr(self, '_catalog_prompt_open', False):
+        # Keyed on the patch id, not a bare flag, and this is the whole point:
+        # the first version guarded the entire install - prompt, Patch Manager
+        # and the wait after it - so a *different* patch requested during that
+        # window was silently dropped. Zement hit that installing MidnightWii
+        # as the second catalog patch of a session: the request vanished, the
+        # client kept the old patch's tilesets, and it sat mismatched until he
+        # finished the install by hand. A dropped install is a worse failure
+        # than a repeated question, so the guard now only refuses the same
+        # question twice.
+        #
+        # Cleared in a finally: a value left set would make the client silently
+        # refuse to ever ask about that patch again.
+        if getattr(self, '_catalog_prompt_patch', None) == patch_id:
             debuglog.log('client', 'duplicate catalog prompt ignored',
                          patch_id=patch_id)
             return
 
-        self._catalog_prompt_open = True
+        previous = getattr(self, '_catalog_prompt_patch', None)
+        self._catalog_prompt_patch = patch_id
         try:
             self._runCatalogInstall(requirement, patch_id)
         finally:
-            # Cleared however this ends, including on an exception: a flag left
-            # set would make the client silently refuse to ever ask again,
-            # which is a worse failure than asking twice.
-            self._catalog_prompt_open = False
+            # Restored rather than blanked: this can be re-entered for another
+            # patch, and blanking would release the outer one's guard while it
+            # is still asking.
+            self._catalog_prompt_patch = previous
 
     def _runCatalogInstall(self, requirement, patch_id):
         """
