@@ -786,7 +786,13 @@ class ReggieGameDefinition:
         session = self._sessionPath(1)
 
         if not self.custom:
-            paths = [setting('TextureGamePath')]
+            # Same rule as below: an unset path would truncate the search in
+            # tiles.py rather than simply contributing nothing, and a retail
+            # session appends after it.
+            paths = []
+            base_path = setting('TextureGamePath')
+            if base_path:
+                paths.append(base_path)
             if session:
                 paths.append(session)
             return paths
@@ -796,9 +802,33 @@ class ReggieGameDefinition:
         if self.base is not None:
             paths = self.base.GetTexturePaths()
         else:
-            paths = [setting('TextureGamePath')]
+            # Same rule again: seeding the list with an unset retail path puts
+            # a None at the front, and anything appended after it is then
+            # unreachable.
+            retail_path = setting('TextureGamePath')
+            paths = [retail_path] if retail_path else []
 
-        paths.append(stg)
+        # Only if it is actually set.
+        #
+        # tiles.py searches this list in reverse and stops dead at the first
+        # None ("if path is None: break"), so an unset entry does not merely
+        # contribute nothing - it truncates the search. That was harmless while
+        # the unset entry could only be last; appending a session path after it
+        # (R6) put it in the middle, and every patch built on another patch
+        # broke: Another Mario Wii declares base="Newer Super Mario Bros. Wii",
+        # the client had no TextureGamePath_Newer... key, and the resulting
+        # None hid retail's folder behind it. Every tileset the patch inherits
+        # rather than ships - Pa1_nohara, Pa2_doukutu, Pa3_rail - was reported
+        # missing, while Pa0_jyotyu, which the patch does ship, loaded fine
+        # (Zement, 2026-08-11).
+        #
+        # Dropping it is right rather than keeping a placeholder: the list is a
+        # search path, and a directory nobody configured is not a place to
+        # look. The break in tiles.py is left alone - it is load-bearing for
+        # callers that pass an explicit None - but nothing here feeds it one
+        # any more.
+        if stg:
+            paths.append(stg)
 
         # After the patch's own path, so a session copy shadows it rather than
         # being shadowed by it.
