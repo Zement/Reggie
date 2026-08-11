@@ -947,6 +947,22 @@ class HostSession:
         payload = message['p']
         ok = bool(payload.get('ok', True))
         error = str(payload.get('error', '') or '')
+        level = str(payload.get('level', '') or '')
+
+        if level:
+            # A published level was loaded, not a patch downloaded (R3). The
+            # peer has no transfer to clear, and clearing one anyway would
+            # release an authorisation it is still fetching against - the same
+            # class of bug as the duplicate patch_need.
+            debuglog.log('host', 'level loaded', nick=participant.nick,
+                         level=level, ok=ok)
+            self._emit('level_loaded', {
+                'participant': participant,
+                'level': level,
+                'ok': ok,
+                'error': error,
+            })
+            return
 
         self.clear_transfer(participant.session_id)
         debuglog.log('host', 'file_done', nick=participant.nick, ok=ok,

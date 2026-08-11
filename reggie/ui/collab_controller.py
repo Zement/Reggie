@@ -353,6 +353,18 @@ class CollabController(QtCore.QObject):
         # a timeout (round 2, R2).
         self._publication_deadline = 0.0
 
+        # Host side: session ids that have been sent a level and have not yet
+        # reported it open (R3). While this is non-empty the host is waiting,
+        # and its own edits are held rather than broadcast - a peer whose scene
+        # is still being built cannot apply an op against it, which is what
+        # produced "requesting resync" 141 ms after a successful load.
+        self._loading_peers = {}
+
+        # Host side: session ids that were skipped by a broadcast while they
+        # were loading, so they are missing edits the published file does not
+        # contain. Republished to when they report the level open (R3).
+        self._stale_peers = set()
+
         # Host side: session ids currently being sent a patch. A publication
         # must not be pushed into the middle of one, because both travel as
         # stage-section chunks on the same connection and the client drops a
@@ -402,6 +414,7 @@ class CollabController(QtCore.QObject):
         self.signals.levelSaved.connect(self._onLevelSaved)
         self.signals.transferFinished.connect(self._onTransferFinished)
         self.signals.peerTransferFinished.connect(self._onPeerTransferFinished)
+        self.signals.peerLevelLoaded.connect(self._onPeerLevelLoaded)
 
     @property
     def is_active(self):
@@ -867,6 +880,11 @@ class CollabController(QtCore.QObject):
         self._expected_save = None
         self._pending_publication = False
         self._publication_deadline = 0.0
+
+        # Nobody is being waited for once the session is over. Left set, the
+        # next session's first edit would freeze for peers of the last one.
+        self._loading_peers = {}
+        self._stale_peers = set()
 
         # Whatever this editor is showing stops being the host's the moment the
         # session ends, so the next session's first publication opens rather
@@ -1382,6 +1400,15 @@ class CollabController(QtCore.QObject):
         # existed, so this line said "the level" every time (the same missing
         # attribute that made room_info's level_name empty in phase 0).
         level = self._currentLevelName() or 'the level'
+
+        # Wait for everyone to have it open before the host can edit again
+        # (R3). The host's own editor is responsive throughout - the wait pumps
+        # the event loop - but an edit made now would name references the
+        # clients have not built yet, and they would answer with a full
+        # snapshot request. Bounded, and a peer that never answers is left
+        # behind rather than holding the session.
+        self._awaitPeerLoads(level)
+
         self._appendStatus('Shared %s with everyone.' % level)
         debuglog.log('controller', 'level changed', level=level,
                      refs=self.refmap.size())
@@ -1907,15 +1934,36 @@ class CollabController(QtCore.QObject):
         # the host publishing level files for the rest of the session, silently.
         # The roster is the authoritative list of who is present, so it is the
         # right place to notice.
-        if self.is_host and self._transferring_peers:
+        # Computed once and used by both sweeps below. Guarded only on being the
+        # host: the transfer sweep used to guard on _transferring_peers being
+        # non-empty, which was harmless for itself but wrong the moment a second
+        # sweep was nested inside it - the R3 one then ran only when a transfer
+        # happened to be in progress too, which is precisely when it is least
+        # needed (found by driving it, 2026-08-11).
+        if self.is_host:
             present = {str(entry.get('session_id', ''))
                        for entry in (participants or [])
                        if isinstance(entry, dict)}
+
             departed = self._transferring_peers - present
             if departed:
                 self._transferring_peers -= departed
                 debuglog.log('host', 'dropped transfer state for departed peers',
                              count=len(departed))
+
+            # Same for peers the host is waiting on to open a level (R3). A
+            # participant that left will never answer, and without this the
+            # host would sit out the full 30 s for someone who has gone -
+            # exactly the "hanging for one slow peer" the timeout exists to
+            # avoid, arrived at by a different route.
+            gone = set(self._loading_peers) - present
+            for session_id in gone:
+                self._loading_peers.pop(session_id, None)
+            if gone:
+                debuglog.log('host', 'stopped waiting for departed peers',
+                             count=len(gone))
+
+            self._stale_peers &= present
 
         # The overlay needs it too: nicknames and colours come from the roster,
         # and a peer that left must lose its cursor.
@@ -2190,10 +2238,34 @@ class CollabController(QtCore.QObject):
 
         if self.is_host:
             message = protocol.make_message(protocol.T_OP, payload)
-            peers = self.server.authenticated_connections()
-            for connection in peers:
+
+            sent = 0
+            held = 0
+            for connection in self.server.authenticated_connections():
+                # Not to a peer that is still opening a level we published
+                # (R3). Its ref map belongs to the level it is leaving, so this
+                # op names references it cannot resolve - it answers with
+                # UnknownRefError and asks for a full snapshot, which is the
+                # 96-item resync Zement saw 141 ms after a *successful* file
+                # load (2026-08-11).
+                #
+                # Nothing is lost by skipping, but it is *not* because the edit
+                # is already in the file: the bytes were serialised when the
+                # publication went out, so an edit made after that is not in
+                # them. The peer is marked as having missed something instead,
+                # and republished to when it reports the level open. That is
+                # correct in both orderings, where skipping alone would
+                # silently drop a late edit.
+                peer = str(getattr(connection, 'session_id', ''))
+                if peer in self._loading_peers:
+                    self._stale_peers.add(peer)
+                    held += 1
+                    continue
+
                 connection.send(message)
-            debuglog.log('op-out', 'sent to peers', peers=len(peers))
+                sent += 1
+
+            debuglog.log('op-out', 'sent to peers', peers=sent, held=held)
             return True
 
         # A client sends to the host, which authorises and sequences it before
@@ -3332,6 +3404,14 @@ class CollabController(QtCore.QObject):
             connection.send(message)
             sent += 1
 
+            # Expected to report back before the host resumes editing (R3).
+            # Recorded here rather than after the chunks, so a peer that
+            # answers unusually fast is already known to be one we are waiting
+            # for - the same ordering trap that let a duplicate patch_need
+            # through twice.
+            self._loading_peers[peer] = (
+                str(getattr(connection, 'nick', '') or '') or peer)
+
         if not sent:
             # Nobody to send to. Reported as "not published" so a later join
             # takes the snapshot path rather than waiting for a file that was
@@ -3341,7 +3421,118 @@ class CollabController(QtCore.QObject):
         self._offerSavedLevel(level, data, session_id)
 
         debuglog.log('host', 'published level file', level=level,
-                     bytes=len(data), to=str(session_id) or 'everyone')
+                     bytes=len(data), to=str(session_id) or 'everyone',
+                     awaiting=len(self._loading_peers))
+        return True
+
+    # How long the host waits for peers to finish loading a level it published
+    # (R3). The same 30 s discipline as the switch proposal, and for the same
+    # reason: the session continues without a slow or absent peer rather than
+    # hanging for one. Generous because it covers an actual level load on
+    # another machine, which for a large level is seconds and not milliseconds.
+    LOAD_TIMEOUT_SECONDS = 30.0
+
+    def _awaitPeerLoads(self, level):
+        """
+        Host side: waits until every peer sent `level` has it open (R3).
+
+        This is the freeze. Without it the host carries on editing while a
+        client is still building its scene, the client cannot resolve the
+        references those edits name, and it asks for a full snapshot - which is
+        the redundant 96-item snapshot Zement saw 141 ms after a *successful*
+        file load (2026-08-11). The edits were not wrong; they simply arrived
+        before there was anything to apply them to.
+
+        Keeps the event loop running, like every other wait in this feature: the
+        acks arrive on reader threads and are delivered through the bridge, so
+        blocking would stop the very thing being waited for.
+
+        Bounded, and it does not punish anyone for being slow. A peer that never
+        answers is left behind rather than disconnected - decision recorded in
+        round 2's questions - and the host resumes.
+        """
+        if not self.is_host or not self._loading_peers:
+            return True
+
+        deadline = time.monotonic() + self.LOAD_TIMEOUT_SECONDS
+        waited_for = len(self._loading_peers)
+
+        with _BusyIndicator(self.window,
+                            'Waiting for everyone to open %s...' % level):
+            while self._loading_peers:
+                if time.monotonic() >= deadline:
+                    slow = sorted(self._loading_peers.values())
+                    debuglog.log('host', 'peers did not report the level open',
+                                 level=level, peers=len(slow))
+                    self._appendStatus(
+                        'Carrying on without %s, who have not opened %s yet.'
+                        % (', '.join(slow) or 'some participants', level))
+
+                    # Cleared, or the next edit would wait all over again for
+                    # peers already known not to be answering.
+                    self._loading_peers = {}
+                    return False
+
+                if not self.is_active:
+                    return False
+
+                QtWidgets.QApplication.processEvents(
+                    QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents,
+                    50)
+
+        debuglog.log('host', 'all peers opened the level', level=level,
+                     peers=waited_for)
+        return True
+
+    def _onPeerLevelLoaded(self, session_id, level, ok):
+        """
+        Host side: a peer finished with a level the host published (R3).
+
+        Removed from the waiting set either way. A failed load is still an
+        answer, and holding the session for a peer that has already told us it
+        could not open the file would freeze everyone for a problem that will
+        not resolve itself.
+        """
+        if not self.is_host:
+            return False
+
+        session_id = str(session_id)
+        nick = self._loading_peers.pop(session_id, '')
+        needs_catchup = session_id in self._stale_peers
+
+        if not ok:
+            self._appendStatus(
+                '%s could not open %s and is still on the previous level.'
+                % (nick or 'A participant', level))
+
+        debuglog.log('host', 'peer reported the level', level=level, ok=ok,
+                     nick=nick or session_id,
+                     still_waiting=len(self._loading_peers))
+
+        # Catch it up on anything edited while it was loading. Those ops were
+        # skipped rather than sent, and they are not in the file it just opened
+        # either - that was serialised when the publication went out.
+        #
+        # A fresh publication rather than a replay of the missed ops: the file
+        # is one write and one load, where replaying is a list to keep in order
+        # and to bound. It also cannot go stale the way a queue of ops can.
+        self._stale_peers.discard(session_id)
+
+        if ok and needs_catchup:
+            debuglog.log('host', 'republishing to a peer that missed edits',
+                         nick=nick or session_id)
+            self._publishLevelFile(session_id)
+
+            # The republication put this peer straight back into the waiting
+            # set, which would leave a wait running that its own ack has
+            # already answered - a freeze until the full timeout, on every
+            # catch-up. Released again here: this peer has proved it loads, and
+            # the file it is now being sent is one more load of the same size.
+            #
+            # Found by driving the flow rather than by reading it; the unit
+            # checks around this all passed while it deadlocked.
+            self._loading_peers.pop(session_id, None)
+
         return True
 
     def _transferInProgress(self):
@@ -3449,6 +3640,14 @@ class CollabController(QtCore.QObject):
 
         published = self._publishLevelFile(session_id)
         debuglog.log('host', 'join publication', peer=session_id, ok=published)
+
+        if published:
+            # The joining peer is the one most likely to be edited around while
+            # it builds its scene: it arrives mid-session, into a host that is
+            # already working. Waiting for it here is what turns "requesting
+            # resync 141 ms after a successful load" into nothing at all.
+            self._awaitPeerLoads(self._currentLevelName() or 'the level')
+
         return published
 
     def _nickFor(self, session_id):
@@ -3844,7 +4043,15 @@ class CollabController(QtCore.QObject):
         # a stage path that has not been switched over yet.
         if not self._loadLevelQuietly(path, True, target_area):
             self._appendStatus(
-                'The host sent %s, but it could not be opened here.' % level)
+                'The host sent %s, but it could not be opened here. You are '
+                'still on the level you had open.' % level)
+
+            # Answered even in failure, and this is the point of R3's answer to
+            # "drop or warn": the host is waiting for this peer, and a client
+            # that cannot load must not be the reason everyone else is frozen.
+            # It stays in the session on its stale level, visibly, rather than
+            # being disconnected (Zement's decision, 2026-08-11).
+            self._reportLevelLoaded(level, False)
             return False
 
         # The session is on the area we just opened. Recorded from the
@@ -3857,10 +4064,43 @@ class CollabController(QtCore.QObject):
         debuglog.log('client', 'opened published level', level=level,
                      area=target_area, path=path)
 
+        # Tell the host the scene is built, so it can resume (R3). Sent before
+        # the content check, which only reports and can prompt: the host is
+        # blocked on this and must not wait for a dialog on someone else's
+        # machine.
+        self._reportLevelLoaded(level, True)
+
         # The file is byte-identical to the host's, so there is nothing left to
         # reconcile - which is exactly what makes this fast. A resync here would
         # ask for the snapshot this path exists to avoid.
         self._checkContentMatches()
+        return True
+
+    def _reportLevelLoaded(self, level, ok):
+        """
+        Tells the host this peer has finished with a published level (R3).
+
+        Reuses T_FILE_DONE, which already means "I am finished with that file"
+        and already travels in this direction. The `level` field is what keeps
+        the two uses apart: without it the host could not tell a loaded level
+        from a completed patch download, and would clear a transfer
+        authorisation the peer was still fetching against.
+        """
+        if self.is_host or self.client is None or not self.is_active:
+            return False
+
+        try:
+            self.client.send(protocol.make_message(
+                protocol.T_FILE_DONE,
+                {'ok': bool(ok), 'level': str(level or '')}))
+        except Exception as exc:
+            # Never fatal. A lost ack costs the host its timeout, which it has
+            # anyway for a peer that has genuinely gone away.
+            debuglog.log('client', 'load ack failed', level=level,
+                         error=str(exc))
+            return False
+
+        debuglog.log('client', 'reported level loaded', level=level, ok=ok)
         return True
 
     def _onLevelSaved(self, payload):

@@ -82,6 +82,12 @@ class CollabSignals(QtCore.QObject):
     # holds level publications back while a peer is mid-transfer, so it needs to
     # know when that ends. session id, ok.
     peerTransferFinished = QtCore.pyqtSignal(str, bool)
+
+    # Host side: a peer finished loading a level the host published (R3). The
+    # host holds edits back until every peer has this, so that nobody is edited
+    # around while their scene is still being built.
+    # session id, level, ok.
+    peerLevelLoaded = QtCore.pyqtSignal(str, str, bool)
     manifestReceived = QtCore.pyqtSignal(dict)
     fileChunkReceived = QtCore.pyqtSignal(dict)
     transferFinished = QtCore.pyqtSignal(bool, str)    # ok, error
@@ -209,6 +215,18 @@ class CollabBridge(QtCore.QObject):
             self.signals.statusMessage.emit(
                 '%s asked for a file that was not offered (%s).'
                 % (nick, data.get('path', '')))
+
+        elif kind == 'level_loaded':
+            # The peer has the level open and is safe to edit around again (R3).
+            ok = bool(data.get('ok', True))
+            if not ok:
+                self.signals.statusMessage.emit(
+                    '%s could not open %s and is still on the previous level.'
+                    % (nick, data.get('level', 'the level')))
+
+            self.signals.peerLevelLoaded.emit(
+                str(getattr(participant, 'session_id', '') or ''),
+                str(data.get('level', '') or ''), ok)
 
         elif kind == 'file_done':
             ok = bool(data.get('ok', True))

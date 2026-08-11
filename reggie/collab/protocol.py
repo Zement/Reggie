@@ -823,9 +823,23 @@ def _v_file_chunk(p):
 
 
 def _v_file_done(p):
+    """
+    "I have finished with that file."
+
+    `level` names a *published level* rather than a patch transfer, which is
+    what makes this usable as the R3 load acknowledgement: the host has to know
+    which of the two a peer just finished, and reusing the message without
+    naming the thing would have made an ack indistinguishable from a completed
+    download.
+
+    Empty for an ordinary transfer, so an older client is read exactly as before.
+    """
     return {
         'ok': _get_bool(p, 'ok', required=False, default=True),
         'error': _get_str(p, 'error', 200, required=False),
+        # 200 to match _v_saved: this echoes the level that announcement named,
+        # so a name the host could send must be a name the ack can carry back.
+        'level': _get_str(p, 'level', 200, required=False),
     }
 
 
