@@ -57,6 +57,124 @@ def _color(value, fallback='#3daee9'):
     return color
 
 
+class BusyStrip(QtWidgets.QLabel):
+    """
+    Says which *other* participant is busy, in the status bar.
+
+    The status bar is chosen over anything on the canvas for the same reason
+    _BusyIndicator chose it: it keeps working when the scene cannot repaint. A
+    peer being busy often means this editor is about to be busy too, so a signal
+    that needs a healthy paint cycle is the wrong one.
+
+    Only remote peers appear here. When *you* are busy the wait cursor and
+    _BusyIndicator's own message already say so, and the editor is frozen
+    anyway; the gap this fills is the other direction, where everything looks
+    normal while your edits are being held.
+
+    Sizing is the reason this is a widget rather than a call to
+    statusBar().showMessage(). The existing status labels are added with
+    addWidget(), which defaults to stretch 0, so each gets only its size hint
+    and they compete for a fixed share of the bar - which is why Zement saw
+    longer messages cut off. This takes a stretch factor of its own and elides
+    its *own* text, so a long patch name shortens itself rather than pushing the
+    coordinate readouts off the bar. The full text stays in the tooltip.
+    """
+
+    # Enough to read a name and an operation; the tooltip carries the rest.
+    # Under the width the text elides instead of forcing the bar wider.
+    MINIMUM_WIDTH = 160
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self._text = ''
+        self._blocking = False
+
+        # The theme's own text colour, kept before anything overwrites it.
+        # _applyColour used to read self.palette() each time, which returns the
+        # palette *including* its own last edit - so once the blocking colour
+        # had been set it became the "default" and the strip never went back to
+        # ordinary text.
+        self._plain_colour = self.palette().color(
+            QtGui.QPalette.ColorRole.WindowText)
+
+        self.setMinimumWidth(self.MINIMUM_WIDTH)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                           QtWidgets.QSizePolicy.Policy.Preferred)
+        self.setVisible(False)
+
+    def setBusy(self, text, blocking=False):
+        """
+        Shows `text`, or hides the strip when it is empty.
+
+        `blocking` distinguishes "somebody is waiting on this" from "somebody is
+        downloading in the background" - the same split the canvas border uses,
+        so the two cannot disagree about what counts as urgent.
+        """
+        text = str(text or '')
+        blocking = bool(blocking)
+
+        if text == self._text and blocking == self._blocking:
+            # Presence arrives constantly. Repainting the status bar for an
+            # unchanged line would be work on every message.
+            return
+
+        self._text = text
+        self._blocking = blocking
+
+        if not text:
+            self.clear()
+            self.setToolTip('')
+            self.setVisible(False)
+            return
+
+        self.setToolTip(text)
+        self.setVisible(True)
+        self._applyColour()
+        self._elide()
+
+    def _applyColour(self):
+        """
+        Warm for blocking, ordinary text otherwise.
+
+        Taken from the palette rather than fixed, following the same rule as the
+        peer labels: a hard-coded colour that reads well in the light theme is
+        often unreadable in the dark one. Only the blocking case is coloured at
+        all - a background download is information, not a warning, and colouring
+        everything would leave nothing for the urgent case to stand out against.
+        """
+        colour = QtGui.QColor('#c87800') if self._blocking else None
+        if colour is None or not colour.isValid():
+            colour = self._plain_colour
+
+        palette = self.palette()
+        palette.setColor(QtGui.QPalette.ColorRole.WindowText, colour)
+        self.setPalette(palette)
+
+    def _elide(self):
+        """
+        Fits the text to the width the bar actually gave us.
+        """
+        metrics = QtGui.QFontMetrics(self.font())
+        available = max(0, self.width() - 8)
+
+        if available <= 0:
+            # Before the first layout the width is meaningless; the resize
+            # event that follows will elide it properly.
+            super().setText(self._text)
+            return
+
+        super().setText(metrics.elidedText(
+            self._text, QtCore.Qt.TextElideMode.ElideRight, available))
+
+    def resizeEvent(self, event):
+        # The bar's share changes as the window is resized and as the other
+        # labels grow, so the elision has to be recomputed rather than done once.
+        super().resizeEvent(event)
+        if self._text:
+            self._elide()
+
+
 class PeerCursor(QtWidgets.QGraphicsItem):
     """
     One peer's pointer, with their nickname beside it.

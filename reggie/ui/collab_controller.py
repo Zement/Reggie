@@ -283,6 +283,17 @@ class CollabController(QtCore.QObject):
         self._peer_busy = {}
         self._busy_observers = []
 
+        # The status-bar strip, built on first use and outliving any one level.
+        self._busy_strip = None
+
+        # Nicknames by session id, kept from the roster.
+        #
+        # _nickFor answers from host_session and so only works on the host,
+        # which is not good enough here: a client watching another client
+        # download has to name it too, and would otherwise say "Someone" for
+        # every peer. The roster is the one message both sides receive.
+        self._peer_nicks = {}
+
         # What we last told everyone else, so an unchanged state is not resent
         # and a changed one always is.
         self._local_busy_state = protocol.BUSY_NONE
@@ -938,10 +949,25 @@ class CollabController(QtCore.QObject):
         # downloading - and those session ids will never be seen again, so
         # nothing would ever arrive to clear them.
         self._peer_busy = {}
+        self._peer_nicks = {}
         self._local_busy_state = protocol.BUSY_NONE
         self._local_busy_detail = ''
         self._local_busy_sent = 0.0
         self._busyChanged()
+
+        # Taken out of the status bar rather than merely emptied. An empty label
+        # still holds its stretch, so leaving it behind would keep a share of
+        # the bar reserved for a session that has ended - and the bar is exactly
+        # the space the other labels were already short of.
+        strip = getattr(self, '_busy_strip', None)
+        if strip is not None:
+            self._busy_strip = None
+            try:
+                self.window.statusBar().removeWidget(strip)
+            except Exception:
+                pass
+            finally:
+                strip.deleteLater()
 
         # The session's Stage/Texture override goes with it, so the editor
         # returns to the user's own folders the moment the session ends. This
@@ -1701,6 +1727,24 @@ class CollabController(QtCore.QObject):
         if not hasattr(window, 'LoadLevel'):
             return False
 
+        # From here on this editor is going to load something, which is the
+        # blocking kind of busy: the host waits for this peer to report the
+        # level (R3), so the others are genuinely held up by it. Announced
+        # before the work rather than after, since the whole point is to be
+        # visible *during* it - and cleared in the finally below, because every
+        # path out of here has to say so, including the ones that fail.
+        self._setLocalBusy(protocol.BUSY_LOADING,
+                           'opening %s' % (level or 'an area'))
+        try:
+            return self._loadSwitchedLevel(window, level, area)
+        finally:
+            self._clearLocalBusy()
+
+    def _loadSwitchedLevel(self, window, level, area):
+        """
+        The load itself, split out so the busy state above has one exit.
+        """
+
         if not level:
             # An empty name would mean LoadLevel(None), which creates a *new*
             # untitled level rather than loading anything - so a peer with an
@@ -2083,6 +2127,15 @@ class CollabController(QtCore.QObject):
                              count=len(gone))
 
             self._stale_peers &= present
+
+        # Nicknames, so the presence strip can name who is busy. Kept here
+        # because this is the only message a *client* receives that carries
+        # them - _nickFor reads host_session and answers "Someone" everywhere
+        # else.
+        self._peer_nicks = {
+            str(entry.get('session_id', '')): str(entry.get('nick', '') or '')
+            for entry in (participants or []) if isinstance(entry, dict)
+        }
 
         # Busy state goes the same way, and deliberately outside the is_host
         # guard above: a client watching another client download is just as able
@@ -2876,6 +2929,56 @@ class CollabController(QtCore.QObject):
         return any(entry.get('state') in protocol.BUSY_BLOCKING
                    for entry in self._peer_busy.values())
 
+    def _busyStrip(self):
+        """
+        The status-bar strip, created on first use.
+
+        Deliberately not tied to the scene's lifetime the way the cursor overlay
+        is: that one is rebuilt with every level load, and a strip that vanished
+        on a level change would disappear exactly when a peer is most likely to
+        be busy - during the change itself.
+        """
+        strip = getattr(self, '_busy_strip', None)
+        if strip is not None:
+            return strip
+
+        window = self.window
+        if window is None:
+            return None
+
+        try:
+            status = window.statusBar()
+        except Exception:
+            return None
+
+        strip = collab_presence.BusyStrip()
+
+        # Stretch 1, unlike the existing labels. They are added with addWidget()
+        # at the default stretch 0, so every one of them gets only its size hint
+        # and they share out a fixed width - which is what truncated the longer
+        # messages. Taking the slack here means a long line elides itself rather
+        # than squeezing the coordinate readouts.
+        status.addWidget(strip, 1)
+
+        self._busy_strip = strip
+        return strip
+
+    def _updateBusyStrip(self):
+        """
+        Puts the current summary in the status bar.
+        """
+        strip = self._busyStrip()
+        if strip is None:
+            return
+
+        try:
+            strip.setBusy(self.busySummary(), self.isAnyoneBlocking())
+        except RuntimeError:
+            # The widget was destroyed with the window, which happens on
+            # shutdown while messages are still arriving. Not worth reporting;
+            # dropping the reference is enough to stop asking.
+            self._busy_strip = None
+
     def _busyChanged(self):
         """
         Notifies the UI that some peer's state changed.
@@ -2887,6 +2990,8 @@ class CollabController(QtCore.QObject):
 
         Never fatal: a failing observer must not break the session that fed it.
         """
+        self._updateBusyStrip()
+
         for observer in list(self._busy_observers):
             try:
                 observer()
@@ -2899,6 +3004,54 @@ class CollabController(QtCore.QObject):
         """
         if callback not in self._busy_observers:
             self._busy_observers.append(callback)
+
+    def busyNickFor(self, session_id):
+        """
+        A peer's display name, from the roster both sides receive.
+        """
+        return self._peer_nicks.get(str(session_id or ''), '') or 'Someone'
+
+    def busySummary(self):
+        """
+        One line naming who is busy and with what, or '' when nobody is.
+
+        Collapses to a count past one peer rather than listing them. The status
+        bar is a single line competing with the coordinate readouts for space,
+        and two names with two details is already longer than it can show - the
+        roster is where the per-peer detail belongs (phase 3).
+        """
+        busy = self.busyPeers()
+        if not busy:
+            return ''
+
+        if len(busy) > 1:
+            return '%d participants are busy' % len(busy)
+
+        session_id, entry = next(iter(busy.items()))
+        detail = str(entry.get('detail') or '').strip()
+        if not detail:
+            # A state with no detail still has to say something. These are the
+            # words for the three categories, not for the nine operations - the
+            # operation is what `detail` carries when the sender has one.
+            detail = {
+                protocol.BUSY_LOADING: 'loading',
+                protocol.BUSY_SAVING: 'saving',
+                protocol.BUSY_DOWNLOAD: 'downloading',
+            }.get(entry.get('state'), 'busy')
+
+        pct = entry.get('pct', -1)
+        try:
+            pct = int(pct)
+        except (TypeError, ValueError):
+            pct = -1
+
+        # -1 rather than 0 means "no percentage": an operation genuinely at 0%
+        # is a different thing from one that cannot report progress, and showing
+        # "(0%)" on the latter reads as a download that has stalled.
+        if 0 <= pct <= 100:
+            return '%s: %s (%d%%)' % (self.busyNickFor(session_id), detail, pct)
+
+        return '%s: %s' % (self.busyNickFor(session_id), detail)
 
     def _isOwnSessionId(self, session_id):
         if self.client_session is not None:
@@ -3750,7 +3903,30 @@ class CollabController(QtCore.QObject):
                    self._transfer.received_bytes / (1024.0 * 1024.0),
                    self._transfer.total_bytes / (1024.0 * 1024.0)))
 
+        # Tell the other peers, on every file rather than every fiftieth: this
+        # is throttled by time in _setLocalBusy, which is the right axis for
+        # somebody else's status bar. The local line above is throttled by count
+        # because it accumulates in a chat log rather than replacing itself.
+        if total > 0:
+            self._setLocalBusy(
+                protocol.BUSY_DOWNLOAD,
+                self._downloadDescription(),
+                int(100.0 * max(0, done) / total))
+
         self._requestNextFile()
+
+    def _downloadDescription(self):
+        """
+        What this editor is downloading, for the other peers' status bars.
+
+        Named after the patch rather than the file count: 'downloading the
+        Newer patch' tells a peer what the wait is for, where '412 of 725 files'
+        tells them only that it is long.
+        """
+        patch = str(self._transfer_patch or '')
+        if patch:
+            return 'downloading %s' % patch
+        return 'downloading the game data'
 
     def _finishTransfer(self):
         """
@@ -5079,6 +5255,13 @@ class CollabController(QtCore.QObject):
         self._transfer_destination = ''
         self._transfer_current = None
         self._transfer_total = 0
+
+        # Every route out of a transfer passes through here - finished, failed,
+        # aborted, torn down - which makes it the one place that can guarantee
+        # the other peers stop seeing us as downloading. Announcing the end from
+        # the success path alone would leave a failed transfer showing as busy
+        # on every other machine until the session ended.
+        self._clearLocalBusy()
 
         if abort:
             # An aborted transfer never delivers its patch, so whatever was held
