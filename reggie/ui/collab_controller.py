@@ -397,6 +397,12 @@ class CollabController(QtCore.QObject):
         # still syncs the *new* patch's data.
         self._synced_asset_patches = set()
 
+        # Whether the catalog consent prompt is already on screen. Same hazard
+        # as the line above and the same cause: room_info re-runs the patch
+        # check, and this prompt keeps the event loop running while it waits
+        # for an answer, so a second one could ask the same question again.
+        self._catalog_prompt_open = False
+
         self._connect_signals()
 
     # -- signal wiring ------------------------------------------------------
@@ -3046,6 +3052,48 @@ class CollabController(QtCore.QObject):
         """
         patch_id = requirement['patch_id']
 
+        # One prompt at a time.
+        #
+        # _checkPatch runs on every room_info, and the host republishes that on
+        # every level and area change - so a second one arriving while the
+        # prompt is open re-entered here and asked again. Both dialogs keep the
+        # event loop running, which is exactly what lets the message be
+        # delivered mid-question.
+        #
+        # The host-transfer route has been immune since it started recording
+        # _transfer_patch (what _patchPending reads); this route had no
+        # equivalent, as the note above says. Zement saw the doubled prompt on
+        # a first catalog install (2026-08-11).
+        #
+        # Cleared in a finally: a flag left set would make the client silently
+        # refuse to ever ask again, which is worse than asking twice.
+        if getattr(self, '_catalog_prompt_open', False):
+            debuglog.log('client', 'duplicate catalog prompt ignored',
+                         patch_id=patch_id)
+            return
+
+        self._catalog_prompt_open = True
+        try:
+            self._runCatalogInstall(requirement, patch_id)
+        finally:
+            # Cleared however this ends, including on an exception: a flag left
+            # set would make the client silently refuse to ever ask again,
+            # which is a worse failure than asking twice.
+            self._catalog_prompt_open = False
+
+    def _runCatalogInstall(self, requirement, patch_id):
+        """
+        Asks, opens the Patch Manager, and acts on what was installed.
+
+        Split from _installFromCatalog only so the re-entrancy guard there has
+        somewhere to wrap; everything that decides anything is here.
+
+        Not deferred the way a host transfer is, even though this keeps the
+        event loop running: a catalog install sets the patch's Stage and
+        Texture paths itself, so there is no unanswered path question for a
+        level load to run ahead of (Zement, 2026-08-09). Nothing is held back
+        here, and nothing needs replaying afterwards.
+        """
         if not collab_dialogs.confirm_catalog_install(
                 self.window, patch_id, requirement.get('patch_version', '')):
             self._leaveOverPatch(
