@@ -282,8 +282,19 @@ def build_manifest(patch_dir, patch_id='', stage_dir='', texture_dir='',
     Returns {'patch_id', 'files': [{path, size, sha256, kind}], 'skipped': [...],
              'total_bytes'}.
     """
-    root = os.path.abspath(str(patch_dir))
-    if not os.path.isdir(root):
+    # An empty patch_dir means "game data only": the receiver already has the
+    # patch definition and needs only Stage and Texture (Block C - B3, round 2).
+    # That is the catalog and already-installed routes, where re-sending a patch
+    # the client already has would be pure waste - but skipping the game data
+    # leaves the two peers resolving one level name to different bytes.
+    #
+    # Distinguished from a *missing* folder, which stays an error: '' is a
+    # caller saying "no patch section", while a path that does not exist is a
+    # host that cannot honour the request it accepted.
+    want_patch = bool(str(patch_dir))
+    root = os.path.abspath(str(patch_dir)) if want_patch else ''
+
+    if want_patch and not os.path.isdir(root):
         raise ManifestError('The patch folder %s does not exist.' % patch_dir)
 
     files = []
@@ -349,7 +360,8 @@ def build_manifest(patch_dir, patch_id='', stage_dir='', texture_dir='',
     texture_root = (os.path.abspath(str(texture_dir))
                     if texture_dir and os.path.isdir(str(texture_dir)) else '')
 
-    collect(root, KIND_PATCH)
+    if want_patch:
+        collect(root, KIND_PATCH)
 
     if stage_dir and os.path.isdir(str(stage_dir)):
         stage_root = os.path.abspath(str(stage_dir))

@@ -693,9 +693,26 @@ def _get_str_list(payload, key, max_items, max_chars):
 
 
 def _v_patch_need(p):
+    """
+    A client asking for the host's game data.
+
+    `assets_only` distinguishes the two reasons for asking (Block C - B3,
+    round 2). A client without the patch needs everything; a client that already
+    has the patch - because it was installed from the catalog, or was already on
+    disk - needs only the host's Stage and Texture, so that both peers resolve a
+    level name to the same bytes. Without it the second case would either
+    re-send a patch the client already has, or not sync assets at all, which is
+    the gap that left the catalog and local routes unsynced.
+
+    Declared here rather than inferred, because validators rebuild payloads from
+    scratch: a field that is not listed is deleted in flight - the same trap that
+    silently dropped `kind` from the manifest in phase 1.
+    """
     return {
         'patch_id': _get_str(p, 'patch_id', 128, required=False),
         'reason': _get_str(p, 'reason', 200, required=False),
+        'assets_only': _get_bool(p, 'assets_only', required=False,
+                                 default=False),
     }
 
 

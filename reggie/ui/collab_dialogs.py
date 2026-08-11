@@ -1145,6 +1145,51 @@ def report_content_mismatch(parent, problems):
     box.exec()
 
 
+def confirm_large_transfer(parent, total_bytes, file_count):
+    """
+    Asks before starting a large game-data download (Block C - B3, round 2).
+    Returns True to proceed.
+
+    The download itself is not optional, and the wording has to be honest about
+    that: a client without the host's levels and tilesets cannot see what
+    everyone else sees, which is the whole problem this round removes. So the
+    choice is "download, or leave" rather than "download, or carry on without
+    it" - the second would produce exactly the desynced session the transfer
+    exists to prevent.
+
+    Only shown above ASSET_CONSENT_BYTES. A small transfer is automatic, because
+    it lands in assets/mods/_collab/ and the client consented to that at join;
+    the dialog exists for the case where the *wait* is worth warning about.
+    """
+    megabytes = total_bytes / (1024.0 * 1024.0)
+
+    box = QtWidgets.QMessageBox(parent)
+    box.setWindowTitle('Download the session\'s game data?')
+    box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+    box.setText('This session needs %.0f MB of levels and tilesets from the '
+                'host.' % megabytes)
+    box.setInformativeText(
+        '%d files will be downloaded into assets/mods/_collab/, so none of '
+        'your own game data is touched.\n\n'
+        'This is what lets you see exactly what the host sees. If you decline, '
+        'you will leave the session - taking part without these files would '
+        'mean editing levels that look different on every machine.'
+        % file_count)
+
+    download = box.addButton('Download',
+                             QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+    box.addButton('Leave the session',
+                  QtWidgets.QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(download)
+
+    box.exec()
+
+    # Compared by identity rather than by standard button, because both are
+    # custom buttons here. Anything other than Download - including the dialog
+    # being closed - means the transfer does not start.
+    return box.clickedButton() is download
+
+
 def resolve_switch_proposal(parent, nick, destination):
     """
     Asks the host what to do about its unsaved work before a client's switch

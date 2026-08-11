@@ -68,7 +68,10 @@ class CollabSignals(QtCore.QObject):
 
     # Patch transfer. Host side: a peer needs the patch, or wants one file of
     # it. Client side: the manifest arrived, a chunk arrived, the host finished.
-    patchNeeded = QtCore.pyqtSignal(str, str)          # session id, patch id
+    # session id, patch id, assets_only. assets_only is True when the client has
+    # the patch already and wants only the host's Stage and Texture (Block C -
+    # B3, round 2).
+    patchNeeded = QtCore.pyqtSignal(str, str, bool)
     fileRequested = QtCore.pyqtSignal(str, str, str)   # session id, path, kind
 
     # Host side: a client reported its transfer finished (or failed). The host
@@ -177,11 +180,17 @@ class CollabBridge(QtCore.QObject):
             # Building a manifest walks the patch directory, so it belongs on
             # the main thread with the rest of the file work - the same reason
             # snapshot_request is a signal rather than a direct call.
+            assets_only = bool(data.get('assets_only', False))
+
             self.signals.statusMessage.emit(
-                '%s needs the %s patch.' % (nick, data.get('patch_id', '')))
+                '%s needs the %s game data.' % (nick, data.get('patch_id', ''))
+                if assets_only
+                else '%s needs the %s patch.' % (nick,
+                                                 data.get('patch_id', '')))
             self.signals.patchNeeded.emit(
                 getattr(participant, 'session_id', ''),
-                str(data.get('patch_id', '') or ''))
+                str(data.get('patch_id', '') or ''),
+                assets_only)
 
         elif kind == 'file_req':
             self.signals.fileRequested.emit(

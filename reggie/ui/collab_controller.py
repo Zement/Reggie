@@ -57,6 +57,17 @@ PRESENCE_FLUSH_MS = 100
 # reference produces a request per edit.
 RESYNC_INTERVAL_SECONDS = 5.0
 
+# Above this, a transfer is confirmed with the user before it starts (Block
+# C - B3, round 2). Below it the download is automatic, on the same argument as
+# the automatic save: it lands only in assets/mods/_collab/, which the client
+# agreed to at join.
+#
+# 100 MB is Zement's figure and it sits above the realistic case (~28 MB for a
+# patch with its Stage and Texture) and below the worst (~280 MB), so the dialog
+# appears when the wait is long enough to be worth warning about and not
+# otherwise.
+ASSET_CONSENT_BYTES = 100 * 1024 * 1024
+
 # Shown on a control the current session does not allow. Explains *why* it is
 # unavailable, since a greyed-out menu item with no reason reads as a bug.
 _PERMISSION_HINT = ('Not available during this collaboration session: the host '
@@ -2603,6 +2614,14 @@ class CollabController(QtCore.QObject):
             # sitting on the wrong game the whole session - including after a
             # mid-session switch, where it is the only thing that had changed.
             self._switchToPatch(patch_id)
+
+            # Having the patch is not having the host's *game data*. The patch
+            # says which tilesets a level names; the levels and tilesets live in
+            # whatever Stage folder this machine points at, which is a local
+            # preference and routinely differs from the host's. That is known
+            # open 10.1, and it is why this route needs a transfer of its own
+            # even though nothing is missing in the patch sense (round 2, R1).
+            self._requestSessionAssets(patch_id)
             return
 
         self._appendStatus(requirement['message'])
@@ -2688,6 +2707,49 @@ class CollabController(QtCore.QObject):
         self.client.send(protocol.make_message(
             protocol.T_PATCH_NEED, {'patch_id': patch_id}))
 
+    def _requestSessionAssets(self, patch_id):
+        """
+        Asks the host for its Stage and Texture, without the patch itself.
+
+        The other half of R1: the data-only route already syncs game data, and
+        this brings the catalog and already-installed routes to the same state.
+        Having the same patch is not enough - the patch names tilesets, but the
+        levels and tilesets themselves live in whatever Stage folder each
+        machine points at, and that is a local preference. Two peers with the
+        same patch id routinely open different bytes under one level name, which
+        is known open 10.1.
+
+        Requested unconditionally rather than after comparing. The fingerprint
+        covers the level currently open and its tilesets, so it can answer "is
+        this level the same" but never "do I have every file the session might
+        move to next". Transferring once and being certain is the cheaper
+        answer, and it is what makes the file-first path reliable.
+
+        Retail is skipped: there is no patch, so there is no `_collab` folder to
+        receive anything, and the base game is identical on both sides by
+        definition.
+        """
+        if self.is_host or self.client is None or not self.is_active:
+            return False
+
+        if not patch_id:
+            return False
+
+        if self._transfer is not None or self._transfer_patch:
+            # One at a time. A transfer already running will deliver the same
+            # files; asking again would interleave two manifests.
+            return False
+
+        self._transfer_patch = patch_id
+        self._appendStatus(
+            'Getting the session\'s levels and tilesets from the host...')
+        debuglog.log('client', 'requesting session assets', patch_id=patch_id)
+
+        self.client.send(protocol.make_message(
+            protocol.T_PATCH_NEED,
+            {'patch_id': patch_id, 'assets_only': True}))
+        return True
+
     def _installFromCatalog(self, requirement):
         """
         Gets the patch from the Patch Manager, with consent (decision 1).
@@ -2744,6 +2806,13 @@ class CollabController(QtCore.QObject):
         if self._waitForInstalledPatch(patch_id):
             self._appendStatus('%s is installed.' % patch_id)
             self._reloadPatch(patch_id)
+
+            # The catalog gives the patch and its own Stage/Texture, which are
+            # the *published* ones - not the host's working copies. Zement's
+            # MidnightWii test showed the difference plainly: identical patch id
+            # and version on both sides, different level bytes. So this route
+            # syncs game data too (round 2, R1).
+            self._requestSessionAssets(patch_id)
             return
 
         self._leaveOverPatch(
@@ -2818,6 +2887,24 @@ class CollabController(QtCore.QObject):
             return
 
         patch_id = str(payload.get('patch_id', '') or self._transfer_patch)
+
+        # A large transfer is consented to, a small one is not (Zement,
+        # 2026-08-11). The sync itself is deliberately *not* optional - a client
+        # that opted out is a client without the host's files, which is the
+        # condition this round exists to remove - so the choice offered is
+        # "accept, or leave the session", not "join anyway without the data".
+        # A session the client cannot take part in correctly is worse than no
+        # session, and leaving is the honest outcome rather than a silent
+        # half-state.
+        total = sum(entry.get('size', 0) for entry in entries)
+        if total > ASSET_CONSENT_BYTES:
+            if not collab_dialogs.confirm_large_transfer(
+                    self.window, total, len(entries)):
+                self._clearTransfer(abort=True)
+                self._leaveOverPatch(
+                    'You declined the %.0f MB download, so you have left the '
+                    'session.' % (total / (1024.0 * 1024.0)))
+                return
 
         # Resolve every destination now, before a byte moves. These validate the
         # id as a directory name, and an id that cannot be one ('CON', a
@@ -3810,22 +3897,31 @@ class CollabController(QtCore.QObject):
 
     # -- patch transfer, host side ------------------------------------------
 
-    def _onPatchNeeded(self, session_id, patch_id):
+    def _onPatchNeeded(self, session_id, patch_id, assets_only=False):
         """
         A client wants this session's patch. Build a manifest and offer it.
 
         Runs on the main thread because it walks the patch directory. The host
         decides what is in the manifest; the client only chooses from it.
+
+        `assets_only` omits the patch section and sends Stage and Texture alone
+        (Block C - B3, round 2). That is the catalog and already-installed
+        routes: the client has the patch *definition* but not the host's game
+        data, and without the data both peers resolve the same level name
+        through different stage folders to different bytes - known open 10.1.
         """
         if self.host_session is None:
             return
 
-        directory = self._localPatchDirectory(patch_id)
-        if not directory:
-            self._appendStatus(
-                'Cannot send %s: its folder was not found.' % patch_id)
-            self._refuseTransfer(session_id, 'The host cannot find its patch.')
-            return
+        directory = ''
+        if not assets_only:
+            directory = self._localPatchDirectory(patch_id)
+            if not directory:
+                self._appendStatus(
+                    'Cannot send %s: its folder was not found.' % patch_id)
+                self._refuseTransfer(session_id,
+                                     'The host cannot find its patch.')
+                return
 
         # The patch definition alone is not enough to see the same level: it
         # says which tilesets a level names, but the levels and tilesets

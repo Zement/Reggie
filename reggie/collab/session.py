@@ -893,12 +893,19 @@ class HostSession:
                 'This session uses %s, not %s.' % (current, wanted))
             return
 
+        # Whether the client wants the patch itself or only the game data. A
+        # client that already has the patch - from the catalog, or already on
+        # disk - still needs the host's Stage and Texture, or the two peers
+        # resolve the same level name to different bytes (Block C - B3, round 2).
+        assets_only = bool(payload.get('assets_only', False))
+
         debuglog.log('host', 'patch_need', nick=participant.nick,
-                     patch_id=current)
+                     patch_id=current, assets_only=assets_only)
 
         self._emit('patch_need', {
             'participant': participant,
             'patch_id': current,
+            'assets_only': assets_only,
         })
 
     def _handle_file_req(self, participant, message):
