@@ -1241,38 +1241,49 @@ def resolve_join_publication(parent, nick):
     Asks the host what to do about its unsaved work when someone joins
     (Block C - B3, round 2, R2). Returns 'save' or 'discard'.
 
-    **There is deliberately no Cancel**, and this is the one place in the
-    feature where a dialog cannot be dismissed without answering. The reason is
-    what the answer decides: the joining client is waiting for a level file, and
-    both answers produce one - Save publishes what the host has now, Discard
-    publishes what is on disk. A third "do nothing" would leave the new peer with
-    no level at all, which is the state R2 exists to remove.
+    **The question is only whether to write to disk.** Both answers send the
+    same thing: the level as it is on the host's screen, unsaved edits included.
+    That is not what the first wording of this dialog said, and Zement caught it
+    by testing both answers and finding they synced identically (2026-08-11).
 
+    The reason is worth stating, because it is easy to assume otherwise:
+    _publishLevelFile serialises from `Level.save()` - memory, not disk - so a
+    peer always receives the host's current work. There is no code path here
+    that sends the on-disk file, and adding one would be worse: the joining
+    client would start from a level the host is not looking at.
+
+    So "Discard" is a poor name for what the button does, and the labels say
+    what actually happens instead. Kept as the Save/Discard *roles* underneath
+    because Qt gives those the right placement and keyboard handling, and
+    because the return values are what the caller already switches on.
+
+    **There is deliberately no Cancel.** The joining client is waiting for a
+    level file and both answers produce one; a third "do nothing" would leave
+    the new peer with no level at all, which is the state R2 exists to remove.
     Zement's first instinct was Save / Discard / Cancel-terminates-session, and
     on reflection neither of us wanted a session killed by a dialog nobody asked
-    for. Save and Discard both leave everyone consistent, so no third option is
-    needed.
+    for.
 
     Escape and the title-bar X both return Rejected from a QMessageBox, so
     omitting Cancel is not enough on its own - the dialog would still be
-    dismissable into exactly the state that must not happen. Discard is
-    therefore installed as the escape button, and anything unrecognised falls
-    through to it below. Discard is the safe default here precisely because it
-    is not destructive in the usual sense: the host keeps its unsaved work on
-    screen, and only the *published copy* is the on-disk one.
+    dismissable into exactly the state that must not happen. The
+    do-not-save answer is therefore installed as the escape button, and it is
+    the safe default: nothing is lost either way, since the host keeps its work
+    on screen and the peer gets it regardless.
     """
     box = QtWidgets.QMessageBox(parent)
     box.setWindowTitle('Someone joined the session')
     box.setIcon(QtWidgets.QMessageBox.Icon.Question)
     box.setText('%s joined, and you have unsaved changes.' % nick)
     box.setInformativeText(
-        'They need a copy of the level to start from.\n\n'
-        'Save writes your changes and sends everyone that file. Discard sends '
-        'the level as it is on disk instead - your unsaved changes stay open '
-        'here, but the others will not see them until you save.')
+        'They will be sent the level exactly as you see it now, including '
+        'those changes, whichever you choose.\n\n'
+        'The only question is whether to write them to disk at the same time.')
 
-    save = box.addButton(QtWidgets.QMessageBox.StandardButton.Save)
-    discard = box.addButton(QtWidgets.QMessageBox.StandardButton.Discard)
+    save = box.addButton('Save to disk too',
+                         QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+    discard = box.addButton('Just send it',
+                            QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
     box.setDefaultButton(save)
 
     # Escape and the window's close button now mean Discard rather than

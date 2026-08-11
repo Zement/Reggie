@@ -3429,20 +3429,23 @@ class CollabController(QtCore.QObject):
             choice = collab_dialogs.resolve_join_publication(self.window, nick)
 
             if choice == 'save':
-                if not self._saveForProposal():
-                    # Publishing anyway would send the on-disk file, which is
-                    # exactly what the host just declined to do. Reported, and
-                    # the caller falls back to the snapshot - which does carry
-                    # the unsaved work.
-                    self._appendStatus(
-                        'Your level could not be saved, so %s is being sent '
-                        'the level the slower way.' % nick)
-                    return False
+                if self._saveForProposal():
+                    # HandleSave published to everyone through notifyLevelSaved,
+                    # which includes the peer that just asked.
+                    debuglog.log('host', 'join publication via save', peer=nick)
+                    return True
 
-                # HandleSave published to everyone through notifyLevelSaved,
-                # which includes the peer that just asked.
-                debuglog.log('host', 'join publication via save', peer=nick)
-                return True
+                # The write failed, and the peer is still owed a level. It gets
+                # one below, from memory - which is the same content the save
+                # would have written, so the join is unaffected and only the
+                # host's disk copy is out of date.
+                #
+                # This used to fall back to the snapshot, on the mistaken
+                # reasoning that publishing would send the on-disk file. It
+                # never does: _publishLevelFile serialises from memory.
+                self._appendStatus(
+                    'Your level could not be saved. %s was still sent the '
+                    'level as it is here.' % nick)
 
         published = self._publishLevelFile(session_id)
         debuglog.log('host', 'join publication', peer=session_id, ok=published)
