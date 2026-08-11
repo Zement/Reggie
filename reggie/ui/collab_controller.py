@@ -3996,6 +3996,23 @@ class CollabController(QtCore.QObject):
         if self.host_session is None:
             return
 
+        # A second request while one is already being served is ignored.
+        #
+        # The client asks once for the patch and can ask again moments later -
+        # after _reloadPatch, or because a room_info arrived - and servicing the
+        # second rebuilds the manifest and calls record_manifest again, which
+        # *replaces* the authorisation the client is still fetching against.
+        # Files from the first offer then arrive against the second manifest and
+        # the transfer dies. Zement's host log shows the pair 0.3 s apart, and
+        # this is why it only ever happened on the first install of a patch.
+        #
+        # Ignoring is right rather than queueing: the transfer already running
+        # delivers exactly the same files.
+        if str(session_id) in self._transferring_peers:
+            debuglog.log('host', 'duplicate patch_need ignored',
+                         nick=str(session_id))
+            return
+
         # Marked as transferring *now*, not when the manifest is finally sent.
         #
         # Building a manifest hashes every file - seconds for a real patch - and
@@ -4100,10 +4117,8 @@ class CollabController(QtCore.QObject):
         else:
             self._appendStatus('Sending %s.' % summary)
 
-        # This peer is now mid-transfer, so level publications are held back
-        # until it reports done - see _publishLevelFile.
-        self._transferring_peers.add(str(session_id))
-
+        # (The peer was marked as transferring at the top of this method, before
+        # the manifest was built - see the note there.)
         self._sendToPeer(session_id, protocol.T_MANIFEST,
                          files.manifest_payload(manifest))
 
