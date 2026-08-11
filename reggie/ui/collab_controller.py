@@ -4267,18 +4267,50 @@ class CollabController(QtCore.QObject):
         if 'level_sha256' not in host and 'tileset_sha256' not in host:
             return True
 
+        # Retail does not compare (round 2, R4). There is no session folder for
+        # the base game, so nothing is ever synced into one and there is nothing
+        # this warning could ask the user to do - "check that this patch points
+        # at the session's Stage and Texture folders" names folders that do not
+        # exist for retail. Both peers are on the shipped game, and any
+        # difference is one the user made in their own copy deliberately.
+        #
+        # This is the case that fired when a Full client changed level on a
+        # retail session, with no action available to anyone.
+        if not self._sessionPatchId():
+            debuglog.log('client', 'content check skipped on retail')
+            return True
+
         stage, texture = self._localGameDataDirectories()
         level = self._session_level or self._currentLevelName()
 
         problems = []
 
-        theirs = str(host.get('level_sha256', '') or '')
-        ours = files.level_fingerprint(stage, level)
-        if theirs and ours and theirs != ours:
-            problems.append(
-                'your copy of %s is not the same file as the host\'s' % level)
-        elif theirs and not ours and level:
-            problems.append('you do not have a copy of %s' % level)
+        # The level is only worth comparing when this peer resolved it *itself*
+        # (round 2, R4). Once we have opened a file the host published, the
+        # bytes were already verified against the hash the host sent with them -
+        # a stronger check than this one, made at the moment they arrived.
+        #
+        # `_host_fingerprint` is the room_info captured when we joined, or at
+        # the last room_info change. The host has almost certainly edited since,
+        # so its level_sha256 describes an *older* state than the file it has
+        # just published. Comparing the two therefore reports a mismatch on a
+        # file that is exactly right, which is what Zement saw immediately after
+        # every successful load (2026-08-11) - including one reported against a
+        # file the client had received seconds earlier.
+        #
+        # The tileset comparison below still runs, and that is the one that
+        # matters: tilesets do not travel with the level file, they come from
+        # whatever Texture folder this machine points at, and that is the local
+        # preference known open 10.1 is about.
+        if not self._opened_from_host:
+            theirs = str(host.get('level_sha256', '') or '')
+            ours = files.level_fingerprint(stage, level)
+            if theirs and ours and theirs != ours:
+                problems.append(
+                    'your copy of %s is not the same file as the host\'s'
+                    % level)
+            elif theirs and not ours and level:
+                problems.append('you do not have a copy of %s' % level)
 
         their_names = list(host.get('tilesets') or [])
         their_hashes = list(host.get('tileset_sha256') or [])
@@ -4312,17 +4344,24 @@ class CollabController(QtCore.QObject):
 
         self._reported_mismatch = summary
 
+        # A status line, no longer a modal dialog (round 2, R4).
+        #
+        # The dialog was written when a mismatch meant "your folders differ from
+        # the host's", which was the common case and needed the user to go and
+        # fix a path. R1 removed that reason to exist: the session now transfers
+        # its Stage and Texture into _collab on every route, so both peers are
+        # reading files that came from the same place. What is left is a
+        # transfer that went wrong - rare, not the user's doing, and the useful
+        # response is to re-sync rather than to be told about folder layout.
+        #
+        # Interrupting an editing session with a modal for that is the wrong
+        # trade, especially since it can fire on a peer that is working
+        # correctly. The wording says what it now actually means.
         self._appendStatus(
-            'Warning - you are not seeing the same files as the host: %s. '
-            'The host\'s objects are correct, but the graphics behind them may '
-            'not be. Check that this patch points at the session\'s Stage and '
-            'Texture folders.' % summary)
-
-        # And said once in a dialog, the first time it happens in a session.
-        # A line in the chat log is easy to miss - Zement's phase 2 test looked
-        # for exactly this and found nothing - and quietly editing a different
-        # level from everyone else is the failure this block exists to prevent.
-        collab_dialogs.report_content_mismatch(self.window, problems)
+            'Warning - some of the session\'s files here do not match the '
+            'host\'s: %s. The host\'s objects are correct, but the graphics '
+            'behind them may not be. Rejoining will fetch them again.'
+            % summary)
         return False
 
     def _adoptTransferredGameData(self, patch_id):
