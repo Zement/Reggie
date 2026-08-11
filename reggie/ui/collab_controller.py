@@ -269,6 +269,11 @@ class CollabController(QtCore.QObject):
         self._deferred_level = None
         self._deferred_snapshot_area = None
 
+        # The level currently being replayed out of that hold, while it is being
+        # replayed. Its file is already on disk and checksum-verified, so the
+        # load it triggers must not stop to ask the host for another copy.
+        self._replaying_held_level = None
+
         # -- session file identity (Block C - B3, phase 0) -------------------
         #
         # Which level and area the *session* is on, tracked explicitly rather
@@ -911,6 +916,7 @@ class CollabController(QtCore.QObject):
         # than being refused on a name match against a leftover file.
         self._opened_from_host = False
         self._opened_patch = None
+        self._replaying_held_level = None
 
         # The session's Stage/Texture override goes with it, so the editor
         # returns to the user's own folders the moment the session ends. This
@@ -1763,10 +1769,41 @@ class CollabController(QtCore.QObject):
                          level=level)
             return False
 
+        # Never for a level we are replaying out of R7's hold.
+        #
+        # The hold exists *because* the file already arrived: _writeSavedLevel
+        # verified it against the host's checksum, wrote it into the session
+        # folder, and deferred only the opening of it. Waiting for the host to
+        # send it a second time can therefore only ever time out - and it did,
+        # for the full 20 s, on every join where the host was already on a patch
+        # the client had to download.
+        #
+        # The race that gets us here is narrow and unavoidable: the publication
+        # lands *inside* _reloadPatch, during the ~300 ms loadNewGameDef spends
+        # pumping events under its own busy indicator. At that instant the
+        # gamedef has not been swapped yet, so _patchId() still answers retail
+        # and R7 holds the file - correctly. The mistake is only in what the
+        # replay does next (Zement's Prankster Comets join, 2026-08-11).
+        #
+        # Declining sends the caller to the ordinary local load below, which
+        # opens the very bytes the host sent, out of the session folder. That is
+        # what already happened after the timeout - just 20 s earlier.
+        if self._replaying_held_level == level:
+            debuglog.log('client', 'not waiting, the file is already here',
+                         level=level)
+            return False
+
         # Retail is no longer excluded here (R6): it has a session folder of its
         # own under _collab, and the retail gamedef now honours a session path
         # override. Only a host with no level name left to publish under can
         # make a file impossible now, and that is the caller's test.
+
+        # Logged because this is the one path in a join that can cost 20 s, and
+        # a log without it cannot tell a wait that was needed from one that was
+        # not. opened_from_host is the difference: false means nothing from the
+        # host is on screen yet, which is when waiting is genuinely right.
+        debuglog.log('client', 'waiting for the published file', level=level,
+                     opened_from_host=self._opened_from_host)
 
         self._pending_publication = True
 
@@ -2958,7 +2995,17 @@ class CollabController(QtCore.QObject):
         self._deferred_snapshot_area = None
 
         if level is not None:
-            if self._onLevelSwitchRequested(level[0], level[1]) is False:
+            # Marked for the duration of the replay so _awaitPublishedLevel can
+            # tell "the session moved, ask the host for the file" from "the file
+            # is already on disk, just open it". Only the second is true here.
+            self._replaying_held_level = level[0]
+            try:
+                declined = self._onLevelSwitchRequested(level[0],
+                                                        level[1]) is False
+            finally:
+                self._replaying_held_level = None
+
+            if declined:
                 debuglog.log('client', 'deferred load still not possible',
                              level=level[0], area=level[1])
                 self._deferred_level = level
@@ -2985,8 +3032,19 @@ class CollabController(QtCore.QObject):
             return
 
         if self._patchPending() or not self._sessionGameIsLoaded():
+            # Logged rather than silent: a hold created *after* _finishTransfer
+            # has already replayed has nothing else to trigger it, so a decline
+            # here is the last thing that happens before a level quietly fails
+            # to open. Worth a line even though it is usually harmless.
+            debuglog.log('client', 'retry declined, editor has not caught up',
+                         level=self._deferred_level[0],
+                         pending=self._patchPending(),
+                         loaded_patch=self._patchId() or '-',
+                         session_patch=self._sessionPatchId() or '-')
             return
 
+        debuglog.log('client', 'retrying the held level',
+                     level=self._deferred_level[0])
         self._resumeDeferredLoad()
 
     def _switchToPatch(self, patch_id):
@@ -4881,6 +4939,14 @@ class CollabController(QtCore.QObject):
 
         name = 'the retail game' if retail else '%s patch' % patch_id
 
+        # Logged either side of the load, because "the patch did not switch"
+        # and "the patch switched but something else went wrong" look identical
+        # from the outside and have completely different fixes. The pair of
+        # lines settles it: a publication held with loaded_patch=- while this is
+        # still running is the narrow race R7 is built for, not a failed load.
+        debuglog.log('client', 'reloading the patch', patch_id=patch_id or '-',
+                     folder=str(folder), before=self._patchId() or '-')
+
         if retail or folder:
             try:
                 from reggie.io.gamedef import loadNewGameDef
@@ -4888,6 +4954,10 @@ class CollabController(QtCore.QObject):
                     # A gamedef of None is retail; see ReggieGameDefinition's
                     # NoneTypes check.
                     loaded = loadNewGameDef(folder)
+
+                debuglog.log('client', 'patch reload returned',
+                             loaded=bool(loaded), patch_id=patch_id or '-',
+                             after=self._patchId() or '-')
 
                 if loaded:
                     # Whatever is on screen now belongs to the game just
