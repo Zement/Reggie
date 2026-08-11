@@ -504,13 +504,21 @@ def describe_transfer(entries, host_nick='the host', patch_id=''):
 
     Deliberately concrete: who is sending, what, how many files and how big.
     A vague prompt trains users to click through it.
+
+    An empty patch id is retail, not a missing name: since R6 a retail session
+    transfers its levels and tilesets like any other, and calling that "the
+    game patch 'unknown'" told the user the host was sending something
+    unidentified at the exact moment they were being asked to consent to it.
     """
     total = sum(entry['size'] for entry in entries)
     megabytes = total / (1024.0 * 1024.0)
 
-    return ('%s wants to send you the game patch %r: %d files, %.1f MiB. '
+    what = ('the retail game data' if not patch_id
+            else 'the game patch %r' % patch_id)
+
+    return ('%s wants to send you %s: %d files, %.1f MiB. '
             'Only data files are accepted - no program code.'
-            % (host_nick, patch_id or 'unknown', len(entries), megabytes))
+            % (host_nick, what, len(entries), megabytes))
 
 
 # ---------------------------------------------------------------------------

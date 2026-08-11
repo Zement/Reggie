@@ -2911,6 +2911,16 @@ class CollabController(QtCore.QObject):
 
         self._reloadPatch(patch_id)
 
+        # Anything held back while this editor was on the wrong game can be
+        # loaded now (R7). _finishTransfer replays after a *download*, which is
+        # only the route where the client had to fetch the data first - a client
+        # that already has it switches straight here, and without this its
+        # deferred publication would simply never be opened. That is a worse
+        # outcome than the bug being fixed: a level held forever rather than
+        # loaded wrongly once.
+        if self._deferred_level is not None:
+            self._resumeDeferredLoad()
+
     def _startPatchTransfer(self, patch_id):
         """
         Asks the host for its patch data files.
@@ -4029,12 +4039,56 @@ class CollabController(QtCore.QObject):
         self._useSessionGamePaths(patch_id, stage,
                                   files.collab_texture_directory(patch_id))
 
+        # Held back while this editor is still on a different game than the
+        # session (Block C - B3, R7).
+        #
+        # The file is written either way - it is the host's bytes and it belongs
+        # in the session folder regardless - but *opening* it now would read the
+        # level through the outgoing gamedef. Its tilesets and sprite images are
+        # the wrong ones, so the load fails on the first sprite the previous
+        # game did not have, and the client reports "could not be opened here"
+        # for a file that is perfectly good.
+        #
+        # Zement hit this switching a session back to retail: the publication
+        # arrived and was opened *before* the patch switch had run, so retail
+        # 01-01 was loaded against Newer and died on 'MidwayFlag' - the same
+        # symptom as the sprite-image bug, from a different cause, which is why
+        # fixing that one did not make it go away.
+        #
+        # _onLevelSwitchRequested has guarded this since phase 4; the file-first
+        # path added in R2 simply never got the same guard. Deferring replays it
+        # through _resumeDeferredLoad the moment the patch is loaded.
+        if self._patchPending() or not self._sessionGameIsLoaded():
+            debuglog.log('client', 'publication held for the patch switch',
+                         level=level, session_patch=patch_id or '-',
+                         loaded_patch=self._patchId() or '-')
+            self._deferred_level = (level, expected.get('area', 0) or 1)
+
+            # Answered rather than left silent: the host is waiting for this
+            # peer (R3), and a deferral is not a failure to report - it is a
+            # "not yet". Reported as not-loaded so the host stops waiting and
+            # the roster shows the peer is still catching up, which is the
+            # warn-not-drop outcome R3 settled on.
+            self._reportLevelLoaded(level, False)
+            return True
+
         # Open it, if this is the level the session is on and we are not already
         # showing it (Block C - B3, Fact 3). This is the whole point of sending
         # the file: loading it takes seconds where rebuilding the same level
         # from a snapshot takes minutes.
         self._openPublishedLevel(level, target, expected.get('area', 0))
         return True
+
+    def _sessionGameIsLoaded(self):
+        """
+        Whether this editor is on the game the session is using.
+
+        Compared by patch id, which is what both sides name a game by:
+        _sessionPatchId() is the host's, _patchId() is ours, and '' is retail on
+        both. A client that has not switched yet answers False, and anything
+        that would read level data - tilesets, sprite images - must wait.
+        """
+        return self._patchId() == self._sessionPatchId()
 
     def _openPublishedLevel(self, level, path, area=0):
         """
