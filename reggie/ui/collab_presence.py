@@ -43,6 +43,12 @@ CLICK_LINE_WIDTH = 4
 # presence send interval, so an idle peer does not flicker.
 CURSOR_IDLE_MS = 8000
 
+# "Somebody is waiting on this" - the status strip's text and the canvas frame.
+# One constant for both, so the two surfaces cannot come to disagree about what
+# blocking looks like. Warm rather than red: a peer loading a level is normal,
+# not an error.
+BUSY_COLOR = '#c87800'
+
 
 def _color(value, fallback='#3daee9'):
     """
@@ -143,7 +149,7 @@ class BusyStrip(QtWidgets.QLabel):
         all - a background download is information, not a warning, and colouring
         everything would leave nothing for the urgent case to stand out against.
         """
-        colour = QtGui.QColor('#c87800') if self._blocking else None
+        colour = QtGui.QColor(BUSY_COLOR) if self._blocking else None
         if colour is None or not colour.isValid():
             colour = self._plain_colour
 

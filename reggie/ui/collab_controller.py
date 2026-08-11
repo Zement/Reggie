@@ -29,7 +29,7 @@ import hmac
 import os
 import time
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from reggie.collab import (
     broadcast, debuglog, discovery, files, identity, protocol, session, sync,
@@ -135,6 +135,11 @@ _NEVER_IN_SESSION_ACTIONS = ('openfromfile', 'saveas', 'savecopyas')
 # leads the session but does not own its file - two save authorities would be
 # two sources of truth for one level.
 _SAVE_ACTIONS = ('save',)
+
+# The presence frame's colour, taken from the same constant the status strip
+# uses so the two surfaces cannot come to disagree about what blocking looks
+# like.
+_BUSY_BORDER_COLOR = collab_presence.BUSY_COLOR
 
 
 class _BusyIndicator:
@@ -285,6 +290,10 @@ class CollabController(QtCore.QObject):
 
         # The status-bar strip, built on first use and outliving any one level.
         self._busy_strip = None
+
+        # The canvas frame, and the timer that debounces it.
+        self._busy_border_shown = False
+        self._busy_border_timer = None
 
         # Nicknames by session id, kept from the roster.
         #
@@ -953,6 +962,13 @@ class CollabController(QtCore.QObject):
         self._local_busy_state = protocol.BUSY_NONE
         self._local_busy_detail = ''
         self._local_busy_sent = 0.0
+
+        # The frame goes before _busyChanged rather than through it: the timer
+        # has to be stopped whatever the state says, or one that fires after the
+        # session has ended would paint a frame nothing will ever clear.
+        self._cancelBusyBorderTimer()
+        self._applyBusyBorder(False)
+
         self._busyChanged()
 
         # Taken out of the status bar rather than merely emptied. An empty label
@@ -2979,6 +2995,96 @@ class CollabController(QtCore.QObject):
             # dropping the reference is enough to stop asking.
             self._busy_strip = None
 
+    # How long a blocking state must persist before the canvas is framed.
+    #
+    # Most of these operations are sub-second - an area switch on a small level
+    # is over before it is read - and a border that flashes on every one of them
+    # is the flicker that ruled out a QPT-style overlay in the first place. The
+    # delay costs nothing on the cases that matter, which are the slow ones.
+    BUSY_BORDER_DELAY_MS = 300
+
+    def _updateBusyBorder(self):
+        """
+        Frames the canvas while a peer holds everyone up - after a delay.
+        """
+        blocking = self.isAnyoneBlocking()
+
+        if not blocking:
+            # Cleared immediately. The delay exists to avoid showing a frame for
+            # something that was over in 200 ms; there is no matching reason to
+            # keep showing one after the peer has finished.
+            self._cancelBusyBorderTimer()
+            self._applyBusyBorder(False)
+            return
+
+        if self._busy_border_timer is not None or self._busy_border_shown:
+            # Already counting down, or already up: neither is worth restarting.
+            # Restarting on each message would mean a download ticking every
+            # 500 ms kept resetting the timer and the frame never appeared.
+            return
+
+        timer = QtCore.QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._onBusyBorderTimeout)
+        timer.start(self.BUSY_BORDER_DELAY_MS)
+        self._busy_border_timer = timer
+
+    def _onBusyBorderTimeout(self):
+        self._busy_border_timer = None
+
+        # Re-checked rather than assumed: the peer may have finished during the
+        # delay, which is exactly the case the delay exists to catch.
+        if self.is_active and self.isAnyoneBlocking():
+            self._applyBusyBorder(True)
+
+    def _cancelBusyBorderTimer(self):
+        timer = self._busy_border_timer
+        self._busy_border_timer = None
+        if timer is not None:
+            try:
+                timer.stop()
+                timer.deleteLater()
+            except RuntimeError:
+                # Already destroyed with the window.
+                pass
+
+    def _applyBusyBorder(self, shown):
+        """
+        Puts the frame on the canvas, or takes it off.
+        """
+        if shown == self._busy_border_shown:
+            return
+
+        view = getattr(self.window, 'view', None)
+        setter = getattr(view, 'setCollabBusyColor', None)
+        if setter is None:
+            # An older view, or no window at all in a test. The strip and the
+            # roster still work, so this is not worth reporting.
+            return
+
+        try:
+            setter(QtGui.QColor(_BUSY_BORDER_COLOR) if shown else None)
+        except RuntimeError:
+            # The view went away with the window.
+            return
+
+        self._busy_border_shown = bool(shown)
+
+    def _updateBusyRoster(self):
+        """
+        Marks the busy participants in the session window's roster.
+        """
+        window = self.status_window
+        setter = getattr(window, 'setBusyPeers', None)
+        if setter is None:
+            return
+
+        try:
+            setter(self._peer_busy)
+        except RuntimeError:
+            # The dialog was closed while messages were still arriving.
+            pass
+
     def _busyChanged(self):
         """
         Notifies the UI that some peer's state changed.
@@ -2991,6 +3097,8 @@ class CollabController(QtCore.QObject):
         Never fatal: a failing observer must not break the session that fed it.
         """
         self._updateBusyStrip()
+        self._updateBusyBorder()
+        self._updateBusyRoster()
 
         for observer in list(self._busy_observers):
             try:

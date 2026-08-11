@@ -130,6 +130,10 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
 
     dragstamp = False
 
+    # How heavy the presence frame is. Thick enough to register peripherally,
+    # thin enough not to eat the level.
+    COLLAB_BUSY_WIDTH = 4
+
     def __init__(self, scene, parent):
         """
         Constructor
@@ -158,6 +162,11 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
         # Undo support (Block C - A1): positions of the selected items at
         # left-button press time, so the whole drag becomes one undo step.
         self._dragUndoSession = None
+
+        # Collaboration presence (Block C - B3): an inset frame drawn while a
+        # remote peer is doing something that holds everyone else up. None means
+        # nobody is, which is the normal state and costs one comparison a paint.
+        self._collabBusyColor = None
 
     def _beginDragUndoSession(self):
         """
@@ -773,12 +782,56 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
         else:
             super().wheelEvent(event)
 
+    def setCollabBusyColor(self, color):
+        """
+        Frames the canvas while a remote peer holds everyone else up, or clears
+        it with None (Block C - B3, presence).
+
+        The colour is decided by the collab controller, which knows who is busy
+        and with what; this end only draws it.
+        """
+        if color == self._collabBusyColor:
+            return
+
+        self._collabBusyColor = color
+        self.viewport().update()
+
     def paintEvent(self, e):
         """
         Handles paint events and fires a signal
         """
         self.repaint.emit()
         QtWidgets.QGraphicsView.paintEvent(self, e)
+
+        # Drawn here rather than in drawForeground, and that is the whole
+        # decision: drawForeground paints in *scene* coordinates, so the frame
+        # would scroll away with the level and be clipped by the scene's own
+        # bounds. paintEvent works on the viewport, so it stays put at every
+        # scroll position and zoom.
+        #
+        # Not a QGraphicsItem either, for the reasons stated in
+        # collab_presence: an item would be selectable, would move with the
+        # level, and would land in the undo stack.
+        #
+        # An inset frame rather than a background tint - a fill fights the level
+        # art and reads as a zone, where a border is visible at the edge of
+        # vision and unmistakably not part of the level.
+        if self._collabBusyColor is None:
+            return
+
+        painter = QtGui.QPainter(self.viewport())
+        try:
+            pen = QtGui.QPen(self._collabBusyColor, self.COLLAB_BUSY_WIDTH)
+            pen.setJoinStyle(QtCore.Qt.PenJoinStyle.MiterJoin)
+            painter.setPen(pen)
+
+            # Inset by half the pen width so the whole stroke lands inside the
+            # viewport; centred on the edge, half of it would be clipped away.
+            inset = self.COLLAB_BUSY_WIDTH / 2.0
+            painter.drawRect(QtCore.QRectF(self.viewport().rect()).adjusted(
+                inset, inset, -inset, -inset))
+        finally:
+            painter.end()
 
     def drawForeground(self, painter, rect):
         """

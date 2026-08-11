@@ -603,6 +603,13 @@ class CollabStatusWindow(QtWidgets.QDialog):
 
         self._join_code = ''
 
+        # Presence (Block C - B3): who is busy, and the participants list to
+        # rebuild from. Kept apart because they arrive in different messages -
+        # a roster carries no busy state and a presence message carries no
+        # roster - and the list has to be redrawn from both.
+        self._busy = {}
+        self._roster_entries = []
+
         self.roster = QtWidgets.QListWidget()
         self.roster.setMinimumWidth(200)
 
@@ -696,6 +703,12 @@ class CollabStatusWindow(QtWidgets.QDialog):
         previous = self._selectedSessionId()
         self.roster.clear()
 
+        # Kept, because this rebuilds the list wholesale: the participants a
+        # roster message carries say nothing about who is busy, so without this
+        # the next roster broadcast would silently clear every busy marker.
+        # Same shape as `previous` above, for the same reason.
+        self._roster_entries = list(participants or [])
+
         for entry in participants:
             nick = entry.get('nick', '?')
             role = entry.get('role', '')
@@ -711,6 +724,18 @@ class CollabStatusWindow(QtWidgets.QDialog):
                 # the shared-plugins assumption depends on matching versions.
                 label += ' - different Reggie version'
 
+            session_id = str(entry.get('session_id', '') or '')
+
+            # What this participant is doing, if anything (Block C - B3,
+            # presence). The status bar names only one peer and collapses to a
+            # count past that, so this is where the per-peer detail lives - and
+            # it is the only place two simultaneous downloads can both be read.
+            busy = self._busy.get(session_id)
+            if busy:
+                detail = str(busy.get('detail') or '').strip()
+                if detail:
+                    label += ' - %s' % detail
+
             item = QtWidgets.QListWidgetItem(label)
             item.setData(QtCore.Qt.ItemDataRole.UserRole,
                          entry.get('session_id', ''))
@@ -724,10 +749,35 @@ class CollabStatusWindow(QtWidgets.QDialog):
             if color:
                 item.setForeground(QtGui.QColor(color))
 
+            if busy:
+                # Italic rather than a colour: the foreground is already the
+                # peer's own identifying colour, and overwriting it to say
+                # "busy" would trade a permanent fact for a temporary one.
+                font = item.font()
+                font.setItalic(True)
+                item.setFont(font)
+
             self.roster.addItem(item)
 
             if entry.get('session_id') == previous:
                 self.roster.setCurrentItem(item)
+
+    def setBusyPeers(self, busy):
+        """
+        Records who is busy and redraws the roster (Block C - B3, presence).
+
+        Held here rather than read from the controller, because the roster is
+        rebuilt from a participants list that does not carry it.
+        """
+        busy = dict(busy or {})
+        if busy == self._busy:
+            # Presence arrives constantly - a download reports twice a second -
+            # and rebuilding the list on every message would fight the user's
+            # selection and scroll position for no visible change.
+            return
+
+        self._busy = busy
+        self.setRoster(self._roster_entries)
 
     def appendChat(self, nick, text, kind=protocol.CHAT_KIND_USER):
         """
