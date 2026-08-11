@@ -1674,13 +1674,14 @@ class CollabController(QtCore.QObject):
             return False
 
         if not self._sessionPatchId():
-            # No _collab folder to receive it - retail. The local copy is all
-            # there is.
+            # Retail: no folder under _collab to receive a file into, and no
+            # session path override for a non-custom gamedef even if there
+            # were. The snapshot is the answer there.
             #
-            # Asked of the session rather than of this editor: at join the
-            # client is still on whatever patch it had open, so _patchId() here
-            # answered for the wrong game and declined a file the session could
-            # perfectly well send (Zement, 2026-08-11).
+            # Asked of the *session* rather than of this editor, which is the
+            # fix: at join the client is still on whatever patch it had open,
+            # so _patchId() here answered for the wrong game and declined a
+            # file the session could perfectly well send.
             return False
 
         self._pending_publication = True
@@ -1996,18 +1997,24 @@ class CollabController(QtCore.QObject):
         # only the snapshot to give.
         #
         # The patch is read from the *session*, not from _patchId(). Those are
-        # different questions and the difference is the whole bug: _patchId()
-        # answers "what is loaded in this editor right now", which at join time
-        # is whatever the user happened to have open - the session's patch is
-        # not loaded until _switchToPatch has run. Asking the local question
-        # made want_file False on every join that did not need a transfer, so
-        # the file path was reached only by the one route that happens to run
-        # after the patch loads (Zement, 2026-08-11: want_file=False on six
-        # consecutive joins).
+        # different questions and the difference was the bug: _patchId() answers
+        # "what is loaded in this editor right now", which at join time is
+        # whatever the user happened to have open - the session's patch is not
+        # loaded until _switchToPatch has run. Asking the local question made
+        # want_file False on joins that needed no transfer, so the file path was
+        # reached only by the route that happens to run after the patch loads.
+        #
+        # Retail still declines, and correctly: it has no folder under _collab
+        # to receive a file into, and no session path override even if it did.
+        # A retail session therefore still joins by snapshot, which works - it
+        # is only slow. Deferred as its own phase (Zement, 2026-08-11).
         want_file = bool(level and self._sessionPatchId())
 
         debuglog.log('client', 'asking for the session level',
-                     level=level or '?', area=int(area), want_file=want_file)
+                     level=level or '?', area=int(area), want_file=want_file,
+                     session_patch=self._sessionPatchId() or '-',
+                     loaded_patch=self._patchId() or '-',
+                     fp_keys=len(self._host_fingerprint or {}))
 
         self.client.send(protocol.make_message(
             protocol.T_SNAPSHOT_REQUEST,
@@ -3407,7 +3414,17 @@ class CollabController(QtCore.QObject):
                          peer=session_id)
             return True
 
-        if globals_.Dirty and self._maySave():
+        dirty = bool(globals_.Dirty)
+        may_save = self._maySave()
+
+        # Logged unconditionally, because "no dialog appeared" has two very
+        # different causes - the host was not dirty, or it could not save - and
+        # from the outside they look identical (Zement, 2026-08-11).
+        debuglog.log('host', 'join publication starting', peer=session_id,
+                     dirty=dirty, may_save=may_save,
+                     level=self._currentLevelName() or '-')
+
+        if dirty and may_save:
             nick = self._nickFor(session_id)
             choice = collab_dialogs.resolve_join_publication(self.window, nick)
 
@@ -3723,7 +3740,10 @@ class CollabController(QtCore.QObject):
             debuglog.log('client', 'saved level checksum mismatch', level=level)
             return False
 
-        patch_id = self._patchId()
+        # The session's patch, not this editor's: at join the two differ, and
+        # the file has to land where the session's data lives, not where this
+        # editor's current gamedef happens to point.
+        patch_id = self._sessionPatchId()
         if not patch_id:
             # Retail has no _collab folder of its own, and writing into the
             # user's real stage folder is exactly what must never happen.
@@ -4619,8 +4639,16 @@ class CollabController(QtCore.QObject):
         this editor right now". At join time those routinely differ: the client
         is on whatever it had open, and the session's patch is not loaded until
         _switchToPatch has run - or, on the transfer route, until the download
-        finishes. Anything deciding what the session needs must ask this one;
-        anything deciding where a local file goes must ask _patchId().
+        finishes.
+
+        Anything deciding what the session needs, or where the session's files
+        belong, must ask this one. _patchId() is for questions about the editor
+        itself - what to compare a local gamedef against, what to report as our
+        own identity.
+
+        Returns '' for a retail session, which is a real answer rather than a
+        missing one: files.collab_game_directory maps it to its own reserved
+        folder.
 
         Falls back to the loaded patch on the host, which has no room info of
         its own to read and *is* the authority on what the session uses.

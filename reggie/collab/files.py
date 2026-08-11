@@ -1411,6 +1411,12 @@ def collab_game_directory(patch_id, base_dir=''):
     a patch whose display name is not a legal directory name ('NSMBW: The
     Prankster Comets') lands somewhere real - and so the two folders for one
     patch are named consistently.
+
+    Retail has no id and therefore no folder here. That is why a retail session
+    cannot receive the host's level file and falls back to the snapshot; giving
+    it one is not enough on its own, because ReggieGameDefinition._sessionPath
+    refuses an override for a non-custom gamedef, so the client would write a
+    file it then would not read. Deferred as its own phase (2026-08-11).
     """
     return os.path.join(collab_mods_directory(base_dir),
                         folder_name_for_patch(patch_id))
