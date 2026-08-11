@@ -772,6 +772,14 @@ def _v_saved(p):
         'size': _get_int(p, 'size', minimum=0,
                          maximum=MAX_MANIFEST_TOTAL_BYTES, required=False),
         'nick': _get_str(p, 'nick', MAX_NICK_CHARS, required=False),
+
+        # Why the file is being sent: 'save' for a real Save by the host,
+        # 'publish' for the copy that accompanies a level or area change.
+        # Cosmetic - both are handled identically - but the two were
+        # indistinguishable in the logs and in the chat line, and reading
+        # "the host saved 01-01" for a change nobody saved sent one B3
+        # investigation down the wrong path entirely (2026-08-11).
+        'reason': _get_str(p, 'reason', 16, required=False),
     }
 
 

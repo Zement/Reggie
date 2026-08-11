@@ -3179,6 +3179,7 @@ class CollabController(QtCore.QObject):
             'sha256': files.sha256_bytes(data),
             'size': len(data),
             'nick': self._hostNick(),
+            'reason': 'publish',
         }
 
         message = protocol.make_message(protocol.T_SAVED, payload)
@@ -3293,6 +3294,7 @@ class CollabController(QtCore.QObject):
             'sha256': files.sha256_bytes(data),
             'size': len(data),
             'nick': self._hostNick(),
+            'reason': 'save',
         }
 
         message = protocol.make_message(protocol.T_SAVED, payload)
@@ -3616,7 +3618,15 @@ class CollabController(QtCore.QObject):
             return False
 
         nick = str((payload or {}).get('nick', '') or 'The host')
-        self._appendStatus('%s saved %s.' % (nick, level))
+
+        # 'the host saved 01-01' for a level change nobody saved is actively
+        # misleading - it cost one B3 investigation a wrong diagnosis - so the
+        # two are named differently even though they are handled identically.
+        reason = str((payload or {}).get('reason', '') or 'save')
+        if reason == 'publish':
+            self._appendStatus('%s is sharing %s.' % (nick, level))
+        else:
+            self._appendStatus('%s saved %s.' % (nick, level))
 
         # The bytes arrive as stage-section chunks; this only records what to
         # expect, so the chunk handler can verify and place them.
@@ -3642,7 +3652,8 @@ class CollabController(QtCore.QObject):
         if hasattr(window, 'UpdateTitle'):
             window.UpdateTitle()
 
-        debuglog.log('client', 'host saved', level=level, nick=nick)
+        debuglog.log('client', 'level file incoming', level=level, nick=nick,
+                     reason=reason)
         return True
 
     # -- content mismatch (Block C - B3, phase 2) ---------------------------
@@ -3985,6 +3996,21 @@ class CollabController(QtCore.QObject):
         if self.host_session is None:
             return
 
+        # Marked as transferring *now*, not when the manifest is finally sent.
+        #
+        # Building a manifest hashes every file - seconds for a real patch - and
+        # it pumps the event loop while it works, so the host's own level
+        # changes are processed inside that window. Marking the peer afterwards
+        # left it unprotected for exactly as long as the hashing took, and a
+        # publication landing there entered the client's TransferSession and
+        # aborted the download with "the host sent 'bga/0104.png' again after it
+        # was complete".
+        #
+        # That is why Zement saw it only on the *first* install of a patch: the
+        # window exists only while a manifest is being built, and only a client
+        # that does not yet have the patch ever triggers one.
+        self._transferring_peers.add(str(session_id))
+
         directory = ''
         if not assets_only:
             directory = self._localPatchDirectory(patch_id)
@@ -4175,6 +4201,14 @@ class CollabController(QtCore.QObject):
     def _refuseTransfer(self, session_id, reason):
         self._sendToPeer(session_id, protocol.T_FILE_DONE,
                          {'ok': False, 'error': reason})
+
+        # A refused transfer is over, so the peer must stop counting as
+        # transferring. _onPatchNeeded marks it before building the manifest,
+        # and every way out of that method short of sending one comes through
+        # here - so without this a peer whose transfer was refused would never
+        # be published to again for the rest of the session.
+        self._transferring_peers.discard(str(session_id))
+
         if self.host_session is not None:
             self.host_session.clear_transfer(session_id)
 
