@@ -162,6 +162,16 @@ Reggie-Next.code-workspace
 # Everything under here is developer-local and never committed. See _workspace/.
 _workspace/
 
+# Runtime logs written beside the application (collaboration debug logs, and
+# anything a future unified logger writes).
+#
+# The folder travels, its contents never do - same shape as assets/mods below.
+# The application creates logs/ on demand either way; keeping it in the tree
+# means a fresh checkout has somewhere to write before anything runs, and means
+# the layout is visible to someone reading the repository.
+logs/*
+!logs/.gitkeep
+
 # Assets folder contents (keep folder structure only)
 assets/mods/*
 assets/snapshots/*

@@ -26,7 +26,7 @@ things are load-bearing rather than cosmetic:
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from reggie.collab import discovery, files, identity, protocol, session, upnp
+from reggie.collab import discovery, identity, protocol, session, upnp
 from reggie.core import globals_
 from reggie.core.dirty import setSetting, setting
 
@@ -37,6 +37,16 @@ CURSORS_ALWAYS = 'always'
 CURSORS_ON_MOVE = 'onmove'
 CURSORS_NEVER = 'never'
 
+# Where a client may get a patch it does not have. Read on the CLIENT only -
+# the host never consults it, because it is the client deciding what it is
+# willing to accept.
+#
+# PATCH_SOURCE_AUTO is the default and the sensible behaviour: try the catalog,
+# fall back to the host. The original two values read as a preference order but
+# behaved as an exclusive choice, so picking "From the Patch Manager" silently
+# forbade the host transfer entirely - which is how Zement's first data-only
+# test was refused with a message blaming the host.
+PATCH_SOURCE_AUTO = 'auto'
 PATCH_SOURCE_CATALOG = 'catalog'
 PATCH_SOURCE_HOST = 'host'
 
@@ -91,13 +101,14 @@ _FALLBACKS = {
     17: 'Remove ban',
     18: 'Show other users\' cursors',
     19: 'Show other users\' clicks',
-    20: 'Download game patches',
+    20: 'Get a missing patch (as a client)',
     21: 'Nickname colour',
     22: 'Always',
     23: 'Only while moving items',
     24: 'Never',
-    25: 'From the Patch Manager',
-    26: 'From the host (data files only)',
+    25: 'Only from the Patch Manager',
+    26: 'Only from the host (data files only)',
+    27: 'Patch Manager, then the host (recommended)',
 }
 
 
@@ -115,15 +126,55 @@ def load_collab_settings():
                  or session.DEFAULT_NICK_COLORS[0],
         'cursors': str(setting('CollabCursors', '') or '') or CURSORS_ON_MOVE,
         'clicks': bool(setting('CollabClicks', True)),
-        'patch_source': str(setting('CollabPatchSource', '') or '')
-                        or PATCH_SOURCE_CATALOG,
-        'discoverable': bool(setting('CollabDiscoverable', False)),
-        'upnp': bool(setting('CollabUPnP', False)),
+        'patch_source': _patch_source_setting(),
+        # Both default to on: the common case is hosting for someone, and both
+        # only ever take effect while hosting. Discovery answers LAN probes by
+        # unicast and carries no secret; UPnP is what makes a join code usable
+        # over the internet at all, and its mapping is leased and removed when
+        # the session ends. A host who wants neither can still turn them off,
+        # and that choice is remembered.
+        'discoverable': _default_true_setting('CollabDiscoverable'),
+        'upnp': _default_true_setting('CollabUPnP'),
         'port': int(setting('CollabPort', identity.DEFAULT_HOST_PORT) or
                     identity.DEFAULT_HOST_PORT),
         'debug_log': bool(setting('CollabDebugLog', False)),
         'firewall_prompt': bool(setting('CollabFirewallPrompt', True)),
     }
+
+
+def _patch_source_setting():
+    """
+    The stored patch source, migrating the value the old two-way choice wrote.
+
+    'catalog' used to be the default and meant "prefer the catalog", but it was
+    read as an exclusive choice and forbade a host transfer even for a patch the
+    catalog does not have. Anyone who never touched the setting therefore has
+    'catalog' stored while having chosen nothing, so it is migrated to AUTO,
+    which is what that default was meant to mean. A deliberate choice is kept:
+    it is only distinguishable from the default by having been written since,
+    which is why the migration is one-way and the new values are never rewritten.
+    """
+    stored = str(setting('CollabPatchSource', '') or '')
+
+    if stored == PATCH_SOURCE_CATALOG and not setting('CollabPatchSourceV2', False):
+        return PATCH_SOURCE_AUTO
+
+    return stored or PATCH_SOURCE_AUTO
+
+
+def _default_true_setting(key):
+    """
+    A boolean preference whose default changed from off to on.
+
+    A stored False is ambiguous: it is what the old default wrote for everyone
+    who never touched the control, and also what a deliberate "off" writes. The
+    save side stamps <key>V2 once the user has been through the new dialog, so
+    only an unstamped False is treated as the old default and flipped.
+    """
+    if not setting(key + 'V2', False):
+        return True
+
+    return bool(setting(key, True))
 
 
 def save_collab_settings(values):
@@ -132,9 +183,16 @@ def save_collab_settings(values):
     setSetting('CollabCursors', values.get('cursors', CURSORS_ON_MOVE))
     setSetting('CollabClicks', bool(values.get('clicks', True)))
     setSetting('CollabPatchSource', values.get('patch_source',
-                                               PATCH_SOURCE_CATALOG))
-    setSetting('CollabDiscoverable', bool(values.get('discoverable', False)))
-    setSetting('CollabUPnP', bool(values.get('upnp', False)))
+                                               PATCH_SOURCE_AUTO))
+    # Marks the stored value as written by the three-way control, so a
+    # deliberate "Only from the Patch Manager" is never migrated to AUTO.
+    setSetting('CollabPatchSourceV2', True)
+    setSetting('CollabDiscoverable', bool(values.get('discoverable', True)))
+    setSetting('CollabUPnP', bool(values.get('upnp', True)))
+    # Stamps both as written by the current dialog, so a deliberate "off" is
+    # never mistaken for the old default and flipped back on.
+    setSetting('CollabDiscoverableV2', True)
+    setSetting('CollabUPnPV2', True)
     setSetting('CollabPort', int(values.get('port', identity.DEFAULT_HOST_PORT)))
     setSetting('CollabDebugLog', bool(values.get('debug_log', False)))
     setSetting('CollabFirewallPrompt',
@@ -264,10 +322,21 @@ class CollabSetupDialog(QtWidgets.QDialog):
         if not addresses:
             return 'Your address on this network could not be determined.'
 
-        return ('Your address on this network: %s\n'
-                'For play over the internet the join code will use your public '
-                'address instead, once the router has been asked.'
-                % ', '.join(addresses))
+        # The first entry comes from the routing table - the address this
+        # machine would actually use to reach the internet - and the rest are
+        # other adapters. Saying which is which matters on a machine with
+        # virtual adapters, where the list is long and only one entry is the
+        # real one; presenting four addresses as equals invites the reader to
+        # guess, and to conclude the wrong one was chosen.
+        primary = addresses[0]
+        others = addresses[1:]
+
+        text = 'Your address on this network: %s' % primary
+        if others:
+            text += '\nOther adapters on this machine: %s' % ', '.join(others)
+
+        return (text + '\nFor play over the internet the join code will use '
+                'your public address instead, once the router has been asked.')
 
     def _checkHostingPossible(self):
         """
@@ -534,6 +603,13 @@ class CollabStatusWindow(QtWidgets.QDialog):
 
         self._join_code = ''
 
+        # Presence (Block C - B3): who is busy, and the participants list to
+        # rebuild from. Kept apart because they arrive in different messages -
+        # a roster carries no busy state and a presence message carries no
+        # roster - and the list has to be redrawn from both.
+        self._busy = {}
+        self._roster_entries = []
+
         self.roster = QtWidgets.QListWidget()
         self.roster.setMinimumWidth(200)
 
@@ -627,6 +703,12 @@ class CollabStatusWindow(QtWidgets.QDialog):
         previous = self._selectedSessionId()
         self.roster.clear()
 
+        # Kept, because this rebuilds the list wholesale: the participants a
+        # roster message carries say nothing about who is busy, so without this
+        # the next roster broadcast would silently clear every busy marker.
+        # Same shape as `previous` above, for the same reason.
+        self._roster_entries = list(participants or [])
+
         for entry in participants:
             nick = entry.get('nick', '?')
             role = entry.get('role', '')
@@ -642,6 +724,18 @@ class CollabStatusWindow(QtWidgets.QDialog):
                 # the shared-plugins assumption depends on matching versions.
                 label += ' - different Reggie version'
 
+            session_id = str(entry.get('session_id', '') or '')
+
+            # What this participant is doing, if anything (Block C - B3,
+            # presence). The status bar names only one peer and collapses to a
+            # count past that, so this is where the per-peer detail lives - and
+            # it is the only place two simultaneous downloads can both be read.
+            busy = self._busy.get(session_id)
+            if busy:
+                detail = str(busy.get('detail') or '').strip()
+                if detail:
+                    label += ' - %s' % detail
+
             item = QtWidgets.QListWidgetItem(label)
             item.setData(QtCore.Qt.ItemDataRole.UserRole,
                          entry.get('session_id', ''))
@@ -655,10 +749,35 @@ class CollabStatusWindow(QtWidgets.QDialog):
             if color:
                 item.setForeground(QtGui.QColor(color))
 
+            if busy:
+                # Italic rather than a colour: the foreground is already the
+                # peer's own identifying colour, and overwriting it to say
+                # "busy" would trade a permanent fact for a temporary one.
+                font = item.font()
+                font.setItalic(True)
+                item.setFont(font)
+
             self.roster.addItem(item)
 
             if entry.get('session_id') == previous:
                 self.roster.setCurrentItem(item)
+
+    def setBusyPeers(self, busy):
+        """
+        Records who is busy and redraws the roster (Block C - B3, presence).
+
+        Held here rather than read from the controller, because the roster is
+        rebuilt from a participants list that does not carry it.
+        """
+        busy = dict(busy or {})
+        if busy == self._busy:
+            # Presence arrives constantly - a download reports twice a second -
+            # and rebuilding the list on every message would fight the user's
+            # selection and scroll position for no visible change.
+            return
+
+        self._busy = busy
+        self.setRoster(self._roster_entries)
 
     def appendChat(self, nick, text, kind=protocol.CHAT_KIND_USER):
         """
@@ -869,16 +988,24 @@ class CollabSettingsTab(QtWidgets.QWidget):
         self.clicks.setChecked(values['clicks'])
 
         self.patchSource = QtWidgets.QComboBox()
+        self.patchSource.addItem(_tr(27), PATCH_SOURCE_AUTO)
         self.patchSource.addItem(_tr(25), PATCH_SOURCE_CATALOG)
         self.patchSource.addItem(_tr(26), PATCH_SOURCE_HOST)
         self.patchSource.setCurrentIndex(
             max(0, self.patchSource.findData(values['patch_source'])))
 
         patchHint = QtWidgets.QLabel(
-            'The Patch Manager is preferred: its files come from the catalog, '
-            'not from another player. A host transfer is only offered for '
-            'patches the catalog does not have, always asks first, and never '
-            'accepts program code.')
+            'This is your own choice as a client - it has no effect while you '
+            'are hosting. The Patch Manager is preferred where it has the '
+            'patch: its files come from the catalog rather than from another '
+            'player, and installing from it is asked for separately. A host '
+            'transfer runs without asking - joining a session is the consent - '
+            'and never accepts program code, so custom sprite previews are not '
+            'included.\n\n'
+            'While you are in a session, the levels and tilesets it uses are '
+            'kept in assets/mods/_collab, and files there may be created or '
+            'replaced by the session - including when the host saves. Your own '
+            'game folders are never written to.')
         patchHint.setWordWrap(True)
 
         self.banList = QtWidgets.QListWidget()
@@ -946,7 +1073,7 @@ class CollabSettingsTab(QtWidgets.QWidget):
             'color': self.color.currentData() or session.DEFAULT_NICK_COLORS[0],
             'cursors': self.cursors.currentData() or CURSORS_ON_MOVE,
             'clicks': self.clicks.isChecked(),
-            'patch_source': self.patchSource.currentData() or PATCH_SOURCE_CATALOG,
+            'patch_source': self.patchSource.currentData() or PATCH_SOURCE_AUTO,
             'debug_log': self.debugLog.isChecked(),
             'firewall_prompt': self.firewallPrompt.isChecked(),
         }
@@ -983,27 +1110,253 @@ def _colorSwatch(color, size=12):
 # Prompts
 # ---------------------------------------------------------------------------
 
-def confirm_patch_transfer(parent, entries, host_nick, patch_id):
+def _exec_with_pointer(box):
     """
-    The consent prompt before any patch file is accepted (spec section 4.4).
+    Shows a modal without inheriting a wait cursor.
 
-    Concrete on purpose - who, what, how many files, how big - because a vague
-    prompt trains people to click through it.
+    Qt's override cursor is application-wide, so a dialog opened from inside a
+    _BusyIndicator - and every prompt in a session can be, because those waits
+    run processEvents and deliver the message that raises the prompt - shows
+    the hourglass for its whole lifetime. The user is being asked a question
+    while the editor claims to be busy, and the answer is what it is waiting
+    for. Zement reported exactly that on the catalog route: the prompt, and
+    then the Patch Manager, both busy for ten seconds or more (2026-08-11).
+
+    Pushing an arrow on top for the dialog's lifetime is Qt's own idiom for
+    this - the stack is restored exactly as it was, so an outer wait keeps its
+    cursor afterwards. Applied even when nothing is overridden, which is
+    harmless: push and pop are symmetrical either way.
     """
-    message = files.describe_transfer(entries, host_nick, patch_id)
+    QtWidgets.QApplication.setOverrideCursor(
+        QtCore.Qt.CursorShape.ArrowCursor)
+    try:
+        return box.exec()
+    finally:
+        QtWidgets.QApplication.restoreOverrideCursor()
 
+
+def confirm_catalog_install(parent, patch_id, patch_version=''):
+    """
+    The consent prompt before installing a patch from the Patch Manager catalog.
+
+    Asked here and not for a host transfer, because the two are different acts.
+    Accepting data files from the host means trusting a peer already
+    authenticated by the pinned join code, which joining the session already
+    expressed - so that route runs unprompted (Zement, 2026-08-06). Installing
+    from the catalog reaches out to a *third party* the user has not vouched for
+    in this session, over the internet, and writes an unpacked archive - so it
+    is asked for explicitly even though it is the more "official" route.
+
+    Declining ends the session (the client cannot hold the same level state
+    without the patch), and the prompt says so rather than letting the
+    disconnect look like a fault.
+    """
     box = QtWidgets.QMessageBox(parent)
     box.setWindowTitle(_tr(0))
     box.setIcon(QtWidgets.QMessageBox.Icon.Question)
-    box.setText('Accept these files from the host?')
-    box.setInformativeText(message)
-    box.setDetailedText('\n'.join(
-        '%s  (%d bytes)' % (entry['path'], entry['size']) for entry in entries))
+    box.setText('Install the %s patch?' % patch_id)
+    box.setInformativeText(
+        'This session uses %s%s, which you do not have. It can be downloaded '
+        'and installed from the Patch Manager.\n\n'
+        'If you decline, you will leave the session.'
+        % (patch_id,
+           (' version %s' % patch_version) if patch_version else ''))
     box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes
                            | QtWidgets.QMessageBox.StandardButton.No)
     box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
 
-    return box.exec() == QtWidgets.QMessageBox.StandardButton.Yes
+    return _exec_with_pointer(box) == QtWidgets.QMessageBox.StandardButton.Yes
+
+
+def report_patch_unavailable(parent, message):
+    """
+    Reports that the session's patch could not be obtained, so the session ended.
+
+    Shown as information rather than a warning: declining an install is a
+    legitimate choice, not a fault, and the common path to here is the user
+    having just clicked No.
+    """
+    box = QtWidgets.QMessageBox(parent)
+    box.setWindowTitle(_tr(0))
+    box.setIcon(QtWidgets.QMessageBox.Icon.Information)
+    box.setText('You have left the session.')
+    box.setInformativeText(message)
+    box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
+    _exec_with_pointer(box)
+
+
+# report_content_mismatch was here, and is deliberately gone (round 2, R4).
+#
+# It was written when a mismatch meant "your Stage path differs from the host's"
+# - the common case at the time, and one the user had to go and fix, so a modal
+# was justified. R1 removed that reason to exist: the session transfers its
+# Stage and Texture into _collab on every join route now, so both peers read
+# files that came from the same place.
+#
+# What remains is a transfer that went wrong: rare, not the user's doing, and
+# answered by re-syncing rather than by reading about folder layout. That is a
+# status line, which is what _checkContentMatches writes. The dialog also fired
+# on peers that were working perfectly - a level received from the host was
+# compared against a fingerprint captured at join, which the host had edited
+# past - so it interrupted correct sessions to report a non-problem.
+#
+# Left as a note rather than silently removed, because "why is there no longer a
+# dialog for this" is a reasonable question to ask of this file later.
+
+
+def confirm_large_transfer(parent, total_bytes, file_count):
+    """
+    Asks before starting a large game-data download (Block C - B3, round 2).
+    Returns True to proceed.
+
+    The download itself is not optional, and the wording has to be honest about
+    that: a client without the host's levels and tilesets cannot see what
+    everyone else sees, which is the whole problem this round removes. So the
+    choice is "download, or leave" rather than "download, or carry on without
+    it" - the second would produce exactly the desynced session the transfer
+    exists to prevent.
+
+    Only shown above ASSET_CONSENT_BYTES. A small transfer is automatic, because
+    it lands in assets/mods/_collab/ and the client consented to that at join;
+    the dialog exists for the case where the *wait* is worth warning about.
+    """
+    megabytes = total_bytes / (1024.0 * 1024.0)
+
+    box = QtWidgets.QMessageBox(parent)
+    box.setWindowTitle('Download the session\'s game data?')
+    box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+    box.setText('This session needs %.0f MB of levels and tilesets from the '
+                'host.' % megabytes)
+    box.setInformativeText(
+        '%d files will be downloaded into assets/mods/_collab/, so none of '
+        'your own game data is touched.\n\n'
+        'This is what lets you see exactly what the host sees. If you decline, '
+        'you will leave the session - taking part without these files would '
+        'mean editing levels that look different on every machine.'
+        % file_count)
+
+    download = box.addButton('Download',
+                             QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+    box.addButton('Leave the session',
+                  QtWidgets.QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(download)
+
+    _exec_with_pointer(box)
+
+    # Compared by identity rather than by standard button, because both are
+    # custom buttons here. Anything other than Download - including the dialog
+    # being closed - means the transfer does not start.
+    return box.clickedButton() is download
+
+
+def resolve_switch_proposal(parent, nick, destination):
+    """
+    Asks the host what to do about its unsaved work before a client's switch
+    (Block C - B3, phase 3d). Returns 'save', 'discard', or 'cancel'.
+
+    Shown only when the host actually has unsaved changes, so it is not a
+    permission prompt - the client is allowed to do this. It is the host's own
+    Save/Discard/Cancel, asked at the moment someone else's action would
+    otherwise discard the work.
+
+    Naming who asked is the point of having a dialog of its own rather than
+    reusing CheckDirty's: a Save prompt appearing with nobody at the keyboard is
+    alarming and unexplainable, and the host needs to know the move is coming
+    from a person, not a fault.
+
+    Cancel is the default. The safe answer when the host is not sure - or is not
+    really reading - is the one that keeps their work and keeps the session
+    where it is; both other answers are recoverable from, but a mis-clicked
+    Discard is not.
+    """
+    box = QtWidgets.QMessageBox(parent)
+    box.setWindowTitle('Move the session?')
+    box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+    box.setText('%s wants to move the session to %s.' % (nick, destination))
+    box.setInformativeText(
+        'You have unsaved changes to the level that is open now.\n\n'
+        'Save keeps them and then moves. Discard moves without keeping them. '
+        'Cancel stays on this level and tells %s the request was declined.'
+        % nick)
+    box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Save
+                           | QtWidgets.QMessageBox.StandardButton.Discard
+                           | QtWidgets.QMessageBox.StandardButton.Cancel)
+    box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+
+    answer = _exec_with_pointer(box)
+
+    if answer == QtWidgets.QMessageBox.StandardButton.Save:
+        return 'save'
+    if answer == QtWidgets.QMessageBox.StandardButton.Discard:
+        return 'discard'
+
+    # Anything else - including the window being closed - is a cancel. A dialog
+    # dismissed without an answer must not be read as consent to discard.
+    return 'cancel'
+
+
+def resolve_join_publication(parent, nick):
+    """
+    Asks the host what to do about its unsaved work when someone joins
+    (Block C - B3, round 2, R2). Returns 'save' or 'discard'.
+
+    **The question is only whether to write to disk.** Both answers send the
+    same thing: the level as it is on the host's screen, unsaved edits included.
+    That is not what the first wording of this dialog said, and Zement caught it
+    by testing both answers and finding they synced identically (2026-08-11).
+
+    The reason is worth stating, because it is easy to assume otherwise:
+    _publishLevelFile serialises from `Level.save()` - memory, not disk - so a
+    peer always receives the host's current work. There is no code path here
+    that sends the on-disk file, and adding one would be worse: the joining
+    client would start from a level the host is not looking at.
+
+    So "Discard" is a poor name for what the button does, and the labels say
+    what actually happens instead. Kept as the Save/Discard *roles* underneath
+    because Qt gives those the right placement and keyboard handling, and
+    because the return values are what the caller already switches on.
+
+    **There is deliberately no Cancel.** The joining client is waiting for a
+    level file and both answers produce one; a third "do nothing" would leave
+    the new peer with no level at all, which is the state R2 exists to remove.
+    Zement's first instinct was Save / Discard / Cancel-terminates-session, and
+    on reflection neither of us wanted a session killed by a dialog nobody asked
+    for.
+
+    Escape and the title-bar X both return Rejected from a QMessageBox, so
+    omitting Cancel is not enough on its own - the dialog would still be
+    dismissable into exactly the state that must not happen. The
+    do-not-save answer is therefore installed as the escape button, and it is
+    the safe default: nothing is lost either way, since the host keeps its work
+    on screen and the peer gets it regardless.
+    """
+    box = QtWidgets.QMessageBox(parent)
+    box.setWindowTitle('Someone joined the session')
+    box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+    box.setText('%s joined, and you have unsaved changes.' % nick)
+    box.setInformativeText(
+        'They will be sent the level exactly as you see it now, including '
+        'those changes, whichever you choose.\n\n'
+        'The only question is whether to write them to disk at the same time.')
+
+    save = box.addButton('Save to disk too',
+                         QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+    discard = box.addButton('Just send it',
+                            QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+    box.setDefaultButton(save)
+
+    # Escape and the window's close button now mean Discard rather than
+    # "no answer". Without this the dialog returns Rejected and the caller
+    # cannot tell a deliberate Discard from a dismissal.
+    box.setEscapeButton(discard)
+
+    _exec_with_pointer(box)
+
+    # Compared by identity, and Save has to be the *positive* test: anything
+    # else - Discard, Escape, the title bar - is a discard. Reading it the other
+    # way round would turn an unexpected result into a save the host never asked
+    # for.
+    return 'save' if box.clickedButton() is save else 'discard'
 
 
 def report_pin_mismatch(parent, message):
@@ -1024,7 +1377,7 @@ def report_pin_mismatch(parent, message):
         '%s\n\nNothing was sent to it. Ask the host for a fresh join code '
         'through a channel you trust, and do not reuse the old one.' % message)
     box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
-    box.exec()
+    _exec_with_pointer(box)
 
 
 def show_join_code(parent, join_code):
@@ -1071,7 +1424,7 @@ def show_join_code(parent, join_code):
     # Copying is what the dialog is for, and it is what the user almost always
     # wants next - dismissing without copying means retyping a long code.
     box.setDefaultButton(copyButton)
-    box.exec()
+    _exec_with_pointer(box)
 
     if box.clickedButton() is copyButton:
         clipboard = QtWidgets.QApplication.clipboard()

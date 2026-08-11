@@ -2073,11 +2073,30 @@ class SpriteItem(LevelEditorItem):
         self.setZValue(26000)
         self.resetTransform()
 
-        if (self.type in globals_.gamedef.getImageClasses()) and (self.type not in SLib.SpriteImagesLoaded):
-            globals_.gamedef.getImageClasses()[self.type].loadImages()
+        # Load against the class actually being constructed, not the one the
+        # current gamedef maps this type to.
+        #
+        # These are usually the same, and when they are not, the difference is
+        # the bug: LoadGameDef clears ImageCache and reloads it only for the
+        # sprites in the level that is open *at that moment*. Switching patch
+        # and then opening a level containing a sprite the old level did not
+        # have left that sprite's images unloaded, and a SpriteImage_* whose
+        # __init__ reads ImageCache['...'] directly - most of static.py does -
+        # raised KeyError on construction. The level then failed to open with
+        # "That level could not be loaded: 'MidwayFlag'".
+        #
+        # Zement hit this switching a session back to retail from Newer, but it
+        # is not a collaboration bug: any patch switch followed by a level with
+        # a new sprite in it does the same thing.
+        image_class = obj or SLib.SpriteImage
+
+        if self.type not in SLib.SpriteImagesLoaded:
+            loader = getattr(image_class, 'loadImages', None)
+            if loader is not None:
+                loader()
             SLib.SpriteImagesLoaded.add(self.type)
 
-        self.ImageObj = obj(self) if obj else SLib.SpriteImage(self)
+        self.ImageObj = image_class(self)
 
         # show auxiliary objects properly
         for aux in self.ImageObj.aux:

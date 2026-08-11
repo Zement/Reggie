@@ -189,6 +189,78 @@ class RefMap:
 
         return count
 
+    def adopt_from_file(self, area, host_origin='host'):
+        """
+        Rebuilds the host's references for an area both peers loaded from the
+        *same file* (Block C - B3, round 2, R3).
+
+        Returns the number of references bound.
+
+        This is what makes file-first complete. Opening the host's level file
+        gives a client the right items and no way to name them: references
+        arrived only in a snapshot, so the first op after a file load failed
+        with UnknownRefError and asked for exactly the snapshot the file was
+        meant to replace. Zement's log shows it as "requesting resync" 141 ms
+        after a successful load, on every level change (2026-08-11).
+
+        **Why this is sound, and why it is not `seed` on a client.** A
+        reference is `origin:counter`, and the counter is assigned by walking
+        `_snapshot_groups(area)` in a fixed order. The host minted its
+        references by that walk over *its* area; the client walks the same
+        order over an area built from byte-identical bytes, so the nth item here
+        is the nth item there and gets the same number. Nothing is invented and
+        nothing is renumbered - it reconstructs names the host has already
+        assigned, which is the opposite of `seed`'s danger.
+
+        The origin is the *host's*, not this peer's, for the same reason: these
+        are the host's references, and minting them under a client origin would
+        produce names the host has never heard of.
+
+        The safety of the whole thing rests on "the same file", so callers must
+        only use it after opening a file the host published. A client that
+        opened its own copy of a same-named level would bind confident,
+        completely wrong references - worse than having none, because a bad
+        reference is applied rather than reported. `_openPublishedLevel` is the
+        one caller, and it runs only on bytes verified against the host's hash.
+        """
+        if area is None:
+            return 0
+
+        origin = str(host_origin or 'host')
+        count = 0
+
+        with self._lock:
+            # Reset rather than merged. A stale reference from the level this
+            # peer is leaving would survive and shadow the new binding, which is
+            # the mis-bound-ref failure that is far harder to notice than a
+            # missing one.
+            self._by_ref = {}
+            self._by_item = {}
+
+            counter = 0
+            for group in _snapshot_groups(area):
+                for item in group:
+                    # Skipped *without* incrementing, exactly as seed() does:
+                    # it calls mint() only for non-None items, and mint()
+                    # increments per call. Counting an empty slot here would
+                    # shift every later reference by one and rebind the whole
+                    # area to the wrong items - confidently, and therefore
+                    # silently. The two walks have to agree number for number.
+                    if item is None:
+                        continue
+
+                    counter += 1
+                    ref = '%s:%d' % (origin, counter)
+                    self._by_ref[ref] = item
+                    self._by_item[id(item)] = ref
+                    count += 1
+
+            # Anything this peer mints from now on must not collide with a
+            # reference the host has already used.
+            self._counter = max(self._counter, counter)
+
+        return count
+
     def bind(self, ref, item):
         """
         Records a host-assigned reference. Used by clients applying a snapshot or
@@ -310,6 +382,28 @@ def check_index(value, name='index', maximum=1 << 20):
     if not (0 <= value <= maximum):
         raise SyncError('%s %d is out of range' % (name, value))
     return value
+
+
+def check_float(value, name='value', maximum=1 << 20):
+    """
+    Validates a real number from the wire (path node speed, acceleration).
+
+    An int is accepted and widened, since JSON has no float/int distinction and
+    a speed of exactly 1 arrives as an int. NaN and the infinities are refused
+    explicitly: both compare False against every bound, so a plain range check
+    would let them through and they poison every later calculation.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SyncError('%s must be a number' % name)
+
+    number = float(value)
+    if number != number or number in (float('inf'), float('-inf')):
+        raise SyncError('%s must be a finite number' % name)
+
+    if not (-maximum <= number <= maximum):
+        raise SyncError('%s %r is out of range' % (name, number))
+
+    return number
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +573,22 @@ def describe_item(item):
             'pathid': int(item.pathid),
             'nodeid': int(item.nodeid),
         })
+
+        # Per-node movement data, so a node recreated on the far side behaves
+        # like the original rather than reverting to the defaults. It lives on
+        # the parent Path, not the node, which is why it is read here.
+        path = getattr(item, 'path', None)
+        if path is not None:
+            try:
+                speed, accel, delay = path.get_data_for_node(int(item.nodeid))
+                description.update({
+                    'speed': float(speed),
+                    'accel': float(accel),
+                    'delay': int(delay),
+                    'loops': bool(getattr(path, '_loops', False)),
+                })
+            except (AttributeError, IndexError, TypeError, ValueError):
+                pass
     elif kind == KIND_ZONE:
         description['id'] = int(item.id)
 
@@ -535,6 +645,10 @@ def validate_description(description):
         clean.update({
             'pathid': check_index(description.get('pathid', 0), 'path id', 255),
             'nodeid': check_index(description.get('nodeid', 0), 'node id', 4095),
+            'speed': check_float(description.get('speed', 0.5), 'speed'),
+            'accel': check_float(description.get('accel', 0.00498), 'accel'),
+            'delay': check_index(description.get('delay', 0), 'delay', 1 << 16),
+            'loops': bool(description.get('loops', False)),
         })
     elif kind == KIND_ZONE:
         clean['id'] = check_index(description.get('id', 0), 'zone id', 15)
@@ -946,12 +1060,62 @@ def _apply_area_settings(payload, refmap, sprite_format, area):
     # Options dialog edits".
     allowed = AREA_SETTINGS_ATTRS
 
+    tilesets_changed = False
+
     for name, encoded in snapshot.items():
         if name not in allowed:
             raise SyncError('area setting %r is not editable' % (name,))
-        setattr(target, name, decode_value(encoded, sprite_format))
+
+        value = decode_value(encoded, sprite_format)
+
+        if name in TILESET_ATTRS and getattr(target, name, None) != value:
+            tilesets_changed = True
+
+        setattr(target, name, value)
+
+    # Setting the name is not loading the tileset. A1's AreaSettingsCommand
+    # takes a refresh_tilesets flag and calls RefreshTilesetsFromArea(); this
+    # applier only did the setattr, so a peer's tileset change showed the new
+    # name in the Area Options dialog while the canvas kept drawing the old
+    # tiles - which is exactly how Zement described it.
+    #
+    # Guarded on an actual change because the reload is expensive: it re-reads
+    # up to four tileset archives and rebuilds the object picker, so doing it
+    # for every unrelated area-settings op (a time limit, an entrance number)
+    # would stall the editor for no reason.
+    if tilesets_changed:
+        _refresh_tilesets()
 
     return {'kind': 'area_settings', 'items': []}
+
+
+# The subset of AREA_SETTINGS_ATTRS that names a tileset archive.
+TILESET_ATTRS = frozenset({'tileset0', 'tileset1', 'tileset2', 'tileset3'})
+
+
+def _refresh_tilesets():
+    """
+    Reloads the tilesets named by the Area and refreshes everything drawn from
+    them.
+
+    Best-effort: the names are already applied, so a failed reload leaves the
+    level correct in the file and wrong on screen until the next load - which
+    is much better than aborting a remote op that has already been accepted.
+    """
+    from reggie.core import globals_
+
+    window = getattr(globals_, 'mainWindow', None)
+    if window is None:
+        return
+
+    refresh = getattr(window, 'RefreshTilesetsFromArea', None)
+    if refresh is None:
+        return
+
+    try:
+        refresh()
+    except Exception:
+        pass
 
 
 # The area attributes the Area Options and camera dialogs can change.
@@ -1267,9 +1431,16 @@ def create_item(description, sprite_format=None, area=None):
                            description.get('text', ''))
         target_area.comments.append(item)
 
+    elif kind == KIND_PATH:
+        # Returns early: Path.add_node has already inserted the node into the
+        # scene, the path and the side list, so the shared registration below
+        # would add a second list row for one object.
+        return _create_path_node(description, target_area)
+
     else:
-        # Paths and zones are created through their own editors, not as loose
-        # items, so a bare 'add' for them is refused rather than half-handled.
+        # A zone is created through its own dialog, which owns bookkeeping this
+        # layer cannot reproduce (background sets, camera profiles, bounding
+        # entries), so a bare 'add' for one is refused rather than half-handled.
         raise SyncError('remote creation of %r is not supported' % (kind,))
 
     _register_created_item(item, target_area)
@@ -1306,6 +1477,72 @@ def _ensure_list_item(item):
         # Comments sort by insertion, not by a key on the item, so a plain row
         # is what the editor builds for them too.
         item.listitem = QtWidgets.QListWidgetItem()
+
+
+def _create_path_node(description, target_area):
+    """
+    Creates a path node from a remote 'add', reusing the editor's own routines.
+
+    Refusing this was wrong rather than merely incomplete: drawing a path is an
+    ordinary edit, and a client that drew one had every node rejected with
+    "remote creation of 'path' is not supported" while the host kept them - so
+    the two sides silently diverged, which is exactly what op sync exists to
+    prevent.
+
+    Everything goes through Path.add_node, which is the single place the editor
+    itself creates a node (misc2.py's click handler calls it too). It owns the
+    bookkeeping that makes a node work: renumbering later nodes, the side-list
+    entry, the polyline item, and the scene insert. Constructing a PathItem here
+    would reproduce a subset of that and drift from it.
+
+    Returns the new node. Unlike the other kinds this one does NOT want
+    _register_created_item afterwards - add_node has already placed it - which
+    is why it is a separate function rather than another branch that falls
+    through to the shared registration.
+    """
+    from reggie.core import globals_
+    from reggie.core.levelitems import Path
+
+    path_id = int(description['pathid'])
+    node_id = int(description['nodeid'])
+
+    window = getattr(globals_, 'mainWindow', None)
+    if window is None:
+        raise SyncError('cannot create a path node without the editor')
+
+    path = None
+    for existing in target_area.paths:
+        if int(getattr(existing, '_id', -1)) == path_id:
+            path = existing
+            break
+
+    if path is None:
+        path = Path(path_id, window.scene, bool(description.get('loops', False)))
+        target_area.paths.append(path)
+
+    # Clamp rather than refuse: the peer's node index is only a hint about
+    # ordering, and an out-of-range one means the two sides briefly disagree
+    # about the node count - a reason to append, not to drop the edit.
+    index = max(0, min(node_id, len(path._nodes)))
+
+    node = path.add_node(
+        description['x'], description['y'],
+        speed=float(description.get('speed', 0.5)),
+        accel=float(description.get('accel', 0.00498)),
+        delay=int(description.get('delay', 0)),
+        index=index,
+    )
+
+    # add_node only wires this when add_to_list is used from the editor path;
+    # without it a later drag of this node updates nothing else.
+    node.positionChanged = window.HandlePathPosChange
+
+    try:
+        window.pathEditor.UpdatePathLength()
+    except Exception:
+        pass
+
+    return node
 
 
 def _register_created_item(item, area):
@@ -1717,12 +1954,19 @@ def _refresh_after_zone_change(zones):
             except Exception:
                 pass
 
-    actions = getattr(window, 'actions', None)
-    if isinstance(actions, dict) and 'backgrounds' in actions:
-        try:
-            actions['backgrounds'].setEnabled(len(zones) > 0)
-        except Exception:
-            pass
+    # Through set_action_allowed, not setEnabled: Backgrounds is a Full-only
+    # dialog, and this runs on the *receiving* side of a remote zone change. An
+    # Editor client therefore re-enabled its own Backgrounds button every time
+    # the host touched a zone - which is why it stayed available after the
+    # other four sites were fixed.
+    #
+    # Imported inside the function, like the rest of this module's UI reach:
+    # reggie/collab stays Qt-free at import time, and a test asserts it.
+    try:
+        from reggie.ui.collab_controller import set_action_allowed
+        set_action_allowed('backgrounds', len(zones) > 0)
+    except Exception:
+        pass
 
 
 def _clear_area_items(area=None):
@@ -1875,6 +2119,39 @@ def encode_presence_selection(refmap, items):
     return {'kind': 'selection', 'refs': refs[:512]}
 
 
+def encode_presence_busy(state, detail='', pct=-1):
+    """
+    What this peer is busy with, for the other peers' status bars.
+
+    Unlike every other presence kind this carries no coordinates and needs no
+    refmap: it describes the *peer*, not a place in the level. That matters for
+    when it can be sent - a peer downloading a patch has no refmap at all, and
+    that is precisely when the others most need to be told what it is doing.
+
+    `detail` is truncated rather than refused here, because the sender is us:
+    the receiving validator rejects an over-long field, so letting a long patch
+    name through would silently drop our own status message instead of
+    shortening it.
+    """
+    detail = str(detail or '')[:protocol.MAX_BUSY_DETAIL_CHARS]
+
+    try:
+        pct = int(pct)
+    except (TypeError, ValueError):
+        pct = -1
+
+    return {
+        'kind': 'busy',
+        'state': str(state or ''),
+        'detail': detail,
+
+        # Clamped rather than validated: a progress figure is decoration, and
+        # refusing to say "busy" because a byte count produced 101% would lose
+        # the message that matters for the sake of the number that does not.
+        'pct': max(-1, min(100, pct)),
+    }
+
+
 def decode_presence(payload, refmap):
     """
     Turns a presence payload into something the canvas overlay can draw.
@@ -1884,8 +2161,29 @@ def decode_presence(payload, refmap):
     the payload is still useful.
     """
     kind = payload.get('kind')
-    if kind not in ('cursor', 'click', 'selection', 'view'):
+    if kind not in protocol.PRESENCE_KINDS:
         raise SyncError('unknown presence kind %r' % (kind,))
+
+    if kind == 'busy':
+        # Handled before anything that touches the refmap, and deliberately so:
+        # this is the one presence kind that describes the peer rather than a
+        # place in the level, and the peer most worth reporting on - one
+        # downloading a patch - is exactly the one with no refmap yet.
+        state = str(payload.get('state') or '')
+        if state not in protocol.BUSY_STATES:
+            raise SyncError('unknown busy state %r' % (state,))
+
+        try:
+            pct = int(payload.get('pct', -1))
+        except (TypeError, ValueError):
+            pct = -1
+
+        return {
+            'kind': kind,
+            'state': state,
+            'detail': str(payload.get('detail') or ''),
+            'pct': max(-1, min(100, pct)),
+        }
 
     if kind == 'selection':
         refs = payload.get('refs') or []

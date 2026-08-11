@@ -1411,7 +1411,11 @@ class ZonesSnapshotCommand(QtGui.QUndoCommand):
         for spr in globals_.Area.sprites:
             spr.ImageObj.positionChanged()
 
-        mw.actions['backgrounds'].setEnabled(len(globals_.Area.zones) > 0)
+        # Via set_action_allowed so a collaboration session's restriction is not
+        # overwritten by a zones undo; see its docstring.
+        from reggie.ui.collab_controller import set_action_allowed
+        set_action_allowed('backgrounds', len(globals_.Area.zones) > 0)
+
         _finish_mutation()
 
     def undo(self):

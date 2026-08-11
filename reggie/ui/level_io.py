@@ -21,6 +21,7 @@ from libs import lh, lz77
 from reggie.core.dirty import setSetting, SetDirty
 from reggie.io.misc import IsNSMBLevel, LoadLevelNames, ChooseLevelNameDialog
 from reggie.core.level import Level_NSMBW
+from reggie.ui.collab_controller import set_action_allowed
 
 
 class LevelIO:
@@ -28,6 +29,59 @@ class LevelIO:
 
     def __init__(self, win):
         self.win = win
+
+    def _refuseSaveInSession(self, what):
+        """
+        Blocks a save the running session does not permit (Block C - B3).
+
+        Returns True when the caller must stop. The gate lives here rather than
+        only on the QAction because disabling a menu item does not disable the
+        function: HandleSave is reached from CheckDirty (window.py) and from
+        several internal callers - closing the editor, restoring an autosave,
+        switching level - none of which go through the menu.
+
+        The rules, per Zement (2026-08-09):
+
+        - **Save**: the host only. A Full client leads the session but does not
+          own its file; two save authorities would be two sources of truth.
+        - **Save as...**: nobody, the host included. It rewrites fileSavePath,
+          which renames the session's level on one machine only - after which
+          that peer is editing a file no one else can resolve by name. Same
+          reasoning that already put "open by file" out of reach in a session.
+        - **Save a copy as...**: nobody, for now. It is safe except when the
+          target lands in the session's own stage folder, it is rarely used, and
+          re-enabling it later with a destination check is cheap.
+        """
+        controller = getattr(self.win, '_collab', None)
+        if controller is None:
+            return False
+
+        try:
+            if not controller.is_active:
+                return False
+            allowed = bool(controller.isSaveAuthority())
+        except Exception:
+            # A broken controller must not stop someone saving their own work.
+            return False
+
+        if allowed and what == 'save':
+            return False
+
+        if what == 'save':
+            message = ('Only the host can save the level during a '
+                       'collaboration session.')
+        elif what == 'saveas':
+            message = ('"Save as" is not available during a collaboration '
+                       'session: it would rename the level on your machine '
+                       'only, and the other participants could no longer find '
+                       'it.')
+        else:
+            message = ('"Save a copy as" is not available during a '
+                       'collaboration session.')
+
+        QtWidgets.QMessageBox.information(
+            self.win, 'Collaboration', message)
+        return True
 
     def HandleNewLevel(self):
         """
@@ -44,7 +98,43 @@ class LevelIO:
         LoadLevelNames()
         dlg = ChooseLevelNameDialog()
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            # In a session, a client asks the host first and the host's
+            # broadcast is what actually loads it (Block C - B3, phase 3d).
+            # Outside one, and for the host, this is True immediately.
+            if not self._ProposeCollabSwitch(dlg.currentlevel, 1):
+                return
+
             self.win.LoadLevel(dlg.currentlevel, False, 1)
+
+    def _ProposeCollabSwitch(self, level, area):
+        """
+        Whether this editor may load a level itself, or has handed the decision
+        to the host (Block C - B3, phase 3d).
+
+        Returns True when the caller should go ahead - which is every case
+        outside a session, so the ordinary editor is unaffected.
+
+        Guarded and lazy like the other collab hooks here, but note the
+        *difference* in what a failure means: those report something that has
+        already happened, so swallowing an error is right. This one asks
+        permission, and an error means the answer is unknown. Loading anyway
+        would be the pre-3d behaviour - moving the session without the host's
+        consent - so an unknown answer allows the load only when there is
+        demonstrably no session to consult.
+        """
+        controller = getattr(self.win, '_collab', None)
+        if controller is None:
+            return True
+
+        try:
+            if not controller.is_active:
+                return True
+            return bool(controller.proposeLevelChange(level, area))
+        except Exception:
+            # A broken controller must not stop a lone user opening a level;
+            # is_active having raised means we cannot even tell if there is a
+            # session, and the editor being unusable is the worse failure.
+            return True
     def HandleOpenFromFile(self):
         """
         Open a level using the filename
@@ -64,9 +154,13 @@ class LevelIO:
         """
         Save a level back to the archive. Returns whether saving was successful.
         """
+        if self._refuseSaveInSession('save'):
+            return False
+
         if not self.win.fileSavePath or self.win.fileSavePath.endswith('.arc.LH'):
-            # Delegate save to HandleSaveAs function
-            return self.win.HandleSaveAs()
+            # Delegate save to HandleSaveAs function. Flagged as coming from
+            # Save so the session gate is not applied twice - see HandleSaveAs.
+            return self.HandleSaveAs(_from_save=True)
 
         data = globals_.Level.save()
 
@@ -82,7 +176,7 @@ class LevelIO:
                 )
 
                 # Delegate to HandleSaveAs
-                return self.win.HandleSaveAs()
+                return self.HandleSaveAs(_from_save=True)
 
             data = compressed
 
@@ -114,12 +208,45 @@ class LevelIO:
 
         # Saving resets the undo history (Block C - A1)
         self.win.undoStack.clear()
+
+        # Tell the session, so the other participants end up with the same file
+        # on disk (Block C - B3). Only the host reaches this - the gate above
+        # is what makes that true - and the announcement carries the bytes that
+        # were just written, not a re-serialisation.
+        self._NotifyCollabSaved(data)
         return True
-    def HandleSaveAs(self, copy = False):
+
+    def _NotifyCollabSaved(self, data):
+        """
+        Publishes a save to the collaboration session.
+
+        Guarded and lazy for the same reason as _NotifyCollabLevelChanged: a
+        networking problem must never turn a successful save into a failure. The
+        file is already on disk by the time this runs.
+        """
+        controller = getattr(self.win, '_collab', None)
+        if controller is None:
+            return
+
+        try:
+            controller.notifyLevelSaved(data)
+        except Exception:
+            pass
+
+    def HandleSaveAs(self, copy = False, _from_save = False):
         """
         Save a level back to the archive, with a new filename. Returns whether
         saving was successful.
+
+        `_from_save` is set when HandleSave delegated here because there is no
+        path to save to yet. That call has already been through the session
+        gate, so re-running it would refuse a save the host is entitled to and
+        show a second dialog for one refusal.
         """
+        if not _from_save and self._refuseSaveInSession(
+                'savecopyas' if copy else 'saveas'):
+            return False
+
         fn = QtWidgets.QFileDialog.getSaveFileName(self.win,
             globals_.trans.string('FileDlgs', 8 if copy else 3),
             '',
@@ -366,10 +493,15 @@ class LevelIO:
         self.win.actions['showlocations'].setChecked(True)
         self.win.actions['showpaths'].setChecked(True)
         self.win.actions['showcomments'].setChecked(True)
-        self.win.actions['addarea'].setEnabled(len(globals_.Level.areas) < 4)
-        self.win.actions['importarea'].setEnabled(len(globals_.Level.areas) < 4)
-        self.win.actions['deletearea'].setEnabled(len(globals_.Level.areas) > 1)
-        self.win.actions['backgrounds'].setEnabled(len(globals_.Area.zones) > 0)
+        # Through set_action_allowed, not setEnabled: a collaboration session
+        # may forbid these regardless of what the level allows, and this runs
+        # after the session has applied its permissions. Setting them directly
+        # here is what re-enabled Backgrounds and the area actions for an Editor
+        # client on every level load.
+        set_action_allowed('addarea', len(globals_.Level.areas) < 4)
+        set_action_allowed('importarea', len(globals_.Level.areas) < 4)
+        set_action_allowed('deletearea', len(globals_.Level.areas) > 1)
+        set_action_allowed('backgrounds', len(globals_.Area.zones) > 0)
 
         # Turn snapping back on
         globals_.OverrideSnapping = False

@@ -73,9 +73,20 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         """
         Paints the level overview widget
         """
-        if not hasattr(globals_.Area, 'layers'):
-            # fixes race condition where this widget is painted after
-            # the level is created, but before it's loaded
+        if not getattr(globals_.Area, '_is_loaded', False):
+            # Fixes a race where this widget is painted after the level is
+            # created but before it is loaded.
+            #
+            # Tested on _is_loaded rather than on any single attribute, because
+            # the attributes appear one at a time. Area.unload() deletes layers,
+            # sprites, entrances, locations and paths; Area.load() restores
+            # layers first and sprites nine lines later, so 'layers exists' does
+            # not mean 'sprites exists' - and CalcSize reads all five.
+            #
+            # It is reachable rather than theoretical: loadNewGameDef() drives a
+            # QProgressDialog, whose setValue() pumps the event loop, and a
+            # patch switch reloads four tilesets inside that window. Zement's
+            # client logged this ~50 times during a patch download.
             return
 
         painter = QtGui.QPainter(self)

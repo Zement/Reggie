@@ -53,14 +53,30 @@ MAX_OP_TARGETS = 2048
 #
 # Raised from 256 to 1024 in phase 6 after measuring the real patches in
 # reggiedata/patches: NewerSMBW is 535 transferable files (~9.4 MiB) and
-# NSMBWerPlus is 468, almost all small PNGs. 256 would have rejected both, which
-# is exactly the growth Zement predicted when he asked to keep 256 "for now".
+# NSMBWerPlus is 468, almost all small PNGs.
 #
-# The byte cap is the meaningful limit and stays at 64 MiB: it bounds what a peer
-# can make us store, whereas the file count only bounds bookkeeping.
-MAX_MANIFEST_FILES = 1024
-MAX_MANIFEST_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MiB
-MAX_CHUNK_BYTES = 256 * 1024                 # 256 KiB of raw bytes per chunk
+# Raised again in Block C - B3, because a transfer now carries the patch's
+# Stage and Texture folders as well and the old caps could not hold them.
+# Zement's real-world ceilings (2026-08-09):
+#
+#   patch    up to  30 MB              (realistic average ~10 MB)
+#   Stage    ~200 levels x up to 500 KB padded, so up to ~100 MB   (~3 MB)
+#   Texture  the largest package found is ~150 MB over ~1200 files (~15 MB)
+#
+# so ~280 MB and ~2000 files in the worst case anyone has actually built. The
+# caps are set above that with room to spare rather than at it, because a cap
+# that a real patch reaches is a cap that turns into a bug report.
+#
+# These are *caps*, not expectations: the common case is tens of megabytes, and
+# the transfer happens once - the files are reused by later sessions. The
+# trade-off is deliberate (Zement): refusing a large patch would push the user
+# to download the same bytes by some other route, which is no faster.
+#
+# The byte cap remains the meaningful limit - it bounds what a peer can make us
+# store - while the file count only bounds bookkeeping.
+MAX_MANIFEST_FILES = 4096
+MAX_MANIFEST_TOTAL_BYTES = 512 * 1024 * 1024  # 512 MiB
+MAX_CHUNK_BYTES = 256 * 1024                  # 256 KiB of raw bytes per chunk
 
 
 class ProtocolError(Exception):
@@ -199,6 +215,12 @@ T_FILE_REQ = 'file_req'
 T_FILE_CHUNK = 'file_chunk'
 T_FILE_DONE = 'file_done'
 
+# The host saved the session's level (Block C - B3). Announces *that* a save
+# happened and what the resulting file is; the bytes follow as ordinary
+# file_chunks, in the stage section, so there is one transfer mechanism rather
+# than two.
+T_SAVED = 'saved'
+
 # Roles (spec section 5.1). Ordered least to most privileged.
 CHAT_KIND_USER = 'user'
 CHAT_KIND_SYSTEM = 'system'
@@ -208,6 +230,38 @@ ROLE_EDITOR = 'editor'
 ROLE_FULL = 'full'
 ROLE_HOST = 'host'
 ROLES = (ROLE_EDITOR, ROLE_FULL, ROLE_HOST)
+
+# What a peer is busy with (Block C - B3, presence).
+#
+# Three states rather than one per operation. Zement listed nine things a peer
+# can be busy with, but the receiving UI only ever asks two questions - "is
+# anyone busy" and "what should I say" - so the operation itself travels as free
+# text in `detail`, and only the *category* is a protocol value. A tenth
+# operation then needs no protocol change at all, which nine enumerated states
+# would have forced.
+#
+# The split that matters is who is blocked:
+#
+#   BUSY_LOADING and BUSY_SAVING are blocking - somebody is waiting on this peer
+#   and edits are held. These are worth interrupting the canvas for.
+#
+#   BUSY_DOWNLOAD is background - the peer is catching up on its own time and
+#   nobody is blocked. A quiet status line is the right weight for it.
+BUSY_NONE = ''
+BUSY_LOADING = 'loading'
+BUSY_SAVING = 'saving'
+BUSY_DOWNLOAD = 'download'
+
+BUSY_STATES = (BUSY_NONE, BUSY_LOADING, BUSY_SAVING, BUSY_DOWNLOAD)
+
+# The states that mean someone is waiting. Named rather than open-coded so the
+# canvas border and the status colour cannot drift apart from each other.
+BUSY_BLOCKING = frozenset({BUSY_LOADING, BUSY_SAVING})
+
+# Presence kinds. `busy` is the only one that is not a coordinate.
+PRESENCE_KINDS = ('cursor', 'click', 'selection', 'view', 'busy')
+
+MAX_BUSY_DETAIL_CHARS = 80
 
 # Operation kinds, mapped from the A1 undo command classes.
 OP_KINDS_EDITOR = frozenset({
@@ -236,6 +290,19 @@ _HOST_SENDABLE = frozenset({
     T_KICK, T_BANNED, T_CHAT, T_PING, T_PONG, T_BYE,
     T_SNAPSHOT, T_OP, T_OP_REJECT, T_AREA_SWITCH, T_PRESENCE,
     T_ROOM_INFO, T_MANIFEST, T_FILE_CHUNK,
+
+    # T_FILE_DONE travels both ways: a client reports the outcome of a transfer
+    # with it, and the host uses it to end one it is refusing. Giving a refusal
+    # its own type would mean a client had two terminators to handle and could
+    # forget the second, leaving a transfer that never finishes.
+    T_FILE_DONE,
+
+    # Host-only, and deliberately absent from _CLIENT_SENDABLE: this is the one
+    # message that causes another machine to write a file. The host is the
+    # session's save authority (Block C - B3), so nobody else may announce a
+    # save - a client that sent one would be asking every peer to overwrite a
+    # level on its say-so.
+    T_SAVED,
 })
 
 KNOWN_TYPES = _CLIENT_SENDABLE | _HOST_SENDABLE
@@ -481,7 +548,21 @@ def _v_bye(p):
 
 
 def _v_snapshot_request(p):
-    return {'area': _get_int(p, 'area', minimum=1, maximum=4, required=False, default=1)}
+    """
+    "Send me the level." `want_file` asks for the level *file* rather than a
+    rebuilt snapshot (Block C - B3, round 2, R2).
+
+    Optional and defaulting to False, so an older client asking the old way
+    still gets the old answer. It has to be declared here or it would not
+    survive: every validator rebuilds its payload from scratch, so a field that
+    is not named is deleted in flight - the trap that has now caught 'kind',
+    'assets_only' and 'reason'.
+    """
+    return {
+        'area': _get_int(p, 'area', minimum=1, maximum=4, required=False,
+                         default=1),
+        'want_file': bool(p.get('want_file', False)),
+    }
 
 
 # A full level of items. Mirrors sync.MAX_SNAPSHOT_ITEMS, which is the value
@@ -579,11 +660,42 @@ def _v_area_switch(p):
 
 
 def _v_presence(p):
+    # Note for anyone adding a field: this rebuilds the payload from scratch, so
+    # anything not listed here is *deleted in flight* with no error anywhere.
+    # That is deliberate - unknown keys must not ride along - but it cost a live
+    # bug once already, when the manifest validator dropped 'kind' and every
+    # level arrived labelled as a patch file. Add the field here, and test
+    # through validate_message rather than the payload builder.
     kind = _get_str(p, 'kind', 16)
-    _require(kind in ('cursor', 'click', 'selection', 'view'),
-             'unknown presence kind %r' % kind)
+    _require(kind in PRESENCE_KINDS, 'unknown presence kind %r' % kind)
+
+    state = _get_str(p, 'state', 16, required=False)
+    _require(state in BUSY_STATES, 'unknown busy state %r' % state)
+
     return {
         'kind': kind,
+
+        # Busy (Block C - B3, presence): what this peer is doing, if anything.
+        #
+        # `state` is validated against a closed set rather than sanitized - an
+        # unknown state is a protocol error, not text to be cleaned up.
+        #
+        # `detail` is the opposite: free text that lands in another machine's
+        # status bar, so it is sanitized exactly as a nick is. A peer must not
+        # be able to put control characters or a 5,000-character line into
+        # someone else's UI.
+        'state': state,
+        'detail': sanitize_text(
+            _get_str(p, 'detail', MAX_BUSY_DETAIL_CHARS, required=False),
+            MAX_BUSY_DETAIL_CHARS),
+
+        # Progress, where the operation has one. -1 rather than 0 for "no
+        # percentage": a download that has genuinely reached 0% is a different
+        # thing from one that cannot report progress, and 0 would render as
+        # "(0%)" on an operation that never shows a number.
+        'pct': _get_int(p, 'pct', minimum=-1, maximum=100, required=False,
+                        default=-1),
+
         'x': _get_int(p, 'x', minimum=-(1 << 24), maximum=1 << 24, required=False),
         'y': _get_int(p, 'y', minimum=-(1 << 24), maximum=1 << 24, required=False),
 
@@ -601,6 +713,12 @@ def _v_presence(p):
 
 
 def _v_room_info(p):
+    # Note for anyone adding a field: this rebuilds the payload from scratch, so
+    # anything not listed here is *deleted in flight* with no error anywhere.
+    # That is deliberate - unknown keys must not ride along - but it cost a live
+    # bug once already, when the manifest validator dropped 'kind' and every
+    # level arrived labelled as a patch file. Add the field here, and test
+    # through validate_message rather than the payload builder.
     return {
         'game_id': _get_str(p, 'game_id', 128, required=False),
         'game_name': _get_str(p, 'game_name', 200, required=False),
@@ -610,13 +728,68 @@ def _v_room_info(p):
         'in_catalog': _get_bool(p, 'in_catalog', required=False),
         'level_name': _get_str(p, 'level_name', 200, required=False),
         'area': _get_int(p, 'area', minimum=1, maximum=4, required=False, default=1),
+
+        # Content fingerprints (Block C - B3). What the host actually has open,
+        # so a client can tell "same patch" from "same files" - see known open
+        # 10.1, where both peers had the same patch id and different levels.
+        #
+        # Hashes are not required to be well-formed hex here: an empty string is
+        # the legitimate answer for "I have no such file", and a malformed one
+        # simply fails to match, which is the same outcome as a mismatch. The
+        # lists are bounded so a peer cannot make us hold an unbounded payload.
+        'level_sha256': _get_str(p, 'level_sha256', 64, required=False),
+        'tilesets': _get_str_list(p, 'tilesets', 4, 64),
+        'tileset_sha256': _get_str_list(p, 'tileset_sha256', 4, 64),
     }
 
 
+def _get_str_list(payload, key, max_items, max_chars):
+    """
+    A short list of short strings, or [] when absent.
+
+    Bounded on both axes because it arrives from a peer. Entries that are not
+    strings are refused rather than coerced - a fingerprint list with a
+    surprise in it is a malformed message, not something to repair.
+    """
+    if key not in payload:
+        return []
+
+    value = payload[key]
+    _require(isinstance(value, list), 'field %r must be a list' % key)
+    _require(len(value) <= max_items,
+             'field %r exceeds %d items' % (key, max_items))
+
+    out = []
+    for item in value:
+        _require(isinstance(item, str), 'field %r must contain strings' % key)
+        _require(len(item) <= max_chars,
+                 'field %r entries exceed %d characters' % (key, max_chars))
+        out.append(item)
+
+    return out
+
+
 def _v_patch_need(p):
+    """
+    A client asking for the host's game data.
+
+    `assets_only` distinguishes the two reasons for asking (Block C - B3,
+    round 2). A client without the patch needs everything; a client that already
+    has the patch - because it was installed from the catalog, or was already on
+    disk - needs only the host's Stage and Texture, so that both peers resolve a
+    level name to the same bytes. Without it the second case would either
+    re-send a patch the client already has, or not sync assets at all, which is
+    the gap that left the catalog and local routes unsynced.
+
+    Declared here rather than inferred, because validators rebuild payloads from
+    scratch: a field that is not listed is deleted in flight - the same trap that
+    silently dropped `kind` from the manifest in phase 1.
+    """
     return {
         'patch_id': _get_str(p, 'patch_id', 128, required=False),
         'reason': _get_str(p, 'reason', 200, required=False),
+        'assets_only': _get_bool(p, 'assets_only', required=False,
+                                 default=False),
     }
 
 
@@ -636,12 +809,66 @@ def _v_manifest(p):
             'path': _get_str(entry, 'path', 512),
             'size': size,
             'sha256': sha,
+            # Which section the file belongs to (patch/stage/texture), since
+            # Block C - B3. This validator rebuilds each entry from scratch -
+            # that is the point of it, so unknown keys cannot ride along - which
+            # means a field omitted here is a field silently deleted in flight.
+            # Leaving it out made every level and tileset arrive labelled as a
+            # patch file, so the client asked for them from the patch folder and
+            # the host, which had offered them as stage files, refused its own
+            # manifest.
+            #
+            # Bounded as a short string only; the closed set lives in
+            # files.MANIFEST_KINDS and is enforced by validate_manifest, which
+            # is also where an unrecognised value is refused rather than
+            # defaulted. An absent field stays absent so that layer can tell
+            # "not sent" (a pre-B3 host) from "sent as patch".
+            'kind': _get_str(entry, 'kind', 32, required=False),
         })
     return {'files': out, 'patch_id': _get_str(p, 'patch_id', 128, required=False)}
 
 
+def _v_saved(p):
+    """
+    The host announcing that it saved the session's level.
+
+    `level` is a bare level *name*, exactly as area_switch carries one, and the
+    receiver resolves it inside its own _collab folder. It is never a path: the
+    host says *what* it saved, never *where* the receiver should put it. That
+    rule is enforced again at the write, by identity.safe_join - two independent
+    checks, because this one turns a name from the network into a disk write.
+
+    As with every validator here, the payload is rebuilt rather than filtered,
+    so an unlisted field is dropped in flight. See the note in _v_room_info.
+    """
+    return {
+        'level': _get_str(p, 'level', 200),
+        'area': _get_int(p, 'area', minimum=1, maximum=4, required=False,
+                         default=1),
+        'sha256': _get_str(p, 'sha256', 64, required=False),
+        'size': _get_int(p, 'size', minimum=0,
+                         maximum=MAX_MANIFEST_TOTAL_BYTES, required=False),
+        'nick': _get_str(p, 'nick', MAX_NICK_CHARS, required=False),
+
+        # Why the file is being sent: 'save' for a real Save by the host,
+        # 'publish' for the copy that accompanies a level or area change.
+        # Cosmetic - both are handled identically - but the two were
+        # indistinguishable in the logs and in the chat line, and reading
+        # "the host saved 01-01" for a change nobody saved sent one B3
+        # investigation down the wrong path entirely (2026-08-11).
+        'reason': _get_str(p, 'reason', 16, required=False),
+    }
+
+
 def _v_file_req(p):
-    return {'path': _get_str(p, 'path', 512)}
+    # 'kind' names the manifest section (patch/stage/texture) since Block
+    # C - B3. Optional, and bounded only as a short string here: the closed set
+    # lives in files.MANIFEST_KINDS, and the host checks the (kind, path) pair
+    # against what it actually offered, which is the authorisation that matters.
+    return {
+        'path': _get_str(p, 'path', 512),
+        'kind': _get_str(p, 'kind', 32, required=False),
+    }
 
 
 def _v_file_chunk(p):
@@ -651,6 +878,7 @@ def _v_file_chunk(p):
     _require(index < total, 'chunk index must be < total')
     return {
         'path': _get_str(p, 'path', 512),
+        'kind': _get_str(p, 'kind', 32, required=False),
         'index': index,
         'total': total,
         'data': data,
@@ -658,9 +886,23 @@ def _v_file_chunk(p):
 
 
 def _v_file_done(p):
+    """
+    "I have finished with that file."
+
+    `level` names a *published level* rather than a patch transfer, which is
+    what makes this usable as the R3 load acknowledgement: the host has to know
+    which of the two a peer just finished, and reusing the message without
+    naming the thing would have made an ack indistinguishable from a completed
+    download.
+
+    Empty for an ordinary transfer, so an older client is read exactly as before.
+    """
     return {
         'ok': _get_bool(p, 'ok', required=False, default=True),
         'error': _get_str(p, 'error', 200, required=False),
+        # 200 to match _v_saved: this echoes the level that announcement named,
+        # so a name the host could send must be a name the ack can carry back.
+        'level': _get_str(p, 'level', 200, required=False),
     }
 
 
@@ -702,6 +944,7 @@ _VALIDATORS = {
     T_FILE_REQ: _v_file_req,
     T_FILE_CHUNK: _v_file_chunk,
     T_FILE_DONE: _v_file_done,
+    T_SAVED: _v_saved,
 }
 
 

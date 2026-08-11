@@ -30,15 +30,11 @@
 ################################################################
 ################################################################
 
-# Python version: sanity check
-minimum = (3, 5)
+# The version check lives in app.py, which is the entry point: nothing can
+# reach this module without having passed it. A second copy here claimed 3.5,
+# which was both stale and unreachable - and a wrong number in the tree is
+# worse than no number, because it is the one people read.
 import sys
-
-if sys.version_info < minimum:
-    errormsg = 'Please update your copy of Python to ' + '.'.join(map(str, minimum)) + \
-               ' or greater. Currently running on: ' + sys.version[:5]
-
-    raise Exception(errormsg)
 
 # Stdlib imports
 import os.path
@@ -358,26 +354,32 @@ class ReggieWindow(QtWidgets.QMainWindow):
             self.HandlePatchManager()
             # Reset to current patch
             self.updatePatchComboBox()
-        elif patch_data is None:
-            # Switch to base game
-            from reggie.io.gamedef import loadNewGameDef
-            success = loadNewGameDef(None)
-            if success:
-                # Update combo box to reflect the change
-                self.updatePatchComboBox()
-            else:
-                # Reset to current patch on failure
-                self.updatePatchComboBox()
-        elif patch_data is not None:
-            # Switch to selected patch
-            from reggie.io.gamedef import loadNewGameDef
-            success = loadNewGameDef(patch_data)
-            if success:
-                # Update combo box to reflect the change
-                self.updatePatchComboBox()
-            else:
-                # Reset to current patch on failure
-                self.updatePatchComboBox()
+            return
+
+        # Unsaved work is settled *before* the patch changes (Block C - B3,
+        # round 2, R5). Asking afterwards would offer to save the old patch's
+        # level through the new patch's paths, and Cancel would have nothing to
+        # cancel - the switch would already have happened.
+        #
+        # Cancel is right here, unlike the join dialog: the user started this
+        # and may reasonably change their mind.
+        if self.CheckDirty():
+            self.updatePatchComboBox()
+            return
+
+        from reggie.io.gamedef import loadNewGameDef
+
+        # patch_data is None for the base game, which loadNewGameDef takes as-is.
+        success = loadNewGameDef(patch_data)
+
+        # Either way the combo box is put back in step: with the new patch on
+        # success, with the restored one on failure.
+        self.updatePatchComboBox()
+
+        if success:
+            # Open the new patch's own first level, rather than keeping one
+            # whose tilesets belong to the patch that was just unloaded.
+            self.LoadFirstLevelOfPatch()
 
     def updatePatchComboBox(self):
         """
@@ -490,6 +492,23 @@ class ReggieWindow(QtWidgets.QMainWindow):
         Returns whether the level still contains unsaved changes.
         """
         if not globals_.Dirty:
+            return False
+
+        # In a session, only the save authority is asked about unsaved work
+        # (Block C - B3). Everyone else is looking at changes the *session*
+        # authored - a snapshot replaced their area, or a peer's edit arrived -
+        # so prompting them to save is asking them to write work they did not
+        # author over a file that may not even be the session's level.
+        #
+        # This is the root of known-open 10.1b: after a patch transfer the
+        # client was asked to save its own untouched level every time the
+        # session moved, and dismissing the dialog re-ran the load and re-fired
+        # the "tileset not found" warnings.
+        #
+        # Answering False means "no unsaved changes stand in the way", which is
+        # the truthful answer here: the changes exist, but they are the host's
+        # to keep, and it has them.
+        if not self._maySaveInSession():
             return False
 
         msg = QtWidgets.QMessageBox()
@@ -740,6 +759,47 @@ class ReggieWindow(QtWidgets.QMainWindow):
         layout.addWidget(buttons)
 
         dlg.exec()
+
+    def _maySaveInSession(self):
+        """
+        Whether this editor may write the level it has open (Block C - B3).
+
+        True whenever no session is running, so the ordinary single-user editor
+        is untouched. In a session it is the host's answer alone: Save is the
+        host's, whatever a client's role (Zement, 2026-08-09).
+
+        Guarded rather than assumed: the controller is created lazily by
+        HandleCollaborate, so it is absent for anyone who has never opened the
+        collaboration dialog, and a fault in it must never stop someone saving
+        their own work.
+        """
+        controller = getattr(self, '_collab', None)
+        if controller is None:
+            return True
+
+        try:
+            return bool(controller.isSaveAuthority())
+        except Exception:
+            return True
+
+    def _CollabLevelName(self):
+        """
+        The level this editor has open, as the session names it (Block C - B3).
+
+        An area switch stays within the same level, but the proposal that
+        carries it still has to name that level: the wire carries names, never
+        paths, so the other peers resolve it against their own stage folder.
+        Asking the controller keeps the one definition of "the level's name" in
+        one place rather than re-deriving it from fileSavePath here.
+        """
+        controller = getattr(self, '_collab', None)
+        if controller is None:
+            return ''
+
+        try:
+            return str(controller.sessionLevelName() or '')
+        except Exception:
+            return ''
 
     def HandleCollaborate(self):
         """
@@ -1257,7 +1317,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # Actually delete the area
         globals_.Level.deleteArea(area_to_delete)
 
-        self.actions['deletearea'].setEnabled(len(globals_.Level.areas) > 1)
+        # Via set_action_allowed so a session's restriction survives; see its
+        # docstring.
+        from reggie.ui.collab_controller import set_action_allowed
+        set_action_allowed('deletearea', len(globals_.Level.areas) > 1)
 
         # Update the area selection combobox
         self.areaComboBox.clear()
@@ -1510,11 +1573,88 @@ class ReggieWindow(QtWidgets.QMainWindow):
             self.areaComboBox.setCurrentIndex(old_idx)
             return
 
+        # In a session, a client asks the host before moving everyone, and the
+        # host's broadcast is what loads it (Block C - B3, phase 3d).
+        #
+        # The combo box is put back to the area actually loaded, not to old_idx.
+        # Proposing keeps the event loop running, so the host's answer - and the
+        # level load that follows it - can complete *before* this returns.
+        # Stamping old_idx over that would leave the box showing an area the
+        # editor is not on: Zement's client sat on "Area 2" while both peers had
+        # correctly loaded Area 1 (2026-08-11). The scene was right; only the
+        # dropdown lied.
+        #
+        # globals_.Area is re-read rather than reusing old_idx precisely because
+        # it may have changed while we waited.
+        if not self._levelio._ProposeCollabSwitch(self._CollabLevelName(),
+                                                  idx + 1):
+            self._SyncAreaComboBox()
+            return
+
         ok = self.LoadLevel(self.fileSavePath, True, idx + 1)
 
         if not ok:
             # loading the new area failed, so reset the combobox
             self.areaComboBox.setCurrentIndex(old_idx)
+
+    def LoadFirstLevelOfPatch(self):
+        """
+        Opens the current patch's first level after a patch switch.
+
+        Block C - B3, round 2, R5. Switching patch used to keep the previous
+        patch's level open, whose tilesets belong to a game that is no longer
+        loaded - so the scene filled with pink placeholder tiles and a row of
+        "tileset not found" warnings. Correct behaviour given the old design,
+        and a bad experience; it is also, as Zement put it, one of the biggest
+        sources of confusion when a session and a patch switch coincide.
+
+        Applies even when no level is open. "Switching patch puts you on that
+        patch's first level" is one rule with no exception to remember, which is
+        Zement's call and the right one.
+
+        Returns True if a level was loaded.
+
+        The caller must have handled unsaved changes already: this is reached
+        only after a *successful* switch, and prompting here would put the
+        dialog after the patch had changed, when saving would write the old
+        level through the new patch's paths.
+        """
+        from reggie.io.misc import FirstLevelName
+
+        name = FirstLevelName()
+        if not name:
+            # A patch with no level list of its own falls back to retail's
+            # through getResourcePaths, so reaching this means the list is
+            # genuinely empty or unreadable. Leave the editor where it is
+            # rather than guessing at a name.
+            return False
+
+        try:
+            return bool(self.LoadLevel(name, False, 1))
+        except Exception:
+            # A patch whose first level cannot be opened is not a reason to
+            # abandon the patch switch that already succeeded.
+            return False
+
+    def _SyncAreaComboBox(self):
+        """
+        Puts the area selector back in step with the area actually loaded.
+
+        Read from globals_.Area rather than from a value captured earlier: in a
+        session the area can change while a switch is being resolved, and a
+        captured index would put the box back to where the editor *was* instead
+        of where it is (Block C - B3).
+        """
+        area = getattr(globals_, 'Area', None)
+        number = getattr(area, 'areanum', 0)
+
+        try:
+            index = int(number) - 1
+        except (TypeError, ValueError):
+            return
+
+        if 0 <= index < self.areaComboBox.count():
+            self.areaComboBox.setCurrentIndex(index)
 
     def HandleUpdateLayer0(self, checked):
         """
@@ -1885,7 +2025,107 @@ class ReggieWindow(QtWidgets.QMainWindow):
         setSetting('AutoSaveFilePath', None)
         setSetting('AutoSaveFileData', 'x')
 
+        # Stop every timer that could still fire after this point.
+        #
+        # These are parentless QTimers, so Qt does not own them - Python does,
+        # and it frees them in its own order during interpreter shutdown, which
+        # is not Qt's order. A timer that is still running when its target's C++
+        # half has gone calls a slot on a dangling pointer, and on Windows that
+        # is an access violation with no Python traceback: the process simply
+        # dies after the last unrelated line of output.
+        #
+        # Autosave in particular reads globals_.Level and this window's own
+        # fileSavePath, so it is not merely a stray callback - it dereferences
+        # exactly the objects being torn down.
+        #
+        # This is hardening against a class of crash, not a proven fix for the
+        # intermittent one Zement sees at roughly one exit in twenty-five: both
+        # timers here are gated by flags (AutoSaveDirty, TilesetsAnimating) that
+        # are false in the case he reported. crash.log will say whether it
+        # recurs.
+        self._StopBackgroundTimers()
+        self._StopCollaboration()
+
         event.accept()
+
+    def _StopCollaboration(self):
+        """
+        Ends a running session before the window is destroyed.
+
+        Nothing did this before: the controller is created lazily and then
+        simply kept, so a session's server, client and reader threads outlived
+        closeEvent. Those threads deliver into the controller, which holds this
+        window - so a message arriving during teardown reaches widgets whose
+        C++ halves are being freed, and on Windows that is an access violation
+        with no Python traceback.
+
+        It also matches what the peers see: leaving sends a proper goodbye
+        instead of dropping the connection, so the other side reports a
+        participant who left rather than one who vanished.
+
+        Best-effort and never fatal. Closing the editor has to succeed whatever
+        state the session is in - a failure here would otherwise trap the user
+        in a window they cannot close.
+        """
+        collab = getattr(self, '_collab', None)
+        if collab is None:
+            return
+
+        try:
+            if collab.is_active:
+                collab.leave()
+        except Exception:
+            # Deliberately broad: this runs while the application is going
+            # away, and no session fault is worth blocking that.
+            pass
+
+    def _StopBackgroundTimers(self):
+        """
+        Stops the timers that outlive the window, before teardown starts.
+
+        Each is guarded separately: a timer that was never created, or already
+        destroyed, must not stop the others from being stopped. Closing the
+        editor has to succeed whatever state these are in.
+        """
+        timer = getattr(self, 'AutosaveTimer', None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except (RuntimeError, AttributeError):
+                # RuntimeError is PyQt's "wrapped C/C++ object has been
+                # deleted", which is precisely the condition being defended
+                # against - so it is expected here, not exceptional.
+                pass
+
+        # The tileset animation timer is the one with the most reach. It is a
+        # *global* (globals_.TilesetAnimTimer), so it certainly outlives this
+        # window; it fires every 90 ms, so the shutdown window it can land in is
+        # wide; and its callback does globals_.mainWindow.scene.update() - it
+        # dereferences this window and its scene directly. Nothing stopped it
+        # anywhere in the codebase before now.
+        #
+        # Not established as *the* cause of the shutdown crash: its callback
+        # returns immediately unless globals_.TilesetsAnimating is on, which is
+        # a user toggle that defaults to off. Stopping it is correct either way
+        # - a timer aimed at a window being destroyed should not still be
+        # running - but the intermittent exit crash may yet have another source.
+        anim = getattr(globals_, 'TilesetAnimTimer', None)
+        if anim is not None:
+            try:
+                anim.stop()
+            except (RuntimeError, AttributeError):
+                pass
+
+        # The status-bar warning icons each carry their own single-shot
+        # dismissal timer, which can be pending when the editor is closed.
+        for label in list(getattr(self, 'warningIcons', ()) or ()):
+            dismiss = getattr(label, 'dismissTimer', None)
+            if dismiss is None:
+                continue
+            try:
+                dismiss.stop()
+            except (RuntimeError, AttributeError):
+                pass
 
     def ResetPalette(self):
         """
@@ -2965,7 +3205,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         for spr in globals_.Area.sprites:
             spr.ImageObj.positionChanged()
 
-        self.actions['backgrounds'].setEnabled(len(globals_.Area.zones) > 0)
+        # Via set_action_allowed so a session's restriction is not overwritten;
+        # see its docstring.
+        from reggie.ui.collab_controller import set_action_allowed
+        set_action_allowed('backgrounds', len(globals_.Area.zones) > 0)
+
         self.levelOverview.update()
 
         zones_after = undo.snapshot_zones()

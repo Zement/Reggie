@@ -66,7 +66,7 @@ ReggieVersionFloat = 4.9
 # Version format: v[Major].[Minor].[Patch]-[MinorPatch]-[CommitID]
 # MinorPatch increments with each commit for proper sorting
 # Version is determined dynamically from git tags at runtime
-ReggieVersionShort = 'v4.9.1-26'  # Fallback if git is not available (update manually with each release)
+ReggieVersionShort = 'v4.9.1-29'  # Fallback if git is not available (update manually with each release)
 ResetDataWhenHiding = False
 RestoredFromAutoSave = False
 SettingsActions = None
@@ -82,6 +82,18 @@ TilesetFilesLoaded = [None, None, None, None]
 TilesetInfo = None
 TilesetNames = None
 TilesetsAnimating = False
+
+# Withholds the "tileset not found" modal while a patch switch is in flight.
+#
+# During LoadGameDef the level still open belongs to the *outgoing* game, and
+# its tilesets are looked up under the incoming game's paths. Switching to
+# retail from a patch therefore warned about every tileset unique to that patch
+# - retail has no base gamedef to fall back to, while a patch inherits retail
+# and so happens to find them. The level is replaced moments later, so the
+# warning is about a state the user never reaches.
+#
+# Set only around that switch, and always restored in a finally.
+SuppressMissingTilesetWarnings = False
 ViewActions = None
 ZoneThemeValues = None
 FirstStageFilename = None

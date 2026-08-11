@@ -249,7 +249,19 @@ def invert_payload(payload):
         entry['before'], entry['after'] = target.get('after'), target.get('before')
         inverted.append(entry)
 
-    return {'kind': kind, 'targets': inverted}
+    result = {'kind': kind, 'targets': inverted}
+
+    # Dialog operations (area_settings, metadata, zones) carry their snapshots
+    # at the TOP level with an empty targets list - see sync.encode_dialog_op
+    # and encode_zones. Swapping only inside `targets` therefore inverted
+    # nothing for them and returned the payload unchanged, so undoing a tileset
+    # change told the peer to apply that same change again: locally the tileset
+    # reverted, remotely nothing moved. Zement saw exactly that.
+    if 'before' in payload or 'after' in payload:
+        result['before'] = payload.get('after')
+        result['after'] = payload.get('before')
+
+    return result
 
 
 def op_kind_of(command):

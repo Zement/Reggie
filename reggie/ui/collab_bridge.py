@@ -49,9 +49,48 @@ class CollabSignals(QtCore.QObject):
     operationReceived = QtCore.pyqtSignal(dict, str)   # op payload, sender id
     presenceReceived = QtCore.pyqtSignal(dict, str)    # presence payload, sender
     snapshotReceived = QtCore.pyqtSignal(dict)
-    snapshotRequested = QtCore.pyqtSignal(str, int)    # session id, area
+    levelSaved = QtCore.pyqtSignal(dict)          # the host saved the level
+    # session id, area, want_file. want_file asks for the level *file* rather
+    # than a rebuilt snapshot - the client's way of saying it is ready to
+    # receive one, which is why the join publication is answered here rather
+    # than pushed at 'join' (Block C - B3, round 2, R2).
+    snapshotRequested = QtCore.pyqtSignal(str, int, bool)
     levelSwitchRequested = QtCore.pyqtSignal(str, int)  # level name, area
-    operationRejected = QtCore.pyqtSignal(str)         # reason
+
+    # A Full client is *asking* the host to move the session (Block C - B3,
+    # phase 3d). Separate from levelSwitchRequested, which means "the session
+    # has moved, load it": this one has not been decided yet, and the host has
+    # to know who asked in order to answer them. session id, level, area.
+    levelSwitchProposed = QtCore.pyqtSignal(str, str, int)
+    # reason, op_id. op_id names *what* was refused: an operation id for a
+    # refused edit, or the message type for a refused request. A refused switch
+    # proposal has to be distinguishable from a refused edit, because the two
+    # want opposite responses - an edit was applied optimistically and needs a
+    # resync, a proposal was never applied and needs the waiting caller
+    # released (Block C - B3, phase 3d).
+    operationRejected = QtCore.pyqtSignal(str, str)
+
+    # Patch transfer. Host side: a peer needs the patch, or wants one file of
+    # it. Client side: the manifest arrived, a chunk arrived, the host finished.
+    # session id, patch id, assets_only. assets_only is True when the client has
+    # the patch already and wants only the host's Stage and Texture (Block C -
+    # B3, round 2).
+    patchNeeded = QtCore.pyqtSignal(str, str, bool)
+    fileRequested = QtCore.pyqtSignal(str, str, str)   # session id, path, kind
+
+    # Host side: a client reported its transfer finished (or failed). The host
+    # holds level publications back while a peer is mid-transfer, so it needs to
+    # know when that ends. session id, ok.
+    peerTransferFinished = QtCore.pyqtSignal(str, bool)
+
+    # Host side: a peer finished loading a level the host published (R3). The
+    # host holds edits back until every peer has this, so that nobody is edited
+    # around while their scene is still being built.
+    # session id, level, ok.
+    peerLevelLoaded = QtCore.pyqtSignal(str, str, bool)
+    manifestReceived = QtCore.pyqtSignal(dict)
+    fileChunkReceived = QtCore.pyqtSignal(dict)
+    transferFinished = QtCore.pyqtSignal(bool, str)    # ok, error
 
     # Anything worth showing in the status window that is not chat.
     statusMessage = QtCore.pyqtSignal(str)
@@ -127,14 +166,19 @@ class CollabBridge(QtCore.QObject):
             # on the main thread - hence a signal rather than a direct call.
             self.signals.snapshotRequested.emit(
                 getattr(participant, 'session_id', ''),
-                int(data.get('area', 1) or 1))
+                int(data.get('area', 1) or 1),
+                bool(data.get('want_file', False)))
 
         elif kind == 'area_switch':
-            # Loading a level touches the whole editor, so this must reach the
+            # A client is *asking*; the host decides (Block C - B3, phase 3d).
+            # This used to load straight away, which is why the host's unsaved
+            # work could be walked over by a client's switch. Answering it
+            # touches the editor and may open a dialog, so it must reach the
             # main thread before anything happens.
             self.signals.statusMessage.emit(
-                '%s is changing the level or area.' % nick)
-            self.signals.levelSwitchRequested.emit(
+                '%s asked to change the level or area.' % nick)
+            self.signals.levelSwitchProposed.emit(
+                str(getattr(participant, 'session_id', '') or ''),
                 str(data.get('level', '') or ''),
                 int(data.get('area', 1) or 1))
 
@@ -142,6 +186,65 @@ class CollabBridge(QtCore.QObject):
             self.signals.errorOccurred.emit(
                 'A change from %s could not be applied: %s'
                 % (nick, data.get('error', '')))
+
+        elif kind == 'patch_need':
+            # Building a manifest walks the patch directory, so it belongs on
+            # the main thread with the rest of the file work - the same reason
+            # snapshot_request is a signal rather than a direct call.
+            assets_only = bool(data.get('assets_only', False))
+
+            self.signals.statusMessage.emit(
+                '%s needs the %s game data.' % (nick, data.get('patch_id', ''))
+                if assets_only
+                else '%s needs the %s patch.' % (nick,
+                                                 data.get('patch_id', '')))
+            self.signals.patchNeeded.emit(
+                getattr(participant, 'session_id', ''),
+                str(data.get('patch_id', '') or ''),
+                assets_only)
+
+        elif kind == 'file_req':
+            self.signals.fileRequested.emit(
+                getattr(participant, 'session_id', ''),
+                str(data.get('path', '') or ''),
+                str(data.get('kind', '') or 'patch'))
+
+        elif kind == 'file_denied':
+            # A peer asking for something outside its manifest. Shown, not
+            # hidden: it is either a bug or a probe, and both are worth seeing.
+            self.signals.statusMessage.emit(
+                '%s asked for a file that was not offered (%s).'
+                % (nick, data.get('path', '')))
+
+        elif kind == 'level_loaded':
+            # The peer has the level open and is safe to edit around again (R3).
+            ok = bool(data.get('ok', True))
+            if not ok:
+                self.signals.statusMessage.emit(
+                    '%s could not open %s and is still on the previous level.'
+                    % (nick, data.get('level', 'the level')))
+
+            self.signals.peerLevelLoaded.emit(
+                str(getattr(participant, 'session_id', '') or ''),
+                str(data.get('level', '') or ''), ok)
+
+        elif kind == 'file_done':
+            ok = bool(data.get('ok', True))
+            if ok:
+                self.signals.statusMessage.emit(
+                    '%s finished downloading the patch.' % nick)
+            else:
+                self.signals.statusMessage.emit(
+                    "%s could not download the patch: %s"
+                    % (nick, data.get('error', 'unknown error')))
+
+            # Either way this peer is no longer mid-transfer, so the host can
+            # resume publishing levels to it. Emitted on failure too: a
+            # transfer that failed is still over, and holding publications back
+            # for a peer that will never report success would silence it for
+            # the rest of the session.
+            self.signals.peerTransferFinished.emit(
+                str(getattr(participant, 'session_id', '') or ''), ok)
 
     def on_host_roster(self, participants):
         self.signals.rosterChanged.emit(
@@ -211,7 +314,8 @@ class CollabBridge(QtCore.QObject):
 
         elif kind == 'op_reject':
             self.signals.operationRejected.emit(
-                data.get('reason', 'The host rejected a change.'))
+                data.get('reason', 'The host rejected a change.'),
+                str(data.get('op_id', '') or ''))
 
         elif kind == protocol.T_AREA_SWITCH:
             # The host moved everyone. Same signal as the host-side request, so
@@ -234,6 +338,22 @@ class CollabBridge(QtCore.QObject):
 
         elif kind == protocol.T_SNAPSHOT:
             self.signals.snapshotReceived.emit(dict(data or {}))
+
+        elif kind == 'manifest':
+            self.signals.manifestReceived.emit(dict(data or {}))
+
+        elif kind == 'file_chunk':
+            self.signals.fileChunkReceived.emit(dict(data or {}))
+
+        elif kind == 'saved':
+            self.signals.levelSaved.emit(dict(data or {}))
+
+        elif kind == 'file_done':
+            # Sent by the host both to refuse a transfer and to end one, so the
+            # 'ok' flag is what distinguishes them, not the arrival.
+            self.signals.transferFinished.emit(
+                bool((data or {}).get('ok', True)),
+                str((data or {}).get('error', '') or ''))
 
     def on_client_disconnect(self, connection, reason):
         self.signals.disconnected.emit(reason or 'The connection closed.')

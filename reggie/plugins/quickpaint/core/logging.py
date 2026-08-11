@@ -15,9 +15,28 @@ def init_logging(log_dir: str = None):
     global _log_file
     
     if log_dir is None:
-        # Default to Reggie's root directory
-        log_dir = Path(__file__).parent.parent.parent
-    
+        # <Reggie root>/logs, beside the collab debug log, the terminal log and
+        # the crash log.
+        #
+        # This used to be Path(__file__).parent.parent.parent, which is not
+        # Reggie's root at all - it resolves to reggie/plugins/, so the log was
+        # written *inside the source tree* (the same complaint that moved the
+        # collab logs out of the repository root on 2026-08-09).
+        #
+        # module_path() rather than __file__ for the frozen-build reason: in a
+        # PyInstaller build __file__ points into the temporary _MEIPASS
+        # extraction directory, which is deleted when the program exits, so the
+        # log would vanish with the process that needed it.
+        try:
+            from reggie.core.session_log import log_directory
+
+            log_dir = log_directory()
+        except Exception:
+            log_dir = ''
+
+        if not log_dir:
+            log_dir = Path(__file__).parent.parent.parent.parent.parent
+
     log_path = Path(log_dir) / "qpt_debug.log"
     
     try:

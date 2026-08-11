@@ -294,6 +294,59 @@ def LoadLevelNames():
         globals_.LevelNames = LoadLevelNames_Category(root)
 
 
+def FirstLevelName():
+    """
+    The first level in the current patch's level list, or '' if there is none.
+
+    Used when switching game patch (Block C - B3, round 2, R5): the editor moves
+    to the new patch's own first level instead of keeping the old patch's level
+    open, whose tilesets belong to a game that is no longer loaded. That is what
+    produced a screen of pink placeholder tiles and a row of "tileset not found"
+    warnings on every patch switch.
+
+    Walks the nested category tree in document order and returns the first
+    <level file="..."> it finds. The structure is
+    ('name', (children...)) for a category and ('name', 'file') for a level, so
+    a level is the entry whose second element is a string.
+
+    Returns the *file* name ('01-01'), which is what LoadLevel(name, False, ...)
+    expects - not the display name ('World 1-1').
+
+    Retail's own list is the fallback for free: getResourcePaths yields general
+    to specific, so a patch without a levelnames.xml of its own inherits the base
+    game's. A patch whose file exists but is empty or malformed therefore lands
+    here with an empty tree, which is why the empty case returns '' and lets the
+    caller decide rather than raising.
+    """
+    try:
+        LoadLevelNames()
+    except Exception:
+        # A malformed levelnames.xml is a reason to skip the convenience, not to
+        # block the patch switch that triggered it.
+        return ''
+
+    def first(entries):
+        for entry in entries or ():
+            if not isinstance(entry, (tuple, list)) or len(entry) != 2:
+                continue
+
+            _name, value = entry
+
+            if isinstance(value, str):
+                return value
+
+            found = first(value)
+            if found:
+                return found
+
+        return ''
+
+    try:
+        return first(globals_.LevelNames)
+    except Exception:
+        return ''
+
+
 def LoadLevelNames_Category(node):
     """
     Loads a LevelNames XML category

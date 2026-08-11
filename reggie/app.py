@@ -502,7 +502,42 @@ def main():
 
     print("[BOOT] ✓ Reggie boot complete! Starting event loop...")
     exitcodesys = globals_.app.exec()
-    globals_.app.deleteLater()
+
+    # NOT app.deleteLater(). That was here for years and is the wrong call in
+    # the wrong place: deleteLater() schedules destruction through the event
+    # loop, and the loop has just finished, so the QApplication is instead torn
+    # down during interpreter shutdown - while Python still holds references to
+    # widgets whose C++ halves it owns. Every later access to one of those is a
+    # read through a dangling pointer, which on Windows is an access violation
+    # (0xC0000005) with no Python traceback at all: the process simply dies
+    # after the last unrelated line of output.
+    #
+    # Nothing needs to be deleted here in any case. Qt destroys the application
+    # object and its widget tree as the process exits, and doing it by hand
+    # only reorders that teardown against Python's own garbage collection.
+    #
+    # Dropping the global reference is enough: it lets the normal shutdown run
+    # in Qt's order rather than a hand-forced one.
+    #
+    # The window goes first, and the order matters. globals_.mainWindow holds
+    # the entire widget tree, so while it is set, that tree outlives the
+    # QApplication and is then freed by Python during interpreter shutdown -
+    # after the Qt machinery those widgets depend on has gone. Releasing it here
+    # lets the tree be destroyed while Qt is still alive to destroy it.
+    #
+    # crash.log from Zement's run named this statement, which is what showed the
+    # earlier deleteLater() removal had moved the crash rather than fixed it:
+    # the access violation happens as the interpreter tears down, not inside
+    # anything the editor explicitly calls.
+    # Level and Area hold the scene's items (objects, sprites, entrances,
+    # zones), which belong to the window's QGraphicsScene. Released before the
+    # window for the same reason the window is released before the application:
+    # each is destroyed while the thing that owns it still exists.
+    globals_.Area = None
+    globals_.Level = None
+    globals_.mainWindow = None
+    globals_.app = None
+
     sys.exit(exitcodesys)
 
 

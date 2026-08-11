@@ -187,9 +187,27 @@ class GameDefMenu(QtWidgets.QMenu):
         if not checked or self.update_flag: return
 
         name = self.actGroup.checkedAction().data()
+
+        # Unsaved work is settled before the patch changes (Block C - B3,
+        # round 2, R5), for the same reason as the patch combo box: prompting
+        # afterwards would offer to save the old patch's level through the new
+        # patch's paths, and Cancel would have nothing left to cancel.
+        window = globals_.mainWindow
+        if window is not None and window.CheckDirty():
+            # Put the menu's tick back on the patch still loaded, or it would
+            # show a switch that did not happen.
+            self._recheckLoadedGameDef()
+            return
+
         success = loadNewGameDef(name)
         if success:
             self.gameChanged.emit()
+
+            # Open the new patch's first level, rather than keeping one whose
+            # tilesets belong to the patch just unloaded - the pink-placeholder
+            # state Zement described.
+            if window is not None:
+                window.LoadFirstLevelOfPatch()
             return
 
         # Setting the new gamedef failed for some reason, so load back the old
@@ -199,11 +217,22 @@ class GameDefMenu(QtWidgets.QMenu):
         if not success:
             raise Exception("Restoring the previous game def (%r) failed after failing to load new game def (%r)" % (real_gamedef, name))
 
+        self._recheckLoadedGameDef()
+
+    def _recheckLoadedGameDef(self):
+        """
+        Puts the menu's tick back on the patch that is actually loaded.
+
+        The update_flag guard is what stops setChecked re-entering
+        handleGameDefClicked, which would restart the switch this is undoing.
+        """
+        real_gamedef = setting('LastGameDef')
+
         self.update_flag = True
         for act in self.actGroup.actions():
             act.setChecked(act.data() == real_gamedef)
         self.update_flag = False
-    
+
     def refreshMenu(self):
         """
         Refresh the menu to show newly added patches
@@ -235,10 +264,9 @@ class GameDefMenu(QtWidgets.QMenu):
             if len(actions) >= 3:  # viewer, separator, patches..., separator, add button
                 self.insertAction(actions[-2], act)  # Insert before last separator
 
-        # Also refresh the main window's patch combo box if it exists
-        if hasattr(globals_, 'mainWindow') and globals_.mainWindow:
-            if hasattr(globals_.mainWindow, 'updatePatchComboBox'):
-                globals_.mainWindow.updatePatchComboBox()
+        # Also refresh the main window's patch combo box if it exists, so a
+        # newly added patch appears in both controls.
+        RefreshPatchSelector()
 
 
 class ReggieGameDefinition:
@@ -606,10 +634,92 @@ class ReggieGameDefinition:
         # Use the fallback
         return fallback
 
+    # A collaboration session's game data, as {patch name: (stage, texture)}.
+    #
+    # Class-level rather than per-instance, and deliberately so: loading a patch
+    # builds a *new* ReggieGameDefinition, so an override stored on an instance
+    # would be lost the moment the session switched patch - which is exactly
+    # when it is needed. Keyed on the patch name for the same reason the
+    # QSettings keys are.
+    #
+    # This is how a session points at transferred levels without touching the
+    # user's own preferences (Block C - B3). The user's StageGamePath_<patch>
+    # keeps whatever it always had; the session simply answers first, and stops
+    # answering when it ends. Nothing here is ever written to disk.
+    _sessionGamePaths = {}
+
+    # The key a retail session's game data is stored under (Block C - B3, R6).
+    #
+    # Retail needs a key of its own because it has no patch id, and it must not
+    # be `self.name`: a retail gamedef's name is trans.string('Gamedefs', 13),
+    # a *translated* display string, so keying on it would work in English and
+    # silently fail in any other language. It is also the exact confusion
+    # _patchId() exists to avoid - a retail session claiming to need a patch
+    # named after the base game.
+    #
+    # A sentinel that cannot collide with a patch name: a patch id comes from
+    # the `name` attribute of a main.xml root node, and no real one looks like
+    # this.
+    RETAIL_SESSION_KEY = '\x00retail'
+
+    @classmethod
+    def SetSessionGamePaths(cls, patch_name, stage, texture):
+        """
+        Points a patch at a session's copy of its game data, for as long as the
+        session lasts. Both paths may be empty to record only one of them.
+
+        An empty `patch_name` means the retail game, which is stored under
+        RETAIL_SESSION_KEY rather than under '' - so that a caller passing an
+        empty string by mistake cannot silently claim the retail slot.
+        """
+        key = str(patch_name) or cls.RETAIL_SESSION_KEY
+        cls._sessionGamePaths[key] = (str(stage or ''), str(texture or ''))
+
+    @classmethod
+    def ClearSessionGamePaths(cls):
+        """
+        Forgets every session override. Called when a session ends, so the
+        editor goes back to the user's own folders.
+        """
+        cls._sessionGamePaths.clear()
+
+    def _sessionPath(self, index):
+        """
+        The session's stage (0) or texture (1) path for this gamedef, or ''.
+
+        Retail is included (R6). It used to be excluded on the reasoning that
+        the base game is not a patch and has no per-patch key to shadow - true
+        as far as it goes, but it meant a retail session could not receive the
+        host's levels at all, so every retail join fell back to a snapshot and
+        the host froze waiting for an acknowledgement that could not come.
+
+        The override is still session-scoped and never written to disk, which is
+        what makes it safe here: the user's own StageGamePath keeps whatever it
+        always had, and a retail session simply answers first until it ends.
+        That matters more for retail than for a patch, because editing the base
+        game's folders in place is discouraged - Zement's position, 2026-08-11 -
+        and this guarantees a session never does.
+        """
+        key = self.name if self.custom else self.RETAIL_SESSION_KEY
+
+        paths = ReggieGameDefinition._sessionGamePaths.get(key)
+        if not paths:
+            return ''
+
+        path = paths[index]
+        # Verified rather than trusted: a session copy can be deleted between
+        # joining and loading, and silently returning a path to nothing would
+        # look like the missing-tileset bug this block exists to remove.
+        return path if path and os.path.isdir(path) else ''
+
     def GetTextureGamePath(self):
         """
         Returns the texture game path
         """
+        session = self._sessionPath(1)
+        if session:
+            return session
+
         if not self.custom:
             return setting('TextureGamePath')
 
@@ -636,6 +746,10 @@ class ReggieGameDefinition:
         """
         Returns the stage game path
         """
+        session = self._sessionPath(0)
+        if session:
+            return session
+
         if not self.custom:
             return setting('StageGamePath')
 
@@ -661,18 +775,65 @@ class ReggieGameDefinition:
     def GetTexturePaths(self):
         """
         Returns the texture game paths of this globals_.gamedef and its bases
+
+        The session's own Texture folder is appended last, so it wins: tiles.py
+        searches these in reverse. Without it a session's tilesets were not on
+        the search path at all (Block C - B3, R6) - which worked for a
+        transferred patch only because the install also writes
+        TextureGamePath_<patch>, and did not work for retail at all, since
+        retail has no such key to write.
         """
-        paths = [setting('TextureGamePath')]
+        session = self._sessionPath(1)
 
         if not self.custom:
+            # Same rule as below: an unset path would truncate the search in
+            # tiles.py rather than simply contributing nothing, and a retail
+            # session appends after it.
+            paths = []
+            base_path = setting('TextureGamePath')
+            if base_path:
+                paths.append(base_path)
+            if session:
+                paths.append(session)
             return paths
 
         stg = setting('TextureGamePath_' + self.name)
 
         if self.base is not None:
             paths = self.base.GetTexturePaths()
+        else:
+            # Same rule again: seeding the list with an unset retail path puts
+            # a None at the front, and anything appended after it is then
+            # unreachable.
+            retail_path = setting('TextureGamePath')
+            paths = [retail_path] if retail_path else []
 
-        paths.append(stg)
+        # Only if it is actually set.
+        #
+        # tiles.py searches this list in reverse and stops dead at the first
+        # None ("if path is None: break"), so an unset entry does not merely
+        # contribute nothing - it truncates the search. That was harmless while
+        # the unset entry could only be last; appending a session path after it
+        # (R6) put it in the middle, and every patch built on another patch
+        # broke: Another Mario Wii declares base="Newer Super Mario Bros. Wii",
+        # the client had no TextureGamePath_Newer... key, and the resulting
+        # None hid retail's folder behind it. Every tileset the patch inherits
+        # rather than ships - Pa1_nohara, Pa2_doukutu, Pa3_rail - was reported
+        # missing, while Pa0_jyotyu, which the patch does ship, loaded fine
+        # (Zement, 2026-08-11).
+        #
+        # Dropping it is right rather than keeping a placeholder: the list is a
+        # search path, and a directory nobody configured is not a place to
+        # look. The break in tiles.py is left alone - it is load-bearing for
+        # callers that pass an explicit None - but nothing here feeds it one
+        # any more.
+        if stg:
+            paths.append(stg)
+
+        # After the patch's own path, so a session copy shadows it rather than
+        # being shadowed by it.
+        if session:
+            paths.append(session)
 
         return paths
 
@@ -1001,8 +1162,21 @@ def LoadGameDef(name=None, dlg=None):
         if dlg: dlg.setLabelText(globals_.trans.string('Gamedefs', 10))  # Reloading tilesets...
 
         LoadObjDescriptions(True)  # reloads ts1_descriptions
-        if globals_.mainWindow is not None:
-            globals_.mainWindow.ReloadTilesets(True)
+
+        # The level still open belongs to the game being unloaded, so its
+        # tilesets are about to be looked up under the *incoming* game's paths.
+        # Whatever is missing there is missing from a level that is on its way
+        # out - R5 replaces it immediately after - so the modal would report a
+        # state the user never sees. Restored in a finally: a suppression left
+        # on would hide a genuine missing tileset for the rest of the run.
+        previous_suppression = globals_.SuppressMissingTilesetWarnings
+        globals_.SuppressMissingTilesetWarnings = True
+        try:
+            if globals_.mainWindow is not None:
+                globals_.mainWindow.ReloadTilesets(True)
+        finally:
+            globals_.SuppressMissingTilesetWarnings = previous_suppression
+
         LoadTilesetNames(True)  # reloads tileset names
         LoadTilesetInfo(True)  # reloads tileset info
 
@@ -1110,12 +1284,63 @@ def LoadGameDef(name=None, dlg=None):
     if sprite_images_enabled and globals_.mainWindow is not None and hasattr(globals_.mainWindow, 'sprPicker'):
         globals_.mainWindow.sprPicker.show_sprite_images = True
 
+    # Show the patch that is actually loaded. The combo box reads LastGameDef,
+    # and until now only HandleSwitchPatch refreshed it - so every other route
+    # into a patch change (a collaboration client following its host, a level
+    # load, a failed load falling back to retail) left the box naming the
+    # previous patch. Doing it here rather than at each call site means the
+    # control cannot disagree with the loaded gamedef whoever changed it.
+    RefreshPatchSelector()
+
     # Tell a running collaboration session that the patch changed, so joined
     # clients can re-check whether they still have what the host is using. Only
     # on the success path: announcing a patch we failed to load would be a lie.
     NotifyCollabGameDefChanged()
 
     return True
+
+
+def RefreshPatchSelector():
+    """
+    Re-syncs the controls that name the loaded patch: the toolbar combo box and
+    the Change Game menu (its checkmarks and its description panel).
+
+    Both read the loaded gamedef only when they are built or when the user
+    drives them directly, so anything else that switches patch has to say so.
+    Guarded throughout: the combo box is optional (it can be turned off in
+    preferences, and is None then), and a patch switch must not fail because a
+    piece of chrome could not be updated.
+    """
+    window = getattr(globals_, 'mainWindow', None)
+    if window is None:
+        return
+
+    updater = getattr(window, 'updatePatchComboBox', None)
+    if updater is not None:
+        try:
+            updater()
+        except Exception:
+            pass
+
+    menu = getattr(window, 'GameDefMenu', None)
+    if menu is None:
+        return
+
+    try:
+        loaded = setting('LastGameDef')
+
+        # update_flag suppresses handleGameDefClicked, which the toggle would
+        # otherwise fire - re-entering the load we are finishing.
+        menu.update_flag = True
+        try:
+            for action in menu.actGroup.actions():
+                action.setChecked(action.data() == loaded)
+        finally:
+            menu.update_flag = False
+
+        menu.gameChanged.emit()
+    except Exception:
+        pass
 
 
 def NotifyCollabGameDefChanged():

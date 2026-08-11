@@ -529,6 +529,11 @@ class PathNodeEditorWidget(QtWidgets.QWidget):
         """
         The length of the path changed, so update the range of the node id editor.
         """
+        # Called whenever a path gains or loses a node, including from a remote
+        # edit - by which time this editor may be showing a node that is gone.
+        if not self._node_is_live():
+            return
+
         self.node_id.setRange(0, len(self.path_node.path) - 1)
 
     def _RecordNodeDataChange(self, **kwargs):
@@ -536,6 +541,10 @@ class PathNodeEditorWidget(QtWidgets.QWidget):
         Applies a speed/accel/delay change and records it as one undo step
         (consecutive edits of the same node merge).
         """
+        # The funnel for speed, accel and delay, so one check covers all three.
+        if not self._node_is_live():
+            return
+
         node = self.path_node
         before = node.path.get_data_for_node(node.nodeid)
 
@@ -576,8 +585,34 @@ class PathNodeEditorWidget(QtWidgets.QWidget):
 
         self._RecordNodeDataChange(delay=i)
 
+    def _node_is_live(self):
+        """
+        Whether the node this editor is showing still belongs to its path.
+
+        A collaborator can delete a node while its properties are open here, and
+        every handler below then operates on an object the path no longer knows
+        about - move_node calls _nodes.index() and raises ValueError, which
+        reaches the excepthook as "list.index(x): x not in list". Zement and
+        Mone hit exactly that.
+
+        Checked rather than caught, so the editor simply stops acting on a node
+        that is gone instead of half-applying an edit to it.
+        """
+        node = self.path_node
+        if node is None:
+            return False
+
+        path = getattr(node, 'path', None)
+        if path is None:
+            return False
+
+        try:
+            return any(other is node for other in path._nodes)
+        except (AttributeError, RuntimeError):
+            return False
+
     def HandleLoopsChanged(self, i):
-        if self.UpdateFlag:
+        if self.UpdateFlag or not self._node_is_live():
             return
 
         # i is an integer: 0=Unchecked, 2=Checked
@@ -595,7 +630,9 @@ class PathNodeEditorWidget(QtWidgets.QWidget):
                     new_loops_value, node=self.path_node))
 
     def HandlePathIdChanged(self, i):
-        if self.UpdateFlag or self.path_node.pathid == i:
+        if self.UpdateFlag or not self._node_is_live():
+            return
+        if self.path_node.pathid == i:
             return
 
         old_id = self.path_node.pathid
@@ -607,7 +644,9 @@ class PathNodeEditorWidget(QtWidgets.QWidget):
                 self.path_node.path, 'id', old_id, i, node=self.path_node))
 
     def HandleNodeIdChanged(self, i):
-        if self.UpdateFlag or self.path_node.nodeid == i:
+        if self.UpdateFlag or not self._node_is_live():
+            return
+        if self.path_node.nodeid == i:
             return
 
         old_index = self.path_node.nodeid

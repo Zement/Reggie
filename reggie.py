@@ -29,6 +29,7 @@
 # See _docs/plan/DIRECTORY_STRUCTURE.md for the package layout and the
 # modularization plan.
 
+import faulthandler
 import os
 import sys
 
@@ -37,6 +38,75 @@ import sys
 # or by a frozen build. Python already puts a script's own directory on sys.path
 # when run directly; this makes that explicit and robust for other launch modes.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+def _enable_crash_traces():
+    """
+    Makes a hard crash say where it happened.
+
+    A Qt application can die from an access violation inside C++ - a signal
+    handler calling into a deleted widget, a stale pointer - and Python prints
+    nothing at all for those: the process simply exits with 0xC0000005 and the
+    last thing on screen is whatever unrelated line happened to print before it.
+    faulthandler dumps the Python stack of every thread when that happens, which
+    turns "it crashed somewhere during boot" into a file and a line number.
+
+    Written to logs/crash.log beside the application, next to the collaboration
+    logs, because a frozen build has no terminal to print to - which is exactly
+    the case where this is hardest to diagnose without it. stderr is kept as
+    well for the source checkout, where the terminal is the fastest route.
+
+    Entirely optional: any failure here leaves the editor running without crash
+    traces, which is what it had before.
+    """
+    try:
+        faulthandler.enable()
+    except Exception:
+        return
+
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        if getattr(sys, 'frozen', False):
+            root = os.path.dirname(os.path.abspath(sys.executable))
+
+        logs = os.path.join(root, 'logs')
+        os.makedirs(logs, exist_ok=True)
+
+        # Held open for the process's lifetime on purpose: faulthandler writes
+        # to this descriptor from a crashing thread, so it must still be valid
+        # at the moment things are going wrong. Never closed, and that is the
+        # point.
+        handle = open(os.path.join(logs, 'crash.log'), 'a', buffering=1)
+        faulthandler.enable(file=handle, all_threads=True)
+
+        # Keep a reference so the file object cannot be garbage collected.
+        globals()['_CRASH_LOG'] = handle
+    except Exception:
+        pass
+
+
+_enable_crash_traces()
+
+
+def _start_terminal_log():
+    """
+    Tees stdout and stderr to logs/terminal.log.
+
+    Temporary scaffolding for the Block C collaboration testing, and meant to be
+    removed by the universal logging block - see reggie/core/session_log.py.
+    Started here, before anything else is imported, so the boot output it exists
+    to capture is not already gone by the time it runs.
+    """
+    try:
+        from reggie.core import session_log
+
+        session_log.start()
+    except Exception:
+        # A logging fault must never stop the editor launching.
+        pass
+
+
+_start_terminal_log()
 
 from reggie.app import main
 
