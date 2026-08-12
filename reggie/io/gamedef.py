@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import importlib
 import functools
@@ -9,7 +10,6 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 from reggie.ui.ui import GetIcon, createVertLine
 from reggie.io.misc import LoadSpriteData, LoadSpriteListData, LoadSpriteCategories, LoadBgANames, LoadBgBNames, LoadObjDescriptions, LoadTilesetNames, LoadTilesetInfo, LoadEntranceNames, LoadMusicInfo, LoadZoneThemes
 from reggie.core.dirty import setting, setSetting
-from reggie.ui.dialogs import SpriteUpgradeDialog
 
 from reggie.core import globals_
 from reggie.core import spritelib as SLib
@@ -481,18 +481,20 @@ class ReggieGameDefinition:
         # Load sprites.py if provided
         if 'sprites' in self.files:
             print(f"[DEBUG] Loading sprites.py from: {self.files['sprites'].path}")
+
+            # Converted before it is read, on every patch load rather than once
+            # behind a prompt (NSMBW-Community f2de79d). A patch fixed by an
+            # older version of the converter still benefits when a substitution
+            # is added later, and the question the old dialog asked - "should I
+            # upgrade this?" - was not one the user could answer usefully: the
+            # only alternative to converting is a patch that does not load.
+            #
+            # Safe to repeat because ConvertSpritesModule is idempotent and the
+            # file is only rewritten when something actually changes.
+            FixSpritesModule(self.files['sprites'].path)
+
             with open(self.files['sprites'].path, 'r', encoding='utf-8') as f:
                 filedata = f.read()
-            
-            # Check if the file uses PyQt5 and prompt the user to upgrade it
-            if filedata.find("PyQt5") != -1:
-                result = SpriteUpgradeDialog().exec()
-                if result == QtWidgets.QDialog.DialogCode.Accepted:
-                    UpgradeSpritesFile(self.files['sprites'].path, self.gamepath)
-
-                    # Reload the file since we just changed it
-                    with open(self.files['sprites'].path, 'r', encoding='utf-8') as f:
-                        filedata = f.read()
 
             # The bare names a patch's sprites.py imports, registered before it
             # runs. These modules live at reggie.core.<name>, and the shims at
@@ -1431,34 +1433,93 @@ def FindGameDef(name, skip=None):
         return def_
 
 
-def UpgradeSpritesFile(filename, folderpath):
+# PyQt5 -> PyQt6 substitutions for a patch's sprites.py, as regexes rather
+# than plain strings.
+#
+# Every pattern is written so that an *already converted* file matches nothing,
+# which is what makes running this on every patch load safe. Plain string
+# replacement is not: 'Qt.Align' is a substring of the 'Qt.AlignmentFlag.Align'
+# it produces, so each pass would add another 'AlignmentFlag.' and the file
+# would rot a little further every time a patch was selected. The same trap
+# applies to the transformation and aspect-ratio names, where the original
+# unqualified patterns also matched inside their own output.
+#
+# Adapted from NSMBW-Community's f2de79d (Mandy, 2026-07-27), which moved the
+# converter onto every patch load and qualified two of the patterns with 'Qt.'.
+# The negative lookaheads here are the remaining half of that: 'Qt.Align' still
+# matched its own output in that version.
+_SPRITES_PYQT6_RULES = (
+    (r'QPainter\.(?!RenderHint\.)Antialiasing',
+     'QPainter.RenderHint.Antialiasing'),
+    (r'Qt\.(?!TransformationMode\.)SmoothTransformation',
+     'Qt.TransformationMode.SmoothTransformation'),
+    (r'Qt\.(?!AspectRatioMode\.)IgnoreAspectRatio',
+     'Qt.AspectRatioMode.IgnoreAspectRatio'),
+
+    # The parenthesis skips instances that are already QPointF.
+    (r'QPoint\(', 'QPointF('),
+
+    (r'Qt\.(?!GlobalColor\.)transparent', 'Qt.GlobalColor.transparent'),
+    (r'Qt\.(?!AlignmentFlag\.)Align', 'Qt.AlignmentFlag.Align'),
+)
+
+
+def ConvertSpritesModule(text):
+    """
+    Returns `text` with the known PyQt5 idioms rewritten for PyQt6.
+
+    Pure: takes source, returns source. Kept separate from the file handling so
+    it can be reasoned about and tested without touching a user's patch.
+
+    Idempotent by construction - converting twice gives the same result as
+    converting once - which is the property that lets the caller run it on
+    every patch load rather than once behind a prompt.
+    """
+    text = text.replace('PyQt5', 'PyQt6')
+
+    for pattern, replacement in _SPRITES_PYQT6_RULES:
+        text = re.sub(pattern, replacement, text)
+
+    return text
+
+
+def FixSpritesModule(filename):
+    """
+    Rewrites a patch's sprites.py for PyQt6, in place, if anything needs it.
+
+    Run on every patch load rather than once behind a prompt (NSMBW-Community
+    f2de79d, agreed in the community): a patch fixed by an older version of this
+    converter still benefits when new substitutions are added, and the user has
+    no way to answer "should I upgrade this?" usefully anyway.
+
+    No backup is kept, which is deliberate and was the community's decision -
+    the previous sprites_old.py accumulated beside the patch and was never read
+    back by anything.
+
+    The file is only written when the conversion actually changes something, so
+    an already-converted patch is left alone entirely: no rewrite, no modified
+    timestamp, and nothing to undo if the user has the file open elsewhere.
+
+    Never fatal. A patch that cannot be converted is still loaded as it is - it
+    may well work - and a read-only file is a perfectly ordinary thing to
+    encounter.
+    """
     try:
-        with open(filename, "r", encoding="utf-8") as f:
-            orig_data = f.read()
+        with open(filename, 'r', encoding='utf-8') as f:
+            original = f.read()
 
-        # First off, change the import
-        new_data = orig_data.replace("PyQt5", "PyQt6")
+        converted = ConvertSpritesModule(original)
 
-        # Replacement time
-        strings = [
-            ("QPainter.Antialiasing", "QPainter.RenderHint.Antialiasing"),
-            ("SmoothTransformation",  "TransformationMode.SmoothTransformation"),
-            ("IgnoreAspectRatio",     "AspectRatioMode.IgnoreAspectRatio"),
-            ("QPoint(",               "QPointF("), # Parenthesis to skip existing instances of QPointF
-            ("Qt.transparent",        "Qt.GlobalColor.transparent"),
-            ("Qt.Align",              "Qt.AlignmentFlag.Align"),
-        ]
-        for old, new in strings:
-            #print(f"Replacing '{old}' with '{new}'")
-            new_data = new_data.replace(old, new)
+        if converted == original:
+            return False
 
-        # Update the file
-        with open(filename, 'w') as fileOut:
-            fileOut.write(new_data)
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(converted)
 
-        # Now backup the old file
-        with open(os.path.join("reggiedata", "patches", folderpath, "sprites_old.py"), 'w') as fileOrig:
-            fileOrig.write(orig_data)
-
+        print('[GAMEDEF] converted %s for PyQt6' % filename)
+        return True
     except Exception as error:
+        # Reported rather than raised: the load continues with whatever is on
+        # disk, which is the same position we were in before trying.
         print(f"Sprite Upgrader -- Exception occurred: {error}")
+        return False
