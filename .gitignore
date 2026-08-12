@@ -156,8 +156,13 @@ $RECYCLE.BIN/
 
 # Others
 log.txt
+
+# Every settings variant, not just the two known names. QSettings writes a
+# temporary 'settings.ini.<random>' while flushing and renames it into place;
+# a run that does not exit cleanly leaves one behind. These hold local paths
+# and must never be committed, so the pattern covers whatever Qt invents.
 settings.ini
-settings.ini.bak
+settings.ini.*
 temp/
 
 # Development and analysis files
