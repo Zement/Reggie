@@ -11,6 +11,12 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+
+# build_reggie.py writes here (not to dist/, which the generic entry above
+# covers) and PyInstaller works in build_temp/. A local build otherwise leaves
+# ~40 MB of untracked output looking like it wants committing.
+distrib/
+build_temp/
 downloads/
 eggs/
 .eggs/
