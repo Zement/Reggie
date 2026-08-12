@@ -269,6 +269,38 @@ class GameDefMenu(QtWidgets.QMenu):
         RefreshPatchSelector()
 
 
+def _ensurePatchModuleAliases():
+    """
+    Makes the bare module names a patch's sprites.py imports resolvable.
+
+    A game patch's sprites.py is user content we cannot rewrite, and it does
+    `import spritelib as SLib` / `import sprites_common as common`. Those
+    modules live at reggie.core.<name>, so the names only resolve because
+    something has put them in sys.modules under their bare form.
+
+    From a source checkout the shims at the repository root did that, since the
+    checkout directory is on sys.path. A PyInstaller build has no such entry -
+    module_path() only sets the working directory - so the import failed there
+    and every patch with a custom sprites.py fell back to the base game.
+
+    Aliased rather than re-imported: patch code and Reggie's own code must share
+    the *same* module object, or SLib.ImageCache in a patch would be a different
+    dictionary from the one the editor reads.
+
+    Best-effort per name. A missing optional module should cost that one import,
+    not the whole patch load.
+    """
+    for name in ('spritelib', 'sprites_common'):
+        if name in sys.modules:
+            continue
+
+        try:
+            sys.modules[name] = importlib.import_module('reggie.core.' + name)
+        except ImportError as exc:
+            print('[GAMEDEF] could not alias %r for patch sprites: %s'
+                  % (name, exc))
+
+
 class ReggieGameDefinition:
     """
     A class that defines a NSMBW hack: songs, tilesets, sprites, etc.
@@ -461,6 +493,20 @@ class ReggieGameDefinition:
                     # Reload the file since we just changed it
                     with open(self.files['sprites'].path, 'r', encoding='utf-8') as f:
                         filedata = f.read()
+
+            # The bare names a patch's sprites.py imports, registered before it
+            # runs. These modules live at reggie.core.<name>, and the shims at
+            # the repository root only resolve because the source checkout puts
+            # its own directory on sys.path - a frozen build does not, so every
+            # patch with a custom sprites.py failed there with
+            # "No module named 'spritelib'" while working perfectly from source
+            # (Zement, NSMBWerPlus, v4.9.1-30).
+            #
+            # Registered here rather than at boot because this is the one place
+            # that is on *both* paths: the initial load and every later patch
+            # change. sys.modules entries are process-wide and idempotent, so
+            # repeating this on each gamedef load costs nothing.
+            _ensurePatchModuleAliases()
 
             # https://stackoverflow.com/a/53080237 with modifications
             spec = importlib.util.spec_from_loader(self.name + "->sprites", loader=None)

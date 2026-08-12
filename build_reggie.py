@@ -46,7 +46,16 @@ MAC_BUNDLE_IDENTIFIER = 'ca.chronometry.reggie'
 
 SCRIPT_FILE = 'reggie.py'
 DATA_FOLDERS = ['reggiedata', 'reggieextras', 'assets']
-DATA_FILES = ['readme.md', 'license.txt']
+
+# The two shims travel with the build. A patch's sprites.py does
+# `import spritelib` / `import sprites_common`, and PyInstaller cannot see
+# those: the file is read and exec()'d at runtime, so its imports never appear
+# in the dependency analysis the way `from libs import lh` does.
+#
+# gamedef registers both names in sys.modules before exec'ing a patch, which is
+# what actually fixes it. These are shipped as well so the names still resolve
+# if a patch reaches them by some other route.
+DATA_FILES = ['readme.md', 'license.txt', 'spritelib.py', 'sprites_common.py']
 
 # macOS only
 AUTO_APP_BUNDLE_NAME = SCRIPT_FILE.split('.')[0] + '.app'
