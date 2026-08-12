@@ -39,7 +39,13 @@ from reggie.collab import debuglog
 
 # How long to hold the listening socket open. Long enough for Windows to notice
 # the listen and raise its prompt, short enough to be invisible.
-_LISTEN_SECONDS = 0.35
+#
+# Raised from 0.35 s (2026-08-12). At boot the window has only just been shown
+# and the filtering engine is still settling, and a socket that is gone again
+# within a third of a second can be classified without the dialog ever
+# appearing. This runs on a daemon thread and blocks nothing, so a longer hold
+# costs the user nothing at all.
+_LISTEN_SECONDS = 1.5
 
 
 def is_supported():
@@ -75,18 +81,59 @@ def trigger(port, bind_host='0.0.0.0', blocking=False):
 def _listen_briefly(port, bind_host):
     """
     Binds, listens, waits, closes. Never accepts a connection.
-    """
-    listener = None
-    try:
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
+    Listens on IPv4 **and**, where possible, IPv6 - which is the fix rather than
+    a refinement. Binding 0.0.0.0 alone listens on IPv4 only, and Windows scopes
+    its firewall decision per address family: on a current Windows 11 stack the
+    v4-only listen can be classified without the dialog ever appearing. That is
+    the symptom Zement reported - no prompt at boot, but one from the Patch
+    Manager, which makes an outbound HTTPS request Windows always notices
+    (2026-08-12).
+
+    The IPv4 socket is opened *first* and its failure is what aborts the
+    trigger, because that is the one ServerTransport itself binds
+    (transport.py, AF_INET). A hosting Reggie therefore holds 0.0.0.0 and this
+    correctly stands down - which matters, since on Windows a dual-stack '::'
+    listener does **not** reserve the v4 wildcard, so leading with IPv6 would
+    have let the trigger fire in the middle of somebody's session.
+
+    IPv6 is strictly an addition: if it cannot be had, the trigger still does
+    what it always did.
+    """
+    listeners = []
+    families = []
+    try:
         # No SO_REUSEADDR, matching ServerTransport: on Windows it implies
         # SO_REUSEPORT semantics and would let this trigger quietly share a
         # port with something else already using it.
-        listener.bind((bind_host, int(port)))
-        listener.listen(1)
+        primary = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listeners.append(primary)
+        primary.bind((bind_host or '0.0.0.0', int(port)))
+        primary.listen(1)
+        families.append('ipv4')
 
-        debuglog.log('firewall', 'listening to provoke the prompt', port=port)
+        # V6ONLY *on*, deliberately: the v4 wildcard is already bound above, and
+        # a dual-stack socket would collide with it. This one covers v6 only.
+        if bind_host in ('', '0.0.0.0'):
+            try:
+                secondary = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                listeners.append(secondary)
+                secondary.setsockopt(socket.IPPROTO_IPV6,
+                                     socket.IPV6_V6ONLY, 1)
+                secondary.bind(('::', int(port)))
+                secondary.listen(1)
+                families.append('ipv6')
+            except OSError as exc:
+                # A host with IPv6 disabled by policy still gets its prompt.
+                debuglog.log('firewall', 'ipv6 listen unavailable',
+                             port=port, error=str(exc))
+
+        # The families are logged because they are the whole difference between
+        # a prompt appearing and not appearing. If this misbehaves again the log
+        # says which sockets were actually opened rather than leaving it to be
+        # guessed at.
+        debuglog.log('firewall', 'listening to provoke the prompt', port=port,
+                     families='+'.join(families), seconds=_LISTEN_SECONDS)
 
         # A plain sleep, not an accept(): we want the listening state to exist
         # for a moment, not to talk to anybody.
@@ -98,7 +145,7 @@ def _listen_briefly(port, bind_host):
         debuglog.log('firewall', 'trigger skipped', port=port, error=str(exc))
         return False
     finally:
-        if listener is not None:
+        for listener in listeners:
             try:
                 listener.close()
             except OSError:
