@@ -32,7 +32,16 @@ jobs:
       id: get_version
       shell: pwsh
       run: |
-        $version = (Select-String -Path "globals_.py" -Pattern "ReggieVersionShort = '(.+)'").Matches.Groups[1].Value
+        # reggie/core/globals_.py, not globals_.py: the file moved when Block A
+        # repackaged the tree into reggie/. Checked rather than assumed, because
+        # an unset version silently produces "reggie-next--windows.zip".
+        $match = Select-String -Path "reggie/core/globals_.py" `
+            -Pattern "ReggieVersionShort = '(.+)'"
+        if (-not $match) {
+            throw "ReggieVersionShort not found in reggie/core/globals_.py"
+        }
+        $version = $match.Matches.Groups[1].Value
+        Write-Host "Version: $version"
         echo "VERSION=$version" >> $env:GITHUB_OUTPUT
         
     - name: Create release archive
@@ -82,7 +91,20 @@ jobs:
     - name: Get version
       id: get_version
       run: |
-        VERSION=$(grep "ReggieVersionShort = " globals_.py | sed "s/.*ReggieVersionShort = '\([^']*\)'.*/\1/")
+        # reggie/core/globals_.py, not globals_.py: the file moved when Block A
+        # repackaged the tree into reggie/.
+        VERSION=$(grep "ReggieVersionShort = " reggie/core/globals_.py | sed "s/.*ReggieVersionShort = '\([^']*\)'.*/\1/")
+
+        # Checked explicitly, because this is how the stale path went unnoticed:
+        # grep on a missing file exits non-zero, but the failure is swallowed by
+        # the $(...) assignment, so VERSION was simply empty and the build went
+        # on to produce an archive named "reggie-next--<platform>".
+        if [ -z "$VERSION" ]; then
+            echo "ReggieVersionShort not found in reggie/core/globals_.py" >&2
+            exit 1
+        fi
+
+        echo "Version: $VERSION"
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         
     - name: Create release archive
@@ -133,7 +155,20 @@ jobs:
     - name: Get version
       id: get_version
       run: |
-        VERSION=$(grep "ReggieVersionShort = " globals_.py | sed "s/.*ReggieVersionShort = '\([^']*\)'.*/\1/")
+        # reggie/core/globals_.py, not globals_.py: the file moved when Block A
+        # repackaged the tree into reggie/.
+        VERSION=$(grep "ReggieVersionShort = " reggie/core/globals_.py | sed "s/.*ReggieVersionShort = '\([^']*\)'.*/\1/")
+
+        # Checked explicitly, because this is how the stale path went unnoticed:
+        # grep on a missing file exits non-zero, but the failure is swallowed by
+        # the $(...) assignment, so VERSION was simply empty and the build went
+        # on to produce an archive named "reggie-next--<platform>".
+        if [ -z "$VERSION" ]; then
+            echo "ReggieVersionShort not found in reggie/core/globals_.py" >&2
+            exit 1
+        fi
+
+        echo "Version: $VERSION"
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         
     - name: Create release archive
@@ -189,7 +224,20 @@ jobs:
     - name: Get version
       id: get_version
       run: |
-        VERSION=$(grep "ReggieVersionShort = " globals_.py | sed "s/.*ReggieVersionShort = '\([^']*\)'.*/\1/")
+        # reggie/core/globals_.py, not globals_.py: the file moved when Block A
+        # repackaged the tree into reggie/.
+        VERSION=$(grep "ReggieVersionShort = " reggie/core/globals_.py | sed "s/.*ReggieVersionShort = '\([^']*\)'.*/\1/")
+
+        # Checked explicitly, because this is how the stale path went unnoticed:
+        # grep on a missing file exits non-zero, but the failure is swallowed by
+        # the $(...) assignment, so VERSION was simply empty and the build went
+        # on to produce an archive named "reggie-next--<platform>".
+        if [ -z "$VERSION" ]; then
+            echo "ReggieVersionShort not found in reggie/core/globals_.py" >&2
+            exit 1
+        fi
+
+        echo "Version: $VERSION"
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         
     - name: Create release archive
