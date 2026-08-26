@@ -4,6 +4,7 @@ from PyQt6 import QtWidgets
 from reggie.core import globals_
 from reggie.core import spritelib as SLib
 from reggie.core import archive
+from reggie.core import session
 
 from reggie.core.tiles import CreateTilesets, LoadTileset
 from reggie.core.levelitems import EntranceItem, SpriteItem, ZoneItem, LocationItem, ObjectItem, PathItem, CommentItem
@@ -83,8 +84,7 @@ class Level_NSMBW(AbstractLevel):
         if load:
             new_area.load_defaults()
 
-        globals_.Area = new_area
-        SLib.Area = new_area
+        session.set_current_area(new_area, 1)
 
         self.areas.append(new_area)
 
@@ -142,8 +142,7 @@ class Level_NSMBW(AbstractLevel):
             self.areas.append(new_area)
 
         self.areas[areaToLoad - 1].load()
-        globals_.Area = self.areas[areaToLoad - 1]
-        SLib.Area = self.areas[areaToLoad - 1]
+        session.set_current_area(self.areas[areaToLoad - 1], areaToLoad)
 
         return True
 
@@ -202,9 +201,8 @@ class Level_NSMBW(AbstractLevel):
         # self.areas[current_num - 1] should be unloaded.
         self.areas[current_num - 1].unload()
 
-        # Set the globals properly
-        globals_.Area = self.areas[number - 1]
-        SLib.Area = self.areas[number - 1]
+        # Point the active session (and spritelib) at the new area
+        session.set_current_area(self.areas[number - 1], number)
 
         # self.areas[number - 1] should be loaded.
         # Skip if already loaded (e.g. new area created with load_defaults)

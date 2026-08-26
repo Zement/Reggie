@@ -507,6 +507,14 @@ def main():
     # Toggle light/dark mode
     deferred.SetColorScheme()
 
+    # Install the session manager before the window exists: constructing
+    # ReggieWindow loads a level, and that load opens the first session.
+    # globals_.Area and globals_.Level resolve through this from here on.
+    print("[BOOT] Installing session manager...")
+    from reggie.core.session import SessionManager
+    globals_.set_session_manager(SessionManager())
+    print("[BOOT] ✓ Session manager installed")
+
     # Create and show the main window
     print("[BOOT] Creating main window...")
     globals_.mainWindow = ReggieWindow()
@@ -563,8 +571,16 @@ def main():
     # zones), which belong to the window's QGraphicsScene. Released before the
     # window for the same reason the window is released before the application:
     # each is destroyed while the thing that owns it still exists.
-    globals_.Area = None
-    globals_.Level = None
+    #
+    # Area and Level are now owned by the editor session, so closing the
+    # sessions is what releases them. Detaching the manager afterwards makes
+    # globals_.Area and globals_.Level resolve to None again, exactly as the
+    # direct assignments here used to.
+    manager = globals_.get_session_manager()
+    if manager is not None:
+        manager.close_all()
+    globals_.set_session_manager(None)
+
     globals_.mainWindow = None
     globals_.app = None
 

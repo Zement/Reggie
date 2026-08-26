@@ -27,6 +27,70 @@ order tabs close in must not decide which one keeps the level alive.
 import weakref
 
 
+def open_level(level, file_path, area_num=1):
+    """Replace the editor's open level with ``level``, as a session.
+
+    Phase D-1 keeps the editor single-session: this closes whatever was open
+    and opens one session on the new level, which reproduces the old
+    ``globals_.Level = Level_NSMBW()`` behaviour exactly. Phase D-4 is where
+    more than one may be open at a time.
+
+    Returns the new session, or None when no manager is installed - the
+    headless suites construct levels with no editor around them.
+    """
+    from reggie.core import globals_
+
+    manager = globals_.get_session_manager()
+    if manager is None:
+        return None
+
+    manager.close_all()
+
+    # `level.areas` may still be empty here: Level_NSMBW.__init__ runs new()
+    # before any area is populated, and load() fills them in afterwards. The
+    # area is attached by set_current_area as loading proceeds.
+    area = level.areas[area_num - 1] if len(level.areas) >= area_num else None
+
+    return manager.open(level, file_path, area, area_num)
+
+
+def set_current_area(area, area_num=None):
+    """Point the active session - and spritelib - at ``area``.
+
+    The one funnel for what used to be the pair
+
+        globals_.Area = area
+        SLib.Area = area
+
+    written at each of the seven sites that changed the open area. spritelib
+    keeps its *own* binding, which sprite rendering reads through, so a change
+    that updates one and not the other makes sprites draw against the wrong
+    area's data - a silent wrong-pixels bug rather than an exception. Funnelling
+    both through here is what stops that pair drifting apart.
+
+    Safe to call before a session manager exists: during boot, and in the
+    headless test suites, ``Level_NSMBW`` is constructed with no session at all.
+    """
+    from reggie.core import globals_
+    from reggie.core import spritelib as SLib
+
+    SLib.Area = area
+
+    manager = globals_.get_session_manager()
+    if manager is None:
+        return None
+
+    session = manager.active
+    if session is None:
+        return None
+
+    session.area = area
+    if area_num is not None:
+        session.area_num = area_num
+
+    return session
+
+
 class LevelHandle:
     """One open level file, shared by every session showing one of its areas.
 

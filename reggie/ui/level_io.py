@@ -17,6 +17,7 @@ import os
 from PyQt6 import QtCore, QtWidgets
 
 from reggie.core import globals_
+from reggie.core import session
 from libs import lh, lz77
 from reggie.core.dirty import setSetting, SetDirty
 from reggie.io.misc import IsNSMBLevel, LoadLevelNames, ChooseLevelNameDialog
@@ -562,11 +563,13 @@ class LevelIO:
         except Exception:
             pass
     def newLevel(self):
-        # Create the new level object
-        globals_.Level = Level_NSMBW()
+        # Create the new level object, and the session that owns it. Opening
+        # the session first means globals_.Level resolves while new() runs.
+        level = Level_NSMBW()
+        session.open_level(level, self.win.fileSavePath, 1)
 
         # Load it
-        globals_.Level.new()
+        level.new()
 
         # Prepare the object picker
         self.win.objUseLayer1.setChecked(True)
@@ -593,11 +596,12 @@ class LevelIO:
         Performs all level-loading tasks specific to New Super Mario Bros. Wii levels.
         Do not call this directly - use LoadLevel instead!
         """
-        # Create the new level object
-        globals_.Level = Level_NSMBW()
+        # Create the new level object, and the session that owns it
+        level = Level_NSMBW()
+        session.open_level(level, self.win.fileSavePath, areaNum)
 
         # Load it
-        if not globals_.Level.load(levelData, areaNum):
+        if not level.load(levelData, areaNum):
             raise Exception
 
         # Check for unknown sprite IDs and show warning icon in status bar
