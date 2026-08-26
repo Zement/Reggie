@@ -2853,9 +2853,18 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
         self.setTabOrder(searchbar, scrollWidget)
         self.setTabOrder(scrollWidget, buttonBox)
 
+        # Arrow keys have to be intercepted on the scroll area itself - see the
+        # note in eventFilter.
+        scrollWidget.installEventFilter(self)
+
         # Keep the checked row in view when it changes, so keyboard selection
         # never leaves focus on something scrolled off-screen.
         self.buttongroup.idToggled.connect(self._handleSelectionMoved)
+
+        # Clicking a row puts focus on the list, so the arrow keys continue
+        # from what was clicked. Without this, focus stays wherever it was and
+        # a mouse selection cannot be followed up from the keyboard.
+        self.buttongroup.idPressed.connect(lambda _: scrollWidget.setFocus())
 
         self.updateVisibleRows(list(range(len(self.entries))))
 
@@ -2972,35 +2981,60 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
         if row is not None and row.parent() is not None:
             self.scrollWidget.ensureWidgetVisible(row)
 
-    def keyPressEvent(self, event):
-        """
-        Moves the selection with Up/Down while the list has focus.
+    # Keys that move the selection, and by how many rows. PageUp/PageDown and
+    # Home/End are included because a list of several hundred actors is
+    # painful to walk one row at a time.
+    _NAV_KEYS = {
+        QtCore.Qt.Key.Key_Up: -1,
+        QtCore.Qt.Key.Key_Down: 1,
+        QtCore.Qt.Key.Key_PageUp: -10,
+        QtCore.Qt.Key.Key_PageDown: 10,
+        QtCore.Qt.Key.Key_Home: None,   # first visible row
+        QtCore.Qt.Key.Key_End: None,    # last visible row
+    }
 
-        The per-row radio buttons are not focusable, so Qt's own arrow-key
-        handling for a button group never runs; this replaces it at the dialog
-        level. Only the rows currently passing the search filter take part.
+    def eventFilter(self, obj, event):
         """
-        key = event.key()
+        Turns arrow keys on the list into selection moves.
 
-        if (self.scrollWidget.hasFocus()
-                and key in (QtCore.Qt.Key.Key_Up, QtCore.Qt.Key.Key_Down)
+        This has to be an event filter on the scroll area rather than the
+        dialog's keyPressEvent: QScrollArea handles arrow keys itself, to
+        scroll its viewport, and accepts them. They therefore never propagate
+        up to the dialog, which is why selection appeared frozen while the view
+        scrolled instead.
+        """
+        if (obj is self.scrollWidget
+                and event.type() == QtCore.QEvent.Type.KeyPress
+                and event.key() in self._NAV_KEYS
                 and self.visibleEntries):
 
-            current = self.buttongroup.checkedId()
-            step = -1 if key == QtCore.Qt.Key.Key_Up else 1
+            self._moveSelection(event.key())
+            return True  # consume it, so the viewport does not also scroll
 
-            if current in self.visibleEntries:
-                pos = self.visibleEntries.index(current) + step
-                pos = max(0, min(pos, len(self.visibleEntries) - 1))
-            else:
-                # Selection is filtered out - enter the visible list at its end.
-                pos = 0 if step > 0 else len(self.visibleEntries) - 1
+        return QtWidgets.QDialog.eventFilter(self, obj, event)
 
-            self.setCurrentValue(self.visibleEntries[pos])
-            event.accept()
-            return
+    def _moveSelection(self, key):
+        """
+        Moves the checked row, staying within the rows the search filter
+        currently leaves visible.
+        """
+        step = self._NAV_KEYS[key]
+        current = self.buttongroup.checkedId()
+        last = len(self.visibleEntries) - 1
 
-        QtWidgets.QDialog.keyPressEvent(self, event)
+        if key == QtCore.Qt.Key.Key_Home:
+            pos = 0
+        elif key == QtCore.Qt.Key.Key_End:
+            pos = last
+        elif current in self.visibleEntries:
+            pos = self.visibleEntries.index(current) + step
+            pos = max(0, min(pos, last))
+        else:
+            # The checked row is filtered out; enter the visible list from
+            # whichever end the keypress is heading away from.
+            pos = 0 if step > 0 else last
+
+        self.setCurrentValue(self.visibleEntries[pos])
 
     def setCurrentValue(self, value):
         """
