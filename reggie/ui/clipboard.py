@@ -218,7 +218,7 @@ class ClipboardController:
         clip = encoded.split('|')
 
         if len(clip) > 300 + 2:
-            result = QtWidgets.QMessageBox.warning(self.win, 'Reggie', globals_.trans.string('MainWindow', 1),
+            result = QtWidgets.QMessageBox.warning(self.win, 'Reginald', globals_.trans.string('MainWindow', 1),
                                                    QtWidgets.QMessageBox.StandardButton.Yes, QtWidgets.QMessageBox.StandardButton.No)
             if result == QtWidgets.QMessageBox.StandardButton.No:
                 self.win.SelectionUpdateFlag = False

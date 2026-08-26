@@ -11,9 +11,9 @@
 
 <strings>
 	<section id="AboutDlg">
-		<string id="0">About Reggie Next</string>
-		<string id="1">[i]Reggie Next[/i] Level Editor</string>
-		<string id="2">[i]Reggie Next Level Editor[/i] is an open-source project, started by Treeki in 2010 and forked by RoadrunnerWMC in 2013, that aims to bring you the fun of designing original New Super Mario Bros. Wii[tm]-compatible levels.[br]</string>
+		<string id="0">About Reginald</string>
+		<string id="1">[i]Reginald[/i] Level Editor</string>
+		<string id="2">[i]Reginald[/i] is the continuation of [i]Reggie! Next[/i], an open-source project started by Treeki in 2010 and forked by RoadrunnerWMC in 2013, that aims to bring you the fun of designing original New Super Mario Bros. Wii[tm]-compatible levels.[br]</string>
 		<string id="3">Interested? Join the [a href="[link]"]Horizon Discord server[/a] to get in touch with the current developer(s).[br]</string>
 	</section>
 	<section id="ErrorDlg">
@@ -400,9 +400,9 @@
 		<string id="15">Take a full size screenshot of your level for you to share</string>
 		<string id="16">Change Game Path...</string>
 		<string id="17">Set a different folder to load the game files from</string>
-		<string id="18">Reggie Next Preferences...</string>
-		<string id="19">Change important Reggie Next settings</string>
-		<string id="20">Exit Reggie Next</string>
+		<string id="18">Reginald Preferences...</string>
+		<string id="19">Change important Reginald settings</string>
+		<string id="20">Exit Reginald</string>
 		<string id="21">Exit the editor</string>
 		<string id="22">Select All</string>
 		<string id="23">Select all items in this area</string>
@@ -468,20 +468,20 @@
 		<string id="83">Delete the area (sublevel) currently open from the level</string>
 		<string id="84">Reload Tilesets</string>
 		<string id="85">Reload the tileset data files, including any changes made since the level was loaded</string>
-		<string id="86">About Reggie Next...</string>
+		<string id="86">About Reginald...</string>
 		<string id="87">Info about the program, and the team behind it</string>
 		<string id="88">Help Contents...</string>
 		<string id="89">Help documentation for the needy newbie</string>
-		<string id="90">Reggie Next Tips...</string>
+		<string id="90">Reginald Tips...</string>
 		<string id="91">Tips and controls for beginners and power users</string>
 		<string id="92">About PyQt...</string>
-		<string id="93">About the Qt library Reggie Next is based on</string>
+		<string id="93">About the Qt library Reginald is based on</string>
 		<string id="94">Level Overview</string>
 		<string id="95">Show or hide the Level Overview window</string>
 		<string id="96">Palette</string>
 		<string id="97">Show or hide the Palette window</string>
 		<string id="98">Change Game</string>
-		<string id="99">Change the currently loaded Reggie Next game patch</string>
+		<string id="99">Change the currently loaded Reginald game patch</string>
 		<string id="100" />
 		<string id="101" />
 		<string id="102" />
@@ -588,13 +588,13 @@
 		<string id="1">Path [path], Node [node]</string>
 	</section>
 	<section id="PrefsDlg">
-		<string id="0">Reggie Next Preferences</string>
+		<string id="0">Reginald Preferences</string>
 		<string id="1">General</string>
 		<string id="2">Toolbar</string>
 		<string id="3">Appearance</string>
-		<string id="4">[b]Reggie Preferences[/b][br]Customize Reggie Next by changing these settings.[br]Use the tabs below to view even more settings.[br]Reggie Next must be restarted before certain changes can take effect.</string>
-		<string id="5">[b]Toolbar Preferences[/b][br]Choose menu items you would like to appear on the toolbar.[br]Reggie Next must be restarted before the toolbar can be updated.[br]</string>
-		<string id="6">[b]Reggie Appearance[/b][br]Customize the appearance of Reggie Next by changing these settings.[br]Reggie Next must be restarted before the theme can be changed.</string>
+		<string id="4">[b]Reginald Preferences[/b][br]Customize Reginald by changing these settings.[br]Use the tabs below to view even more settings.[br]Reginald must be restarted before certain changes can take effect.</string>
+		<string id="5">[b]Toolbar Preferences[/b][br]Choose menu items you would like to appear on the toolbar.[br]Reginald must be restarted before the toolbar can be updated.[br]</string>
+		<string id="6">[b]Reginald Appearance[/b][br]Customize the appearance of Reginald by changing these settings.[br]Reginald must be restarted before the theme can be changed.</string>
 		<string id="7" />
 		<string id="8" />
 		<string id="9" />
@@ -612,13 +612,13 @@
 		<string id="21">Available Themes</string>
 		<string id="22">Preview</string>
 		<string id="23" />
-		<string id="24">[b]Window Style[/b][br]This changes what style Reggie's UI uses. Note that this may cause issues with certain themes.</string>
+		<string id="24">[b]Window Style[/b][br]This changes what style Reginald's UI uses. Note that this may cause issues with certain themes.</string>
 		<string id="25">Window Style:</string>
 		<string id="26">[b][name][/b] - Version [version][br]By [creator][br][description]</string>
 		<string id="27" />
 		<string id="28" />
 		<string id="29" />
-		<string id="30">You may need to restart Reggie Next for changes to take effect.</string>
+		<string id="30">You may need to restart Reginald for changes to take effect.</string>
 		<string id="31">Display lines indicating the leftmost x-position where entrances can be safely placed in zones</string>
 		<string id="32" />
 		<string id="33">Reset sprite data when hiding sprite fields</string>
@@ -634,7 +634,7 @@
 		<string id="45">Use Rounded Rectangles</string>
 		<string id="46">[b]Use Rounded Rectangles[/b][br]This makes the corners of sprites, entrances, and path nodes appear rounded instead of sharp.</string>
 		<string id="47">Dark Mode</string>
-		<string id="48">[b]Dark Mode[/b][br]This determines the overall color style Reggie uses, independent from the current theme.[br][br]Note that this may cause issues with certain themes.</string>
+		<string id="48">[b]Dark Mode[/b][br]This determines the overall color style Reginald uses, independent from the current theme.[br][br]Note that this may cause issues with certain themes.</string>
 		<string id="49">Display full filepath of opened level</string>
 		<string id="56">Keybinds</string>
 		<string id="57">[b]Configure Keybinds[/b][br]Customize the keybinds used for drop-down actions.[br]Press Backspace/Delete to clear a keybind, or hit the X button.[br]</string>
@@ -808,7 +808,7 @@
 	<section id="Themes">
 		<string id="0">Classic</string>
 		<string id="1">Treeki, Tempus</string>
-		<string id="2">The default Reggie Next theme.</string>
+		<string id="2">The default Reginald theme.</string>
 		<string id="3">[i](unknown)[/i]</string>
 		<string id="4">[i]No description[/i]</string>
 	</section>

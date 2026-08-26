@@ -36,13 +36,17 @@ import PyInstaller.__main__
 # projects that use the same technologies (Reggie, Puzzle, BRFNTify,
 # etc)
 
-PROJECT_NAME = 'Reggie! Next'
-FULL_PROJECT_NAME = 'Reggie! Next Level Editor'
-PROJECT_VERSION = '4.9.1'
+PROJECT_NAME = 'Reginald'
+FULL_PROJECT_NAME = 'Reginald Level Editor'
+# Keep in step with globals_.ReggieVersionShort / ReginaldVersionFloat.
+PROJECT_VERSION = '0.95.0'
 
 WIN_ICON = os.path.join('reggiedata', 'win_icon.ico')
 MAC_ICON = os.path.join('reggiedata', 'reggie.icns')
-MAC_BUNDLE_IDENTIFIER = 'ca.chronometry.reggie'
+# Changing the bundle identifier makes macOS treat this as a separate
+# application from Reggie! Next rather than an update of it. That is the
+# intent: the two can be installed side by side during the transition.
+MAC_BUNDLE_IDENTIFIER = 'ca.chronometry.reginald'
 
 SCRIPT_FILE = 'reggie.py'
 DATA_FOLDERS = ['reggiedata', 'reggieextras', 'assets']
@@ -73,7 +77,10 @@ elif sys.platform == 'darwin':
 else:
     platform = sys.platform
 
-DIR = os.path.join('distrib', 'reggie_next_v%s_%s' % (PROJECT_VERSION, platform))
+# NOTE: the macOS and Linux jobs in .github/workflows/build.yml locate this
+# folder with `ls -d reginald_v*`. Changing the prefix here means changing it
+# there too, in all three jobs.
+DIR = os.path.join('distrib', 'reginald_v%s_%s' % (PROJECT_VERSION, platform))
 WORKPATH = 'build_temp'
 SPECFILE = SCRIPT_FILE[:-3] + '.spec'
 

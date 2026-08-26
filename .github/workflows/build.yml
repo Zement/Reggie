@@ -1,4 +1,4 @@
-name: Build Reggie! Next
+name: Build Reginald
 
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
       run: |
         # reggie/core/globals_.py, not globals_.py: the file moved when Block A
         # repackaged the tree into reggie/. Checked rather than assumed, because
-        # an unset version silently produces "reggie-next--windows.zip".
+        # an unset version silently produces "reginald--windows.zip".
         $match = Select-String -Path "reggie/core/globals_.py" `
             -Pattern "ReggieVersionShort = '(.+)'"
         if (-not $match) {
@@ -48,20 +48,20 @@ jobs:
       shell: pwsh
       run: |
         $distDir = Get-ChildItem -Path distrib -Directory | Select-Object -First 1
-        Compress-Archive -Path "$($distDir.FullName)\*" -DestinationPath "reggie-next-${{ steps.get_version.outputs.VERSION }}-windows.zip"
+        Compress-Archive -Path "$($distDir.FullName)\*" -DestinationPath "reginald-${{ steps.get_version.outputs.VERSION }}-windows.zip"
         
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: reggie-next-${{ steps.get_version.outputs.VERSION }}-windows
-        path: reggie-next-${{ steps.get_version.outputs.VERSION }}-windows.zip
+        name: reginald-${{ steps.get_version.outputs.VERSION }}-windows
+        path: reginald-${{ steps.get_version.outputs.VERSION }}-windows.zip
         retention-days: 30
         
     - name: Create Release (on tag)
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: reggie-next-${{ steps.get_version.outputs.VERSION }}-windows.zip
+        files: reginald-${{ steps.get_version.outputs.VERSION }}-windows.zip
         draft: false
         prerelease: false
       env:
@@ -98,7 +98,7 @@ jobs:
         # Checked explicitly, because this is how the stale path went unnoticed:
         # grep on a missing file exits non-zero, but the failure is swallowed by
         # the $(...) assignment, so VERSION was simply empty and the build went
-        # on to produce an archive named "reggie-next--<platform>".
+        # on to produce an archive named "reginald--<platform>".
         if [ -z "$VERSION" ]; then
             echo "ReggieVersionShort not found in reggie/core/globals_.py" >&2
             exit 1
@@ -110,22 +110,22 @@ jobs:
     - name: Create release archive
       run: |
         cd distrib
-        DIST_DIR=$(ls -d reggie_next_v* | head -n 1)
-        tar -czf ../reggie-next-${{ steps.get_version.outputs.VERSION }}-macos-arm64.tar.gz -C "$DIST_DIR" .
+        DIST_DIR=$(ls -d reginald_v* | head -n 1)
+        tar -czf ../reginald-${{ steps.get_version.outputs.VERSION }}-macos-arm64.tar.gz -C "$DIST_DIR" .
         cd ..
         
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: reggie-next-${{ steps.get_version.outputs.VERSION }}-macos-arm64
-        path: reggie-next-${{ steps.get_version.outputs.VERSION }}-macos-arm64.tar.gz
+        name: reginald-${{ steps.get_version.outputs.VERSION }}-macos-arm64
+        path: reginald-${{ steps.get_version.outputs.VERSION }}-macos-arm64.tar.gz
         retention-days: 30
         
     - name: Create Release (on tag)
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: reggie-next-${{ steps.get_version.outputs.VERSION }}-macos-arm64.tar.gz
+        files: reginald-${{ steps.get_version.outputs.VERSION }}-macos-arm64.tar.gz
         draft: false
         prerelease: false
       env:
@@ -162,7 +162,7 @@ jobs:
         # Checked explicitly, because this is how the stale path went unnoticed:
         # grep on a missing file exits non-zero, but the failure is swallowed by
         # the $(...) assignment, so VERSION was simply empty and the build went
-        # on to produce an archive named "reggie-next--<platform>".
+        # on to produce an archive named "reginald--<platform>".
         if [ -z "$VERSION" ]; then
             echo "ReggieVersionShort not found in reggie/core/globals_.py" >&2
             exit 1
@@ -174,22 +174,22 @@ jobs:
     - name: Create release archive
       run: |
         cd distrib
-        DIST_DIR=$(ls -d reggie_next_v* | head -n 1)
-        tar -czf ../reggie-next-${{ steps.get_version.outputs.VERSION }}-macos-intel.tar.gz -C "$DIST_DIR" .
+        DIST_DIR=$(ls -d reginald_v* | head -n 1)
+        tar -czf ../reginald-${{ steps.get_version.outputs.VERSION }}-macos-intel.tar.gz -C "$DIST_DIR" .
         cd ..
         
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: reggie-next-${{ steps.get_version.outputs.VERSION }}-macos-intel
-        path: reggie-next-${{ steps.get_version.outputs.VERSION }}-macos-intel.tar.gz
+        name: reginald-${{ steps.get_version.outputs.VERSION }}-macos-intel
+        path: reginald-${{ steps.get_version.outputs.VERSION }}-macos-intel.tar.gz
         retention-days: 30
         
     - name: Create Release (on tag)
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: reggie-next-${{ steps.get_version.outputs.VERSION }}-macos-intel.tar.gz
+        files: reginald-${{ steps.get_version.outputs.VERSION }}-macos-intel.tar.gz
         draft: false
         prerelease: false
       env:
@@ -231,7 +231,7 @@ jobs:
         # Checked explicitly, because this is how the stale path went unnoticed:
         # grep on a missing file exits non-zero, but the failure is swallowed by
         # the $(...) assignment, so VERSION was simply empty and the build went
-        # on to produce an archive named "reggie-next--<platform>".
+        # on to produce an archive named "reginald--<platform>".
         if [ -z "$VERSION" ]; then
             echo "ReggieVersionShort not found in reggie/core/globals_.py" >&2
             exit 1
@@ -243,22 +243,22 @@ jobs:
     - name: Create release archive
       run: |
         cd distrib
-        DIST_DIR=$(ls -d reggie_next_v* | head -n 1)
-        tar -czf ../reggie-next-${{ steps.get_version.outputs.VERSION }}-linux.tar.gz -C "$DIST_DIR" .
+        DIST_DIR=$(ls -d reginald_v* | head -n 1)
+        tar -czf ../reginald-${{ steps.get_version.outputs.VERSION }}-linux.tar.gz -C "$DIST_DIR" .
         cd ..
         
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: reggie-next-${{ steps.get_version.outputs.VERSION }}-linux
-        path: reggie-next-${{ steps.get_version.outputs.VERSION }}-linux.tar.gz
+        name: reginald-${{ steps.get_version.outputs.VERSION }}-linux
+        path: reginald-${{ steps.get_version.outputs.VERSION }}-linux.tar.gz
         retention-days: 30
         
     - name: Create Release (on tag)
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: reggie-next-${{ steps.get_version.outputs.VERSION }}-linux.tar.gz
+        files: reginald-${{ steps.get_version.outputs.VERSION }}-linux.tar.gz
         draft: false
         prerelease: false
       env:

@@ -139,8 +139,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         globals_.Initializing = True
 
-        # Reggie Version number goes below here. 64 char max (32 if non-ascii).
-        self.ReggieInfo = globals_.ReggieID
+        # Version/credit string goes below here. 64 char max (32 if non-ascii).
+        # The attribute keeps its Reggie-era name: LoadReggieInfo/
+        # DecodeOldReggieInfo in core/level.py are the *level metadata* path and
+        # are a different thing that happens to share the word.
+        self.ReggieInfo = globals_.ReginaldID
 
         self.ZoomLevels = [7.5, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0,
                            85.0, 90.0, 95.0, 100.0, 125.0, 150.0, 175.0, 200.0, 250.0, 300.0, 350.0, 400.0]

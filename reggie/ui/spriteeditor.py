@@ -2794,10 +2794,18 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
         self.buttongroup = QtWidgets.QButtonGroup()
 
         # create a widget for every entry
+        #
+        # The radio buttons are deliberately NOT focusable. There is one per
+        # entry - several hundred for actors - and leaving them in the tab
+        # chain means TAB walks the entire list one row at a time before it can
+        # ever reach OK/Cancel. Instead the scroll area takes a single tab stop
+        # and Up/Down move the selection inside it, which is how a radio group
+        # is meant to behave anyway.
         self.widgets = []
         for i, widget in enumerate(self.entries):
             button = QtWidgets.QRadioButton()
             button.setChecked(i == self.value)
+            button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
             self.buttongroup.addButton(button, i)
 
             self.widgets.append(
@@ -2826,6 +2834,9 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
         scrollWidget = QtWidgets.QScrollArea()
         scrollWidget.setWidget(self.widget)
         scrollWidget.setWidgetResizable(True)
+        # The list is one tab stop; see the note at the radio buttons above.
+        scrollWidget.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+        self.scrollWidget = scrollWidget
 
         mainLayout = QtWidgets.QVBoxLayout()
         mainLayout.addWidget(search)
@@ -2833,6 +2844,27 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
         mainLayout.addWidget(buttonBox, 0, QtCore.Qt.AlignmentFlag.AlignBottom)
 
         self.setLayout(mainLayout)
+
+        # Search -> list -> OK/Cancel. With the per-row buttons out of the tab
+        # chain this is the whole cycle, so the buttons are always two tab
+        # presses away rather than several hundred.
+        self.searchbar = searchbar
+        self.buttonBox = buttonBox
+        self.setTabOrder(searchbar, scrollWidget)
+        self.setTabOrder(scrollWidget, buttonBox)
+
+        # Arrow keys have to be intercepted on the scroll area itself - see the
+        # note in eventFilter.
+        scrollWidget.installEventFilter(self)
+
+        # Keep the checked row in view when it changes, so keyboard selection
+        # never leaves focus on something scrolled off-screen.
+        self.buttongroup.idToggled.connect(self._handleSelectionMoved)
+
+        # Clicking a row puts focus on the list, so the arrow keys continue
+        # from what was clicked. Without this, focus stays wherever it was and
+        # a mouse selection cannot be followed up from the keyboard.
+        self.buttongroup.idPressed.connect(lambda _: scrollWidget.setFocus())
 
         self.updateVisibleRows(list(range(len(self.entries))))
 
@@ -2934,6 +2966,75 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
                     subwidgets[1].append(items[prop])
 
             self.entries.append(subwidgets)
+
+    def _handleSelectionMoved(self, id_, checked):
+        """
+        Scrolls the newly checked row into view.
+        """
+        if not checked:
+            return
+
+        row = self.widgets[id_] if 0 <= id_ < len(self.widgets) else None
+
+        # A row that is currently filtered out has been re-parented away by
+        # clearLayout, so there is nothing to scroll to.
+        if row is not None and row.parent() is not None:
+            self.scrollWidget.ensureWidgetVisible(row)
+
+    # Keys that move the selection, and by how many rows. PageUp/PageDown and
+    # Home/End are included because a list of several hundred actors is
+    # painful to walk one row at a time.
+    _NAV_KEYS = {
+        QtCore.Qt.Key.Key_Up: -1,
+        QtCore.Qt.Key.Key_Down: 1,
+        QtCore.Qt.Key.Key_PageUp: -10,
+        QtCore.Qt.Key.Key_PageDown: 10,
+        QtCore.Qt.Key.Key_Home: None,   # first visible row
+        QtCore.Qt.Key.Key_End: None,    # last visible row
+    }
+
+    def eventFilter(self, obj, event):
+        """
+        Turns arrow keys on the list into selection moves.
+
+        This has to be an event filter on the scroll area rather than the
+        dialog's keyPressEvent: QScrollArea handles arrow keys itself, to
+        scroll its viewport, and accepts them. They therefore never propagate
+        up to the dialog, which is why selection appeared frozen while the view
+        scrolled instead.
+        """
+        if (obj is self.scrollWidget
+                and event.type() == QtCore.QEvent.Type.KeyPress
+                and event.key() in self._NAV_KEYS
+                and self.visibleEntries):
+
+            self._moveSelection(event.key())
+            return True  # consume it, so the viewport does not also scroll
+
+        return QtWidgets.QDialog.eventFilter(self, obj, event)
+
+    def _moveSelection(self, key):
+        """
+        Moves the checked row, staying within the rows the search filter
+        currently leaves visible.
+        """
+        step = self._NAV_KEYS[key]
+        current = self.buttongroup.checkedId()
+        last = len(self.visibleEntries) - 1
+
+        if key == QtCore.Qt.Key.Key_Home:
+            pos = 0
+        elif key == QtCore.Qt.Key.Key_End:
+            pos = last
+        elif current in self.visibleEntries:
+            pos = self.visibleEntries.index(current) + step
+            pos = max(0, min(pos, last))
+        else:
+            # The checked row is filtered out; enter the visible list from
+            # whichever end the keypress is heading away from.
+            pos = 0 if step > 0 else last
+
+        self.setCurrentValue(self.visibleEntries[pos])
 
     def setCurrentValue(self, value):
         """
@@ -3044,6 +3145,10 @@ class ExternalSpriteOptionRow(QtWidgets.QWidget):
         if placedText:
             more = QtWidgets.QPushButton("v")
             more.clicked.connect(self.handleButtonClick)
+            # Out of the tab chain for the same reason as the row's radio
+            # button: one per row would put hundreds of stops between the
+            # search box and OK/Cancel.
+            more.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
 
             self.gridLayout.addWidget(more, 0, len(primary) + 1, 1, 1)
 

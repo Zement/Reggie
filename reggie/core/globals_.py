@@ -61,12 +61,24 @@ PathsFrozen = False
 PathsShown = True
 PlaceObjectsAtFullSize = True
 RealViewEnabled = False
-ReggieID = 'Reggie! Next Level Editor by Treeki, Tempus and RoadrunnerWMC'
-ReggieVersionFloat = 4.9
+# Reginald continues Reggie! Next; the credit line keeps the original authors
+# deliberately, and the About box shows it verbatim.
+# 64 char max (32 if non-ascii) - see the note at the ReggieInfo assignment in
+# ui/window.py. Kept within budget even though nothing reads it today.
+ReginaldID = 'Reginald by Treeki, Tempus and RoadrunnerWMC'
+# Reginald restarts at 0.9x and reaches 1.0 when the last improvement block
+# lands. This is compared against the ReginaldVersion key in settings.ini; see
+# the guard in app.py, which resets rather than migrates a foreign file.
+ReginaldVersionFloat = 0.95
 # Version format: v[Major].[Minor].[Patch]-[MinorPatch]-[CommitID]
 # MinorPatch increments with each commit for proper sorting
 # Version is determined dynamically from git tags at runtime
-ReggieVersionShort = 'v4.9.1-32'  # Fallback if git is not available (update manually with each release)
+#
+# NOTE: this constant keeps its Reggie-era name on purpose. .github/workflows/
+# build.yml greps for the literal string "ReggieVersionShort" in all four
+# platform jobs and throws if it is absent, so renaming it here breaks every
+# build. Rename the constant and the workflow greps together, or not at all.
+ReggieVersionShort = 'v0.95.0-1'  # Fallback if git is not available (update manually with each release)
 ResetDataWhenHiding = False
 RestoredFromAutoSave = False
 SettingsActions = None

@@ -1,12 +1,13 @@
-# Reggie! Level Editor Next
+# Reginald
 ## The New Super Mario Bros. Wii Editor
-(Milestone 4)
 
 ----------------------------------------------------------------
 
 Advanced level editor for New Super Mario Bros. Wii originally created by Treeki, Tempus and RoadrunnerWMC using Python, PyQt and Wii.py.
 
-"Next" version created by RoadrunnerWMC, based on official release 3. Milestone 4 version is a collaboration of Horizon users and it aims to add more features requested by users.
+**Reginald** is the continuation of *Reggie! Level Editor Next*. The name keeps the joke intact - the original was named for Reginald "Reggie" Fils-Aimé - while marking that this line has diverged far enough from the Reggie! Next it grew out of to need its own version numbering.
+
+"Next" version created by RoadrunnerWMC, based on official release 3. The Milestone 4 line was a collaboration of Horizon users, aimed at adding more features requested by users; Reginald continues from there.
 
 This release contains many improvements, in addition to code imports from the following Reggie! forks:
  * "ReggieMod 3.7.2" by JasonP27
@@ -15,7 +16,7 @@ This release contains many improvements, in addition to code imports from the fo
  * "Miyamoto!" by AboodXD
  * "Reggie Updated" by RoadrunnerWMC
 
-Source code can be found at:
+The Reggie! Next line this continues from can be found at:
 https://github.com/NSMBW-Community/Reggie-Next/
 
 ----------------------------------------------------------------
@@ -24,10 +25,10 @@ https://github.com/NSMBW-Community/Reggie-Next/
 
 If you're on Windows or Mac and don't care about having the bleeding-edge latest features, you can use the official release. This is by far the easiest setup method.
 
-If you are not on those systems or you want the very latest features, you'll need to run Reggie! from source.
+If you are not on those systems or you want the very latest features, you'll need to run Reginald from source.
 
 
-### How to Run Reggie! from Source
+### How to Run Reginald from Source
 
 Download and install the following:
  * Python 3.9 (or newer) - http://www.python.org
@@ -38,7 +39,7 @@ Optional dependencies:
  * Cython 0.25.2 - http://cython.org
  * NSMBLib 0.4 (or newer) - https://github.com/RoadrunnerWMC/NSMBLib-Updated
 
-Then, you can run Reggie by simply executing the following command in a command prompt.
+Then, you can run Reginald by simply executing the following command in a command prompt.
 
     python3 reggie.py
 
@@ -46,16 +47,16 @@ You can replace `python3` with the path to your Python executable, including the
 
 ### macOS Troubleshooting
 
-If you get the error "Reggie! Next Level Editor is damaged and can't be opened.",
+If you get the error "Reginald Level Editor is damaged and can't be opened.",
 it's because the release builds are unsigned. To fix it, launch a Terminal
 window and run
 
-    sudo xattr -rd com.apple.quarantine /Applications/Reggie\!\ Next\ Level\ Editor.app
+    sudo xattr -rd com.apple.quarantine /Applications/Reginald\ Level\ Editor.app
     
 which will override the application signature requirement. Then you should be
 able to launch the app.
 
-### Reggie! Team
+### Team
 
 Developers:
  * Treeki - Creator, Programmer, Data, RE
@@ -102,7 +103,7 @@ Other Testers and Contributors:
 
 ### License
 
-Reggie! is released under the GNU General Public License v3.
+Reginald is released under the GNU General Public License v3, as Reggie! was before it.
 See the license file in the distribution for information.
 
 ----------------------------------------------------------------
