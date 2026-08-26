@@ -585,9 +585,40 @@ class KeybindLineEdit(QtWidgets.QKeySequenceEdit):
 
     def keyPressEvent(self, event):
         """
-        Clears the current keybind if Delete or Backspace is pressed
+        Clears the current keybind if Delete or Backspace is pressed, and
+        records numpad keys as numpad keys.
         """
-        QtWidgets.QKeySequenceEdit.keyPressEvent(self, event)
+        key = event.key()
 
-        if event.key() == QtCore.Qt.Key.Key_Delete or event.key() == QtCore.Qt.Key.Key_Backspace:
+        if key in (QtCore.Qt.Key.Key_Delete, QtCore.Qt.Key.Key_Backspace):
+            QtWidgets.QKeySequenceEdit.keyPressEvent(self, event)
             self.clear()
+            return
+
+        # QKeySequenceEdit drops KeypadModifier: typing numpad-1 records plain
+        # '1', identical to the top row. That makes the shipped Num+1..Num+9
+        # hotbar defaults impossible to re-enter, and silently rewrites one to
+        # the top-row key if a user retypes it. Qt is otherwise fine with them
+        # - QKeySequence('Num+1') round-trips, and an action bound to it fires
+        # only on the numpad - so the sequence is built here instead.
+        modifiers = event.modifiers()
+        if modifiers & QtCore.Qt.KeyboardModifier.KeypadModifier:
+            # Bare modifier presses have no sequence of their own.
+            if key in (QtCore.Qt.Key.Key_Control, QtCore.Qt.Key.Key_Shift,
+                       QtCore.Qt.Key.Key_Alt, QtCore.Qt.Key.Key_Meta):
+                return
+
+            combined = key
+            for flag in (QtCore.Qt.KeyboardModifier.ControlModifier,
+                         QtCore.Qt.KeyboardModifier.ShiftModifier,
+                         QtCore.Qt.KeyboardModifier.AltModifier,
+                         QtCore.Qt.KeyboardModifier.MetaModifier,
+                         QtCore.Qt.KeyboardModifier.KeypadModifier):
+                if modifiers & flag:
+                    combined |= flag.value
+
+            self.setKeySequence(QtGui.QKeySequence(combined))
+            event.accept()
+            return
+
+        QtWidgets.QKeySequenceEdit.keyPressEvent(self, event)

@@ -81,12 +81,15 @@ class Level_NSMBW(AbstractLevel):
 
         new_area = Area(1)
 
-        if load:
-            new_area.load_defaults()
-
+        # Published before load_defaults() for the same reason as in load():
+        # anything constructed during loading may read globals_.Area. A default
+        # area happens to have no sprites, so this one survived either way, but
+        # the ordering should not differ between the two paths.
+        self.areas.append(new_area)
         session.set_current_area(new_area, 1)
 
-        self.areas.append(new_area)
+        if load:
+            new_area.load_defaults()
 
     def load(self, data, areaToLoad):
         """
@@ -141,8 +144,18 @@ class Level_NSMBW(AbstractLevel):
             new_area.set_data(course, L0, L1, L2)
             self.areas.append(new_area)
 
-        self.areas[areaToLoad - 1].load()
+        # Published BEFORE load(), not after. Area.load() constructs the
+        # sprites, and a sprite image's findZone() reads globals_.Area.zones
+        # while it is being built - so the area has to be the current one
+        # already.
+        #
+        # The old code set the globals afterwards and got away with it: the
+        # previous area was still installed, so the read found *an* area, just
+        # the wrong one's zones. Once globals_.Area resolved through the
+        # session it became None between the two statements, and loading a
+        # level with sprites raised instead.
         session.set_current_area(self.areas[areaToLoad - 1], areaToLoad)
+        self.areas[areaToLoad - 1].load()
 
         return True
 
