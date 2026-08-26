@@ -135,7 +135,7 @@ def _excepthook(*exc_info):
 
     errorbox = QtWidgets.QMessageBox()
     errorbox.setIcon(QtWidgets.QMessageBox.Icon.Critical)
-    errorbox.setWindowTitle("Reggie! Next - Unhandled Exception")
+    errorbox.setWindowTitle("Reginald - Unhandled Exception")
     errorbox.setDetailedText(e)
 
     errorbox.setText(notice + msg)
@@ -340,7 +340,7 @@ def main():
     # Set the default window icon (used for random popups and stuff)
     print("[BOOT] Setting window icon...")
     globals_.app.setWindowIcon(deferred.GetIcon('reggie'))
-    globals_.app.setApplicationDisplayName('Reggie! Next %s' % globals_.ReggieVersionShort)
+    globals_.app.setApplicationDisplayName('Reginald %s' % globals_.ReggieVersionShort)
     print("[BOOT] ✓ Window icon set")
 
     print("[BOOT] Loading global settings...")
