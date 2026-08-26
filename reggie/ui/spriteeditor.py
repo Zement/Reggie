@@ -2794,10 +2794,18 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
         self.buttongroup = QtWidgets.QButtonGroup()
 
         # create a widget for every entry
+        #
+        # The radio buttons are deliberately NOT focusable. There is one per
+        # entry - several hundred for actors - and leaving them in the tab
+        # chain means TAB walks the entire list one row at a time before it can
+        # ever reach OK/Cancel. Instead the scroll area takes a single tab stop
+        # and Up/Down move the selection inside it, which is how a radio group
+        # is meant to behave anyway.
         self.widgets = []
         for i, widget in enumerate(self.entries):
             button = QtWidgets.QRadioButton()
             button.setChecked(i == self.value)
+            button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
             self.buttongroup.addButton(button, i)
 
             self.widgets.append(
@@ -2826,6 +2834,9 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
         scrollWidget = QtWidgets.QScrollArea()
         scrollWidget.setWidget(self.widget)
         scrollWidget.setWidgetResizable(True)
+        # The list is one tab stop; see the note at the radio buttons above.
+        scrollWidget.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+        self.scrollWidget = scrollWidget
 
         mainLayout = QtWidgets.QVBoxLayout()
         mainLayout.addWidget(search)
@@ -2833,6 +2844,18 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
         mainLayout.addWidget(buttonBox, 0, QtCore.Qt.AlignmentFlag.AlignBottom)
 
         self.setLayout(mainLayout)
+
+        # Search -> list -> OK/Cancel. With the per-row buttons out of the tab
+        # chain this is the whole cycle, so the buttons are always two tab
+        # presses away rather than several hundred.
+        self.searchbar = searchbar
+        self.buttonBox = buttonBox
+        self.setTabOrder(searchbar, scrollWidget)
+        self.setTabOrder(scrollWidget, buttonBox)
+
+        # Keep the checked row in view when it changes, so keyboard selection
+        # never leaves focus on something scrolled off-screen.
+        self.buttongroup.idToggled.connect(self._handleSelectionMoved)
 
         self.updateVisibleRows(list(range(len(self.entries))))
 
@@ -2934,6 +2957,50 @@ class ExternalSpriteOptionDialog(QtWidgets.QDialog):
                     subwidgets[1].append(items[prop])
 
             self.entries.append(subwidgets)
+
+    def _handleSelectionMoved(self, id_, checked):
+        """
+        Scrolls the newly checked row into view.
+        """
+        if not checked:
+            return
+
+        row = self.widgets[id_] if 0 <= id_ < len(self.widgets) else None
+
+        # A row that is currently filtered out has been re-parented away by
+        # clearLayout, so there is nothing to scroll to.
+        if row is not None and row.parent() is not None:
+            self.scrollWidget.ensureWidgetVisible(row)
+
+    def keyPressEvent(self, event):
+        """
+        Moves the selection with Up/Down while the list has focus.
+
+        The per-row radio buttons are not focusable, so Qt's own arrow-key
+        handling for a button group never runs; this replaces it at the dialog
+        level. Only the rows currently passing the search filter take part.
+        """
+        key = event.key()
+
+        if (self.scrollWidget.hasFocus()
+                and key in (QtCore.Qt.Key.Key_Up, QtCore.Qt.Key.Key_Down)
+                and self.visibleEntries):
+
+            current = self.buttongroup.checkedId()
+            step = -1 if key == QtCore.Qt.Key.Key_Up else 1
+
+            if current in self.visibleEntries:
+                pos = self.visibleEntries.index(current) + step
+                pos = max(0, min(pos, len(self.visibleEntries) - 1))
+            else:
+                # Selection is filtered out - enter the visible list at its end.
+                pos = 0 if step > 0 else len(self.visibleEntries) - 1
+
+            self.setCurrentValue(self.visibleEntries[pos])
+            event.accept()
+            return
+
+        QtWidgets.QDialog.keyPressEvent(self, event)
 
     def setCurrentValue(self, value):
         """
@@ -3044,6 +3111,10 @@ class ExternalSpriteOptionRow(QtWidgets.QWidget):
         if placedText:
             more = QtWidgets.QPushButton("v")
             more.clicked.connect(self.handleButtonClick)
+            # Out of the tab chain for the same reason as the row's radio
+            # button: one per row would put hundreds of stops between the
+            # search box and OK/Cancel.
+            more.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
 
             self.gridLayout.addWidget(more, 0, len(primary) + 1, 1, 1)
 
