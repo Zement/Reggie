@@ -252,13 +252,51 @@ def main():
     reorganizeSettings()
     print("[BOOT] ✓ Settings reorganized")
 
-    # Check the version and set the UI style to Fusion by default
-    print("[BOOT] Checking version...")
-    if setting("ReggieVersion") is None:
-        setSetting("ReggieVersion", globals_.ReggieVersionFloat)
+    # Check the settings file's provenance, and set the UI style to Fusion by
+    # default on a fresh one.
+    #
+    # Reginald does not migrate settings from Reggie! Next: the settings.ini
+    # format diverged too far to be worth translating. A missing, foreign or
+    # unparseable version key therefore means "start clean" rather than "try to
+    # upgrade". This replaces a guard that compared against 4.0 and called
+    # sys.exit(1), which under Reginald's 0.9x numbering would have rejected
+    # every existing settings file outright.
+    #
+    # The key is ReginaldVersion, not ReggieVersion, for two reasons: an old
+    # Reggie settings.ini has no such key and so resets cleanly, and an old
+    # Reggie pointed at the same file cannot read 0.95 and decide the file is
+    # ancient.
+    print("[BOOT] Checking settings provenance...")
+    _raw_version = setting("ReginaldVersion")
+    try:
+        _settings_version = float(_raw_version) if _raw_version is not None else None
+    except (TypeError, ValueError):
+        # A hand-edited or foreign file can hold a non-numeric value here.
+        # Treat it as foreign rather than crashing on the comparison.
+        _settings_version = None
+
+    if _settings_version is None or not (0.9 <= _settings_version <= globals_.ReginaldVersionFloat):
+        # settings.ini.bak was already written above, so this is recoverable.
+        _had_settings = _raw_version is not None or bool(globals_.settings.allKeys())
+        globals_.settings.clear()
+        setSetting("ReginaldVersion", globals_.ReginaldVersionFloat)
         setSetting('uiStyle', "Fusion")
-    print("[BOOT] ✓ Version checked")
-    
+        globals_.settings.sync()
+
+        if _had_settings:
+            QtWidgets.QMessageBox(
+                QtWidgets.QMessageBox.Icon.Information,
+                'Settings reset',
+                'Reginald could not use the existing settings.ini - it was written by '
+                'Reggie! Next or by a different version of Reginald, and the format has '
+                'diverged too far to convert.\n\n'
+                'Your settings have been reset to defaults. The previous file was kept '
+                'as settings.ini.bak.'
+            ).exec()
+        print("[BOOT] ✓ Settings reset to defaults")
+    else:
+        print("[BOOT] ✓ Settings provenance OK")
+
     # Ensure all important settings are visible in the file
     print("[BOOT] Ensuring settings visible...")
     ensureSettingsVisible()
@@ -270,14 +308,6 @@ def main():
     from reggie.io.gamedef import cleanupOrphanedPatchPaths
     cleanupOrphanedPatchPaths()
     print("[BOOT] ✓ Orphaned paths cleaned")
-
-    # 4.0 -> oldest version with settings.ini compatible with the current version
-    print("[BOOT] Checking version compatibility...")
-    if setting("ReggieVersion") < 4.0 or setting("ReggieVersion") > globals_.ReggieVersionFloat:
-        warningBox = QtWidgets.QMessageBox(QtWidgets.QMessageBox.Icon.NoIcon, 'Unsupported settings file', 'Your settings.ini file is unsupported. Please remove it and run Reggie again.')
-        warningBox.exec()
-        sys.exit(1)
-    print("[BOOT] ✓ Version compatible")
 
     # Load the translation (needs to happen first)
     print("[BOOT] Loading translation...")
