@@ -4,6 +4,7 @@ from PyQt6 import QtWidgets
 from reggie.core import globals_
 from reggie.core import spritelib as SLib
 from reggie.core import archive
+from reggie.core import session
 
 from reggie.core.tiles import CreateTilesets, LoadTileset
 from reggie.core.levelitems import EntranceItem, SpriteItem, ZoneItem, LocationItem, ObjectItem, PathItem, CommentItem
@@ -80,13 +81,15 @@ class Level_NSMBW(AbstractLevel):
 
         new_area = Area(1)
 
+        # Published before load_defaults() for the same reason as in load():
+        # anything constructed during loading may read globals_.Area. A default
+        # area happens to have no sprites, so this one survived either way, but
+        # the ordering should not differ between the two paths.
+        self.areas.append(new_area)
+        session.set_current_area(new_area, 1)
+
         if load:
             new_area.load_defaults()
-
-        globals_.Area = new_area
-        SLib.Area = new_area
-
-        self.areas.append(new_area)
 
     def load(self, data, areaToLoad):
         """
@@ -141,9 +144,18 @@ class Level_NSMBW(AbstractLevel):
             new_area.set_data(course, L0, L1, L2)
             self.areas.append(new_area)
 
+        # Published BEFORE load(), not after. Area.load() constructs the
+        # sprites, and a sprite image's findZone() reads globals_.Area.zones
+        # while it is being built - so the area has to be the current one
+        # already.
+        #
+        # The old code set the globals afterwards and got away with it: the
+        # previous area was still installed, so the read found *an* area, just
+        # the wrong one's zones. Once globals_.Area resolved through the
+        # session it became None between the two statements, and loading a
+        # level with sprites raised instead.
+        session.set_current_area(self.areas[areaToLoad - 1], areaToLoad)
         self.areas[areaToLoad - 1].load()
-        globals_.Area = self.areas[areaToLoad - 1]
-        SLib.Area = self.areas[areaToLoad - 1]
 
         return True
 
@@ -202,9 +214,8 @@ class Level_NSMBW(AbstractLevel):
         # self.areas[current_num - 1] should be unloaded.
         self.areas[current_num - 1].unload()
 
-        # Set the globals properly
-        globals_.Area = self.areas[number - 1]
-        SLib.Area = self.areas[number - 1]
+        # Point the active session (and spritelib) at the new area
+        session.set_current_area(self.areas[number - 1], number)
 
         # self.areas[number - 1] should be loaded.
         # Skip if already loaded (e.g. new area created with load_defaults)

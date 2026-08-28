@@ -124,6 +124,27 @@ from reggie.io.translation import LoadTranslation
 ################################################################################
 
 
+def _list_row_is_live(item):
+    """Whether an item's side-list row still exists on the C++ side.
+
+    QListWidget.clear() *destroys* the QListWidgetItems it holds, and every
+    level item keeps a reference to its own row in `self.listitem`. So a row can
+    be present as a Python object and already freed underneath - and touching a
+    freed one is a hard crash inside Qt rather than an exception Python can
+    catch. text() is the cheapest probe that forces the round trip.
+    """
+    listitem = getattr(item, 'listitem', None)
+    if listitem is None:
+        return False
+
+    try:
+        listitem.text()
+    except RuntimeError:
+        return False
+
+    return True
+
+
 # NOTE: ReggieWindow was split out of reggie/app.py into this module
 # (Phase 2/3 refactor — see _docs/plan/REFACTORING_ANALYSIS.md). The import
 # preamble is shared verbatim with app.py; app.py imports ReggieWindow from here.
@@ -148,8 +169,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.ZoomLevels = [7.5, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0,
                            85.0, 90.0, 95.0, 100.0, 125.0, 150.0, 175.0, 200.0, 250.0, 300.0, 350.0, 400.0]
 
-        # add the undo stack object
-        self.undoStack = UndoStack()
+        # The undo stack lives on the editor session, not here - two open areas
+        # must not share a history. `self.undoStack` is a property below that
+        # forwards to the active session, so the ~40 call sites that push onto
+        # `mainWindow.undoStack` keep working untouched.
+        #
+        # This one is the fallback for when no session exists yet: the window is
+        # constructed before the first level is opened, and its signals are
+        # wired to it during __init2__.
+        self._fallbackUndoStack = UndoStack()
 
         # required variables
         self.UpdateFlag = False
@@ -219,10 +247,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # Undo/redo menu items follow the QUndoStack state (Block C - A1)
         self._undoBaseText = self.actions['undo'].text()
         self._redoBaseText = self.actions['redo'].text()
-        self.undoStack.canUndoChanged.connect(self.actions['undo'].setEnabled)
-        self.undoStack.canRedoChanged.connect(self.actions['redo'].setEnabled)
-        self.undoStack.undoTextChanged.connect(self.HandleUndoTextChanged)
-        self.undoStack.redoTextChanged.connect(self.HandleRedoTextChanged)
+        self.BindUndoStack(self.undoStack)
 
         # set up the status bar
         print("[INIT2] Creating status bar widgets...")
@@ -341,6 +366,191 @@ class ReggieWindow(QtWidgets.QMainWindow):
     # Populated by MenuBuilder.CreateAction via self.win.actions. Kept as a
     # ReggieWindow class attribute so self.actions resolves everywhere it's read.
     actions = {}
+
+    @property
+    def undoStack(self):
+        """The active session's undo history.
+
+        A property rather than an attribute so the ~40 sites that push onto
+        ``mainWindow.undoStack`` reach whichever area is in front, without any
+        of them changing. Falls back to a window-owned stack before the first
+        session exists - the window is built before a level is opened.
+        """
+        manager = globals_.get_session_manager()
+        session = manager.active if manager is not None else None
+
+        if session is None:
+            return self._fallbackUndoStack
+
+        return session.undo_stack
+
+    def BindUndoStack(self, stack):
+        """Point the undo/redo menu items at ``stack``.
+
+        Called once at startup and again whenever the active session changes,
+        since each session owns its own stack and the menu state - enabled, and
+        the "Undo <action>" label - belongs to whichever one is in front.
+        """
+        previous = getattr(self, '_boundUndoStack', None)
+        if previous is stack:
+            return
+
+        if previous is not None:
+            # Qt keeps every connection, so without this the menu items would
+            # follow all stacks at once and the last signal to arrive would win.
+            for signal, slot in (
+                (previous.canUndoChanged, self.actions['undo'].setEnabled),
+                (previous.canRedoChanged, self.actions['redo'].setEnabled),
+                (previous.undoTextChanged, self.HandleUndoTextChanged),
+                (previous.redoTextChanged, self.HandleRedoTextChanged),
+            ):
+                try:
+                    signal.disconnect(slot)
+                except (TypeError, RuntimeError):
+                    # Already gone, or the stack was destroyed with its session.
+                    pass
+
+        stack.canUndoChanged.connect(self.actions['undo'].setEnabled)
+        stack.canRedoChanged.connect(self.actions['redo'].setEnabled)
+        stack.undoTextChanged.connect(self.HandleUndoTextChanged)
+        stack.redoTextChanged.connect(self.HandleRedoTextChanged)
+
+        self._boundUndoStack = stack
+
+        # Bring the menu items in line with the stack we just bound: the
+        # signals above only fire on *changes*, so switching to a session whose
+        # stack is already non-empty would otherwise leave Undo greyed out.
+        self.actions['undo'].setEnabled(stack.canUndo())
+        self.actions['redo'].setEnabled(stack.canRedo())
+        self.HandleUndoTextChanged(stack.undoText())
+        self.HandleRedoTextChanged(stack.redoText())
+
+    def ActivateSession(self, session):
+        """Show an already-open session's area, without touching the disk.
+
+        The editor-facing half of an area switch (Block D, phase D-4). The
+        session manager moves the state bindings - globals_.Area, spritelib, the
+        undo stack; this moves what the user sees.
+
+        The scene is emptied and rebuilt rather than swapped: one LevelScene is
+        window-owned for now, and a scene per session is the UI block's job. The
+        items themselves live on their area and survive being detached, so this
+        is a re-parent, not a reload - nothing is re-read or re-parsed.
+
+        **The scene is emptied with removeItem(), never clear().**
+        QGraphicsScene.clear() *destroys* the items it holds - the C++ objects
+        are deleted and the Python wrappers left dangling. That is right in
+        LoadLevel, which is discarding the level and rebuilding every item from
+        scratch, and wrong here, where the outgoing area has to stay intact in
+        its own session. Using clear() here left globals_.Area.zones full of
+        deleted ZoneItems, and the level overview raised "wrapped C/C++ object
+        of type ZoneItem has been deleted" on the way back - inside paintEvent,
+        so the error dialog repainted the widget and the crash repeated until
+        the process was killed (Zement, 2026-08-28, A1 -> A2 -> A1).
+        """
+        manager = globals_.get_session_manager()
+        if manager is None or session is None:
+            return False
+
+        # The area's items are about to be pulled out from under the selection.
+        self.scene.clearSelection()
+        self.CurrentSelection = []
+        self._DetachSceneItems()
+
+        for thingList in (self.spriteList, self.entranceList, self.locationList,
+                          self.pathList, self.commentList):
+            thingList.clear()
+            thingList.selectionModel().setCurrentIndex(
+                QtCore.QModelIndex(),
+                QtCore.QItemSelectionModel.SelectionFlag.Clear)
+
+        # Moves globals_.Area, spritelib's own bindings, this session's tilesets
+        # and the undo stack together. Everything below reads through them.
+        manager.activate(session)
+
+        # Rebuilding the scene moves items and fires their positionChanged
+        # handlers, which call SetDirty. Nothing here is a user edit.
+        globals_.DirtyOverride += 1
+        try:
+            self.ResetPalette()
+        finally:
+            globals_.DirtyOverride -= 1
+
+        self._RefillAreaComboBox()
+        self._SyncAreaComboBox()
+        self.UpdateTitle()
+
+        self.scene.update()
+        self.levelOverview.Reset()
+        self.levelOverview.update()
+
+        return True
+
+    def _DetachSceneItems(self):
+        """Empty the scene without destroying what was in it.
+
+        The counterpart to scene.clear() for a switch between two areas that
+        both stay open. clear() deletes the underlying C++ objects, which is
+        correct when the level is being thrown away and fatal when it is not:
+        the area keeps Python references to its zones, sprites and entrances,
+        and every one of them would be left wrapping freed memory.
+
+        removeItem() detaches instead, and an item detached this way can be
+        added back to a scene unchanged - which is exactly what ResetPalette
+        does when that area is activated again.
+        """
+        # Paths track whether their connecting line is in a scene, and
+        # add_to_scene() re-adds the line only when that flag is False. The line
+        # is about to be detached with everything else, so leaving the flag set
+        # would make the path's nodes come back with no line joining them.
+        # Nothing else in the editor detaches a path wholesale, which is why the
+        # flag has never needed clearing before.
+        #
+        # Two sources, because neither alone is enough. The scene's line items
+        # know their path, but globals_.Area may already be the *incoming* area
+        # by the time this runs - open_area() activates before ActivateSession
+        # is called - so the outgoing area is not reachable through the proxy.
+        # And a line that is already detached is not in the scene to be found,
+        # so a path left inconsistent by anything else would stay that way.
+        # Taking both makes this self-correcting rather than order-dependent.
+        for item in self.scene.items():
+            if isinstance(item, PathEditorLineItem):
+                path = getattr(item, '_path', None)
+                if path is not None:
+                    path._has_line = False
+
+        for path in getattr(globals_.Area, 'paths', None) or ():
+            line = getattr(path, '_line_item', None)
+            if line is None or line.scene() is None:
+                path._has_line = False
+
+        for item in self.scene.items():
+            self.scene.removeItem(item)
+
+    def _RefillAreaComboBox(self):
+        """Rebuild the area selector from the level actually open.
+
+        _SyncAreaComboBox only moves the selection, and silently does nothing
+        when the wanted index does not exist yet. An area added since the box
+        was last filled - by Add Area, or by a peer's snapshot - would leave the
+        box a row short, and selecting that area would then be a no-op.
+        """
+        level = globals_.Level
+        if level is None:
+            return
+
+        areas = getattr(level, 'areas', None) or []
+        if self.areaComboBox.count() == len(areas):
+            return
+
+        blocked = self.areaComboBox.blockSignals(True)
+        try:
+            self.areaComboBox.clear()
+            for area in areas:
+                self.areaComboBox.addItem(
+                    globals_.trans.string('AreaCombobox', 0, '[num]', area.areanum))
+        finally:
+            self.areaComboBox.blockSignals(blocked)
 
     def HandleSwitchPatch(self, index):
         """
@@ -1572,9 +1782,16 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if idx == old_idx:
             return
 
-        if self.CheckDirty():
-            self.areaComboBox.setCurrentIndex(old_idx)
-            return
+        # No dirty check here any more (Block D, phase D-4). It used to be
+        # required: switching ran Level.changeArea(), which unloads the outgoing
+        # area, and Area.unload() drops the parsed data without serialising it -
+        # so an edited area that was switched away from lost its edits, and a
+        # later save wrote its pre-edit archive bytes. The prompt was the guard
+        # against that.
+        #
+        # Areas now stay live in their own sessions, so there is nothing to lose
+        # and nothing to ask about. The check stays everywhere work genuinely
+        # can be lost: closing the editor, changing patch, opening another file.
 
         # In a session, a client asks the host before moving everyone, and the
         # host's broadcast is what loads it (Block C - B3, phase 3d).
@@ -1594,11 +1811,39 @@ class ReggieWindow(QtWidgets.QMainWindow):
             self._SyncAreaComboBox()
             return
 
-        ok = self.LoadLevel(self.fileSavePath, True, idx + 1)
+        ok = self.SwitchToArea(idx + 1)
 
         if not ok:
-            # loading the new area failed, so reset the combobox
+            # switching to the new area failed, so reset the combobox
             self.areaComboBox.setCurrentIndex(old_idx)
+
+    def SwitchToArea(self, area_num):
+        """Show another area of the open level, keeping this one live.
+
+        Block D, phase D-4. This used to be LoadLevel(path, True, n), which
+        re-read the file from disk and handed off to Level.changeArea() -
+        destroying the outgoing area's parsed state in the process.
+
+        Now each area is its own session on the shared LevelHandle: the first
+        visit loads it, every later visit is an activation. Falls back to the
+        old path when there is no session manager, so nothing depends on one
+        existing.
+        """
+        from reggie.core import session as session_module
+
+        manager = globals_.get_session_manager()
+        if manager is None:
+            return bool(self.LoadLevel(self.fileSavePath, True, area_num))
+
+        session = session_module.open_area(area_num)
+        if session is None:
+            return bool(self.LoadLevel(self.fileSavePath, True, area_num))
+
+        # open_area activated the session to load into it; ActivateSession is
+        # what moves the *view*. Activating twice is harmless - the manager
+        # short-circuits on the session already being active - and keeping them
+        # separate is what lets the load happen against correct globals.
+        return self.ActivateSession(session)
 
     def LoadFirstLevelOfPatch(self):
         """
@@ -2196,6 +2441,31 @@ class ReggieWindow(QtWidgets.QMainWindow):
         for path in globals_.Area.paths:
             path.add_to_scene()
 
+            # Give each node a list row if it does not already have a live one.
+            #
+            # Paths are the one item type ResetPalette did not rebuild rows for,
+            # because the path list is filled during *parsing* - Path.add_node()
+            # adds the row - and ResetPalette had only ever run straight after a
+            # parse. An area switch is the first caller that breaks that: the
+            # side lists are cleared, and QListWidget.clear() *destroys* the
+            # QListWidgetItems, so every node was left holding a freed one.
+            # Coming back, the path list stayed empty and clicking a node handed
+            # that dangling pointer to setCurrentItem() - a hard crash inside
+            # Qt, not a Python exception (Zement, 2026-08-28).
+            #
+            # Conditional, not unconditional: on a fresh load the rows already
+            # exist from parsing, and rebuilding them there would give every
+            # node two.
+            for node in path._nodes:
+                node.positionChanged = self.HandlePathPosChange
+
+                if _list_row_is_live(node):
+                    continue
+
+                node.listitem = ListWidgetItem_SortsByOther(node, node.ListString())
+                self.pathList.addItem(node.listitem)
+                node.UpdateListItem()
+
         for com in globals_.Area.comments:
             com.positionChanged = self.HandleComPosChange
             com.textChanged = self.HandleComTxtChange
@@ -2248,6 +2518,36 @@ class ReggieWindow(QtWidgets.QMainWindow):
         search = self.spriteSearchTerm.text()
         if search != "":
             self.sprPicker.SetSearchString(search)
+
+    def _SelectListRowFor(self, listWidget, item):
+        """Highlight an item's row in its side list, if that row still exists.
+
+        Every caller used to do this inline as
+
+            self.UpdateFlag = True
+            someList.setCurrentItem(item.listitem)
+            self.UpdateFlag = False
+
+        which passes a raw pointer to Qt. QListWidget.clear() *destroys* the
+        QListWidgetItems it holds, so an item whose list has been cleared since
+        its row was made is holding freed memory - and handing that to
+        setCurrentItem() is not a Python exception but a hard crash inside Qt
+        (0xC0000409), which no excepthook can report.
+
+        Reachable since areas began staying open across a switch: the lists are
+        cleared on activation and rebuilt from the incoming area. Anything the
+        rebuild misses lands here. Path nodes were exactly that case.
+        """
+        if not _list_row_is_live(item):
+            return
+
+        self.UpdateFlag = True
+        try:
+            listWidget.setCurrentItem(item.listitem)
+        except RuntimeError:
+            pass
+        finally:
+            self.UpdateFlag = False
 
     def ChangeSelectionHandler(self):
         """
@@ -2308,30 +2608,22 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 updateModeInfo = True
             elif func_ii(item, type_ent):
                 self.creationTabs.setCurrentIndex(2)
-                self.UpdateFlag = True
-                self.entranceList.setCurrentItem(item.listitem)
-                self.UpdateFlag = False
+                self._SelectListRowFor(self.entranceList, item)
                 showEntrancePanel = True
                 updateModeInfo = True
             elif func_ii(item, type_loc):
                 self.creationTabs.setCurrentIndex(3)
-                self.UpdateFlag = True
-                self.locationList.setCurrentItem(item.listitem)
-                self.UpdateFlag = False
+                self._SelectListRowFor(self.locationList, item)
                 showLocationPanel = True
                 updateModeInfo = True
             elif func_ii(item, type_path):
                 self.creationTabs.setCurrentIndex(4)
-                self.UpdateFlag = True
-                self.pathList.setCurrentItem(item.listitem)
-                self.UpdateFlag = False
+                self._SelectListRowFor(self.pathList, item)
                 showPathPanel = True
                 updateModeInfo = True
             elif func_ii(item, type_com):
                 self.creationTabs.setCurrentIndex(7)
-                self.UpdateFlag = True
-                self.commentList.setCurrentItem(item.listitem)
-                self.UpdateFlag = False
+                self._SelectListRowFor(self.commentList, item)
                 updateModeInfo = True
 
         else:

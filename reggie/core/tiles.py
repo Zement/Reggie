@@ -5,6 +5,8 @@ import struct
 from reggie.core import globals_
 from reggie.core import spritelib as SLib
 from reggie.core import archive
+from reggie.core import session
+from reggie.core import tileset_cache
 
 from libs import lh, lz77, tpl, lib_versions
 
@@ -902,15 +904,24 @@ def CountTiles(row):
 def CreateTilesets():
     """
     Blank out the tileset arrays
+
+    The four slots belong to the active editor session, not to the module: two
+    open areas will usually want different tilesets in the same four slots.
+    This is the only place that rebinds them - every other write is in place
+    (``Tiles[i] = ...``), so it lands on whichever list the session owns.
     """
-    globals_.Tiles = [None] * 0x200 * 4
-    globals_.Tiles += globals_.Overrides
-    globals_.TilesetFilesLoaded = [None, None, None, None]
+    tiles = [None] * 0x200 * 4
+    tiles += globals_.Overrides
+
+    session.set_current_tilesets(
+        tiles,
+        [None, None, None, None],   # TilesetFilesLoaded
+        [None] * 4,                 # ObjectDefinitions
+    )
+
     globals_.TilesetAnimTimer = QtCore.QTimer()
     globals_.TilesetAnimTimer.timeout.connect(IncrementTilesetFrame)
     globals_.TilesetAnimTimer.start(90)
-    globals_.ObjectDefinitions = [None] * 4
-    SLib.Tiles = globals_.Tiles
 
 
 def LoadTileset(idx, name, reload_=False):
@@ -964,17 +975,33 @@ def LoadTileset(idx, name, reload_=False):
     if globals_.TilesetFilesLoaded[idx] == arcname and not reload_: return
 
     # get the data
-    with open(arcname, 'rb') as fileobj:
-        arcdata = fileobj.read()
+    #
+    # Decompressed archive bytes are cached by path+mtime+size. LH decompression
+    # is ~99.6% of a tileset load (1.82 s of 1.83 s for a 100 KB MidnightWii
+    # tileset) and there is no native fast path - nsmblib has no decompressLH -
+    # so not repeating it is the whole of the "slow on consecutive loads" fix.
+    # See reggie/core/tileset_cache.py for the measurement.
+    cache_key = tileset_cache.cache.key_for(arcname)
+    arcdata = tileset_cache.cache.get(cache_key)
 
-    if compressed:
-        if (arcdata[0] & 0xF0) == 0x40:  # If LH-compressed
-            try:
-                arcdata = lh.UncompressLH(arcdata)
-            except IndexError:
-                QtWidgets.QMessageBox.warning(None, globals_.trans.string('Err_Decompress', 0),
-                                              globals_.trans.string('Err_Decompress', 1, '[file]', name))
-                return False
+    if arcdata is None:
+        with open(arcname, 'rb') as fileobj:
+            arcdata = fileobj.read()
+
+        if compressed:
+            if (arcdata[0] & 0xF0) == 0x40:  # If LH-compressed
+                try:
+                    arcdata = lh.UncompressLH(arcdata)
+                except IndexError:
+                    QtWidgets.QMessageBox.warning(None, globals_.trans.string('Err_Decompress', 0),
+                                                  globals_.trans.string('Err_Decompress', 1, '[file]', name))
+                    return False
+
+        # Cached after decompression, so a hit skips the expensive step. Only
+        # the bytes are shared; everything derived from them below (tiles,
+        # object definitions, animation state) stays per-load, because those
+        # are mutable and belong to whichever area is using them.
+        tileset_cache.cache.put(cache_key, arcdata)
 
     arc = archive.U8.load(arcdata)
 
@@ -1137,7 +1164,10 @@ def LoadTileset(idx, name, reload_=False):
     # Keep track of this filepath
     globals_.TilesetFilesLoaded[idx] = arcname
 
-    # Add Tiles to spritelib
+    # Keep spritelib's own binding pointed at the active session's list.
+    # Redundant while the session has not changed - CreateTilesets already did
+    # it - but harmless, and it covers a tileset loaded outside a fresh
+    # CreateTilesets call.
     SLib.Tiles = globals_.Tiles
 
     return True

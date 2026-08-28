@@ -337,7 +337,16 @@ class SpriteImage_LiquidOrFog(SLib.SpriteImage):  # 53, 64, 138, 139, 216, 358, 
         self.findZone()
 
     def findZone(self):
-        self.zoneId = SLib.MapPositionToZoneID(globals_.Area.zones, self.parent.objx, self.parent.objy, True)
+        # Guarded because sprite images are constructed *during* Area.load(),
+        # so this can run before the area is fully published. Ordering in
+        # level.py now publishes it first, but a liquid sprite constructed
+        # outside a load - a paste, a collab insert - should not crash either.
+        area = globals_.Area
+        if area is None:
+            self.zoneId = -1
+            return
+
+        self.zoneId = SLib.MapPositionToZoneID(area.zones, self.parent.objx, self.parent.objy, True)
 
     def positionChanged(self):
         self.findZone()

@@ -105,10 +105,35 @@ from reggie.ui import qpt_boot
 # application entry point (main) and the excepthook. See
 # _docs/plan/REFACTORING_ANALYSIS.md.
 
+#: Guards against the error dialog re-entering itself. See _excepthook.
+_in_excepthook = False
+
+
 def _excepthook(*exc_info):
     """
     Custom unhandled exceptions handler
     """
+    global _in_excepthook
+
+    # An exception raised inside a paintEvent is the dangerous case: exec()
+    # below runs a nested event loop, that loop repaints the widget, the paint
+    # handler raises again, and this hook re-enters - unboundedly, with each
+    # level holding an open modal dialog. The editor stops responding and the
+    # only way out is killing the terminal, which is what Zement hit when the
+    # level overview painted a deleted ZoneItem (2026-08-28).
+    #
+    # Report the first one and let the rest fall through to the log. Anything
+    # that can raise on every repaint would otherwise never let the user read
+    # the message telling them what went wrong.
+    if _in_excepthook:
+        try:
+            sys.stderr.write(
+                'reginald: exception while reporting an exception:\n'
+                + ''.join(traceback.format_exception(*exc_info)))
+        except Exception:
+            pass
+        return
+
     separator = '-' * 80
     logFile = "log.txt"
     notice = globals_.trans.string('ErrorDlg', 0, '[log]', logFile)
@@ -139,7 +164,16 @@ def _excepthook(*exc_info):
     errorbox.setDetailedText(e)
 
     errorbox.setText(notice + msg)
-    errorbox.exec()
+
+    _in_excepthook = True
+    try:
+        errorbox.exec()
+    finally:
+        # In a finally: exec() itself can propagate, which is how the original
+        # loop surfaced as "SystemError: <built-in method exec> returned a
+        # result with an exception set". Leaving the flag set would silence
+        # every later error in the session.
+        _in_excepthook = False
 
     globals_.DirtyOverride = 0
 
@@ -507,6 +541,14 @@ def main():
     # Toggle light/dark mode
     deferred.SetColorScheme()
 
+    # Install the session manager before the window exists: constructing
+    # ReggieWindow loads a level, and that load opens the first session.
+    # globals_.Area and globals_.Level resolve through this from here on.
+    print("[BOOT] Installing session manager...")
+    from reggie.core.session import SessionManager
+    globals_.set_session_manager(SessionManager())
+    print("[BOOT] ✓ Session manager installed")
+
     # Create and show the main window
     print("[BOOT] Creating main window...")
     globals_.mainWindow = ReggieWindow()
@@ -563,8 +605,16 @@ def main():
     # zones), which belong to the window's QGraphicsScene. Released before the
     # window for the same reason the window is released before the application:
     # each is destroyed while the thing that owns it still exists.
-    globals_.Area = None
-    globals_.Level = None
+    #
+    # Area and Level are now owned by the editor session, so closing the
+    # sessions is what releases them. Detaching the manager afterwards makes
+    # globals_.Area and globals_.Level resolve to None again, exactly as the
+    # direct assignments here used to.
+    manager = globals_.get_session_manager()
+    if manager is not None:
+        manager.close_all()
+    globals_.set_session_manager(None)
+
     globals_.mainWindow = None
     globals_.app = None
 

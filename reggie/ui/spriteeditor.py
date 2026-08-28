@@ -3438,6 +3438,21 @@ class ResizeChoiceDialog(QtWidgets.QDialog):
         """
         Places a Special Event and sets the settings so the correct slot.
         """
+        # The resizer is positioned relative to the selected sprite, so there
+        # has to be one. The Default Properties dock can be opened from the
+        # palette's context menu with nothing selected at all - which bypasses
+        # the defaultPropButton that is correctly disabled in that state - and
+        # this used to reach selObj.objx on None and raise into the excepthook.
+        selected = getattr(globals_.mainWindow, 'selObj', None)
+        if selected is None:
+            QtWidgets.QMessageBox.information(
+                self,
+                globals_.trans.string('ResizeChoiceDlg', 11),
+                'Select a sprite first: the resizer is placed next to the '
+                'selected sprite, so there needs to be one.',
+            )
+            return
+
         slot = self.buttongroup.checkedId()
         size = self.slider.value()
         data = bytearray(8)
@@ -3445,10 +3460,10 @@ class ResizeChoiceDialog(QtWidgets.QDialog):
         if slot == 2: # Global
             data[5] = (size << 4) | 5
         else: # Selective
-            data[5] = (slot << 4) | 6 
+            data[5] = (slot << 4) | 6
 
-        x = globals_.mainWindow.selObj.objx + 16
-        y = globals_.mainWindow.selObj.objy
+        x = selected.objx + 16
+        y = selected.objy
         special_event_id = self._getSpecialEventID()
 
         placed = globals_.mainWindow.CreateSprite(x, y, special_event_id, RawData(bytes(data), format = RawData.Format.Vanilla))

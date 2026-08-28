@@ -1751,7 +1751,12 @@ def LoadDefaultKeybinds():
         'cut':                 (QtGui.QKeySequence.StandardKey.Cut,       globals_.trans.string('MenuItems', 26)),
         'copy':                (QtGui.QKeySequence.StandardKey.Copy,      globals_.trans.string('MenuItems', 28)),
         'paste':               (QtGui.QKeySequence.StandardKey.Paste,     globals_.trans.string('MenuItems', 30)),
-        'shiftitems':          ('Ctrl+Shift+S',                           globals_.trans.string('MenuItems', 32)),
+        # No default: QKeySequence.StandardKey.SaveAs resolves to Ctrl+Shift+S
+        # on Windows, so giving shiftitems that same sequence made BOTH
+        # ambiguous and Qt then fires neither. Left unassigned rather than moved
+        # to a free sequence, because any choice here is a guess at what users
+        # expect - they can bind it in Preferences.
+        'shiftitems':          (None,                                     globals_.trans.string('MenuItems', 32)),
         'mergelocations':      ('Ctrl+Shift+E',                           globals_.trans.string('MenuItems', 34)),
         'swapobjectstilesets': ('Ctrl+Shift+L',                           globals_.trans.string('MenuItems', 104)),
         'swapobjectstypes':    ('Ctrl+Shift+Y',                           globals_.trans.string('MenuItems', 106)),
@@ -2199,9 +2204,14 @@ class PreferencesDialog(QtWidgets.QDialog):
             """
             Represents a tab within the Keybinds tab
             """
-            def __init__(self, index):
+            def __init__(self, index, allEdits=None):
                 QtWidgets.QWidget.__init__(self)
                 self.index = index
+                # Shared across every tab: "Save As" is on the File tab and
+                # "Shift Items" on the Edit tab, so a clash check confined to
+                # one tab would have missed the exact collision that prompted
+                # this.
+                self.allEdits = allEdits if allEdits is not None else []
                 widget = QtWidgets.QWidget()
 
                 # Make the tab scrollable so the window doesn't become absurdly tall
@@ -2214,11 +2224,15 @@ class PreferencesDialog(QtWidgets.QDialog):
 
                 # Create each keybind entry
                 for name in groups[index]:
-                    edit = KeybindLineEdit(GetKeybind(name), name)
+                    edit = KeybindLineEdit(GetKeybind(name), name, self.allEdits)
                     self.keyEdits.append(edit)
+                    self.allEdits.append(edit)
 
                     # Get the label from the keybind data
                     label = groups[index][name][1]
+                    # Carried on the widget so a clash can be reported by the
+                    # name the user actually sees, not the internal identifier.
+                    edit.label = label
                     scrollLyt.addRow(label, edit)
 
                 L = QtWidgets.QVBoxLayout()
@@ -2255,12 +2269,15 @@ class PreferencesDialog(QtWidgets.QDialog):
                 QtWidgets.QWidget.__init__(self)
                 self.tabWidget = QtWidgets.QTabWidget()
                 self.tabs = []
+                # One list shared by every tab, so the duplicate check spans
+                # all of them.
+                allEdits = []
 
                 # Create tabs — 5 menubar groups plus the hotbar placeholder group
                 tab_names = [globals_.trans.string('Menubar', i) for i in range(5)]
                 tab_names.append(globals_.trans.string('PrefsDlg', 66))
                 for i, tab_name in enumerate(tab_names):
-                    tab = KeybindEditorTab(i)
+                    tab = KeybindEditorTab(i, allEdits)
                     self.tabs.append(tab)
                     self.tabWidget.addTab(tab, tab_name)
 

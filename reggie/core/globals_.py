@@ -1,4 +1,7 @@
-Area = None
+# Area and Level are NOT declared here. They are proxied to the active editor
+# session at the bottom of this module - see the block starting at
+# "Session-backed globals". Declaring them would shadow the proxy, because
+# module __getattr__ is only consulted when normal lookup fails.
 AutoSaveData = b''
 AutoSaveDirty = False
 AutoSavePath = ''
@@ -32,7 +35,6 @@ UndoLimit = 500
 Layer0Shown = True
 Layer1Shown = True
 Layer2Shown = True
-Level = None
 LevelNames = None
 LocationsFrozen = False
 LocationsShown = True
@@ -40,7 +42,6 @@ MusicInfo = None
 NumberFont = None
 NumSprites = 0
 ObjDesc = None
-ObjectDefinitions = None # 4 tilesets
 ObjectsFrozen = False
 OverriddenTilesets = {
     "Pa0": set(),
@@ -88,9 +89,10 @@ SpriteListData = None
 SpritesFrozen = False
 SpritesShown = True
 Sprites = None
-Tiles = None # 0x200 tiles per tileset, plus 64 for each type of override
+# Tiles, TilesetFilesLoaded and ObjectDefinitions are NOT declared here -
+# they are proxied to the active editor session, like Area and Level. See
+# "Session-backed globals" at the bottom of this module.
 TilesetAnimTimer = None
-TilesetFilesLoaded = [None, None, None, None]
 TilesetInfo = None
 TilesetNames = None
 TilesetsAnimating = False
@@ -128,3 +130,176 @@ scalingManager = None
 settings = None
 theme = None
 trans = None
+
+
+########################################################################
+# Session-backed globals (Block D)
+########################################################################
+#
+# `Area` and `Level` used to be plain module attributes: one open area, one
+# open level, editor-wide. Tabs need more than one, so they are now resolved
+# through the active editor session instead.
+#
+# The shape of the problem is what makes this approach worth it: `Area` is read
+# in ~338 places across 25 files, but written in only seven. Proxying the reads
+# lets all 338 keep working untouched while the seven writers move onto the
+# session manager.
+#
+# Two mechanics matter here, and both are easy to get wrong:
+#
+# 1. Module-level `__getattr__` (PEP 562) is consulted ONLY when normal
+#    attribute lookup fails. So `Area` and `Level` must not be declared in this
+#    module at all - see the note at the top where they used to be.
+#
+# 2. A single `globals_.Area = x` anywhere would create a real module attribute
+#    and permanently shadow the proxy. Nothing would raise; area switching
+#    would just quietly stop working. Rather than rely on nobody doing that,
+#    the module class below refuses the assignment outright.
+
+_session_manager = None
+
+#: Names resolved from the active session rather than from this module.
+#
+# Area and Level are the level state; Tiles, TilesetFilesLoaded and
+# ObjectDefinitions are the four tileset slots, which two open areas will
+# usually want to fill differently.
+#
+# Only CreateTilesets() ever rebinds the three tileset names - everything else
+# writes into them in place (Tiles[i] = ..., ObjectDefinitions[idx] = ...), and
+# those writes land on whichever list the session owns, with no call-site
+# changes needed.
+_PROXIED_GLOBALS = ('Area', 'Level',
+                    'Tiles', 'TilesetFilesLoaded', 'ObjectDefinitions')
+
+#: Test-only overrides, consulted before the session manager.
+#
+# The headless suites inject stub Area/Level objects to drive code paths that
+# would otherwise need a whole loaded level. That is a legitimate need, but a
+# plain assignment cannot serve it - it would shadow the proxy permanently for
+# the rest of the process. `override_proxied` gives them an explicit, reversible
+# way in, and keeps the plain assignment refused so production code cannot
+# disable the proxy by accident.
+_proxy_overrides = {}
+
+
+def override_proxied(name, value):
+    """TEST ONLY. Force `Area` or `Level` to a fixed value.
+
+    Returns the previous override (or a sentinel meaning "none"), for restoring
+    in a finally block. Pass `clear_override` semantics via `clear_proxied`.
+    """
+    if name not in _PROXIED_GLOBALS:
+        raise ValueError('%r is not a session-backed global' % name)
+    previous = _proxy_overrides.get(name, _NO_OVERRIDE)
+    _proxy_overrides[name] = value
+    return previous
+
+
+def clear_proxied(name=None):
+    """TEST ONLY. Drop one override, or all of them, restoring the proxy."""
+    if name is None:
+        _proxy_overrides.clear()
+    else:
+        _proxy_overrides.pop(name, None)
+
+
+class _NoOverride:
+    """Sentinel: distinguishes "overridden to None" from "not overridden"."""
+    def __repr__(self):
+        return '<no override>'
+
+
+_NO_OVERRIDE = _NoOverride()
+
+
+def set_session_manager(manager):
+    """Install the SessionManager the proxied globals read from.
+
+    Called once during boot. Passing None restores the pre-session behaviour,
+    where `Area` and `Level` are simply None - which is what shutdown wants.
+    """
+    global _session_manager
+    _session_manager = manager
+
+
+def get_session_manager():
+    return _session_manager
+
+
+def _resolve_proxied(name):
+    """Resolve `Area` / `Level` from the active session."""
+    override = _proxy_overrides.get(name, _NO_OVERRIDE)
+    if override is not _NO_OVERRIDE:
+        return override
+
+    # The tileset slots have a home even with no session: CreateTilesets() runs
+    # from Area.__init__, which boot and the headless suites reach before any
+    # session exists.
+    _TILESET_ATTRS = {'Tiles': 'tiles',
+                      'TilesetFilesLoaded': 'tileset_files',
+                      'ObjectDefinitions': 'object_defs'}
+
+    manager = _session_manager
+    session = manager.active if manager is not None else None
+
+    if session is None:
+        if name in _TILESET_ATTRS:
+            from reggie.core import session as _session_module
+            return _session_module.fallback_tilesets(_TILESET_ATTRS[name])
+        return None
+
+    if name == 'Area':
+        return session.area
+
+    if name in _TILESET_ATTRS:
+        value = getattr(session, _TILESET_ATTRS[name])
+        # A session that gave up its tiles to the eviction pass has None here;
+        # fall back rather than hand out None to indexing code.
+        if value is None:
+            from reggie.core import session as _session_module
+            return _session_module.fallback_tilesets(_TILESET_ATTRS[name])
+        return value
+
+    # `Level` lives on the shared handle, not the session, because two tabs
+    # showing different areas of one file must see the same Level object.
+    return session.level
+
+
+def _install_proxy():
+    """Replace this module's class so the proxied names are read-only.
+
+    Done as a function so the machinery is not left lying around as module
+    attributes; the call below is the only thing that runs at import.
+    """
+    import sys
+    import types
+
+    class _SessionBackedGlobals(types.ModuleType):
+        __slots__ = ()
+
+        def __getattr__(self, name):
+            # Reached only when normal lookup fails, i.e. exactly for the names
+            # deliberately not declared in this module.
+            if name in _PROXIED_GLOBALS:
+                return _resolve_proxied(name)
+            raise AttributeError(
+                "module %r has no attribute %r" % (self.__name__, name)
+            )
+
+        def __setattr__(self, name, value):
+            if name in _PROXIED_GLOBALS:
+                raise AttributeError(
+                    "globals_.%s is owned by the editor session and cannot be "
+                    "assigned. Assigning it would shadow the session proxy and "
+                    "silently break switching between open areas.\n"
+                    "  Production code: open, close or activate a session via "
+                    "globals_.get_session_manager().\n"
+                    "  Tests: use globals_.override_proxied(%r, value) and "
+                    "globals_.clear_proxied(%r)." % (name, name, name)
+                )
+            super().__setattr__(name, value)
+
+    sys.modules[__name__].__class__ = _SessionBackedGlobals
+
+
+_install_proxy()

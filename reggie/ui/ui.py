@@ -522,9 +522,16 @@ class KeybindLineEdit(QtWidgets.QKeySequenceEdit):
     """
     A wrapper for QtWidgets.QKeySequenceEdit
     """
-    def __init__(self, keySequence=None, name=str):
+    def __init__(self, keySequence=None, name=str, siblings=None):
         QtWidgets.QKeySequenceEdit.__init__(self, keySequence)
         self.name = name
+
+        # Every KeybindLineEdit in the same editor, so a newly entered sequence
+        # can be checked against the others. A duplicate makes both shortcuts
+        # ambiguous, and Qt responds by firing neither - which is how the
+        # shipped Ctrl+Shift+S collision between "Save As" and "Shift Items"
+        # made both look broken.
+        self.siblings = siblings if siblings is not None else []
 
         # Only record one sequence input
         self.setMaximumSequenceLength(1)
@@ -544,23 +551,74 @@ class KeybindLineEdit(QtWidgets.QKeySequenceEdit):
         Quick Paint Tool, and tells the user why
         """
         seq_str = keySequence.toString()
+        if not seq_str:
+            return
+
         if seq_str in OS_RESERVED_KEYBINDS:
             message = globals_.trans.string('PrefsDlg', 69)
         elif seq_str in QPT_RESERVED_KEYBINDS:
             message = globals_.trans.string('PrefsDlg', 70)
         else:
-            return
+            clash = self._findClash(seq_str)
+            if clash is None:
+                return
+            message = ('%s is already used by "%s". A shortcut assigned twice '
+                       'makes both ambiguous, and neither will fire.'
+                       % (seq_str, clash))
 
         self.blockSignals(True)
         self.clear()
         self.blockSignals(False)
         QtWidgets.QToolTip.showText(self.mapToGlobal(self.rect().center()), message, self)
 
+    def _findClash(self, seq_str):
+        """
+        Returns the display label of a sibling already bound to seq_str, or None.
+        """
+        for other in self.siblings:
+            if other is self:
+                continue
+            if other.keySequence().toString() != seq_str:
+                continue
+            return getattr(other, 'label', None) or other.name
+        return None
+
     def keyPressEvent(self, event):
         """
-        Clears the current keybind if Delete or Backspace is pressed
+        Clears the current keybind if Delete or Backspace is pressed, and
+        records numpad keys as numpad keys.
         """
-        QtWidgets.QKeySequenceEdit.keyPressEvent(self, event)
+        key = event.key()
 
-        if event.key() == QtCore.Qt.Key.Key_Delete or event.key() == QtCore.Qt.Key.Key_Backspace:
+        if key in (QtCore.Qt.Key.Key_Delete, QtCore.Qt.Key.Key_Backspace):
+            QtWidgets.QKeySequenceEdit.keyPressEvent(self, event)
             self.clear()
+            return
+
+        # QKeySequenceEdit drops KeypadModifier: typing numpad-1 records plain
+        # '1', identical to the top row. That makes the shipped Num+1..Num+9
+        # hotbar defaults impossible to re-enter, and silently rewrites one to
+        # the top-row key if a user retypes it. Qt is otherwise fine with them
+        # - QKeySequence('Num+1') round-trips, and an action bound to it fires
+        # only on the numpad - so the sequence is built here instead.
+        modifiers = event.modifiers()
+        if modifiers & QtCore.Qt.KeyboardModifier.KeypadModifier:
+            # Bare modifier presses have no sequence of their own.
+            if key in (QtCore.Qt.Key.Key_Control, QtCore.Qt.Key.Key_Shift,
+                       QtCore.Qt.Key.Key_Alt, QtCore.Qt.Key.Key_Meta):
+                return
+
+            combined = key
+            for flag in (QtCore.Qt.KeyboardModifier.ControlModifier,
+                         QtCore.Qt.KeyboardModifier.ShiftModifier,
+                         QtCore.Qt.KeyboardModifier.AltModifier,
+                         QtCore.Qt.KeyboardModifier.MetaModifier,
+                         QtCore.Qt.KeyboardModifier.KeypadModifier):
+                if modifiers & flag:
+                    combined |= flag.value
+
+            self.setKeySequence(QtGui.QKeySequence(combined))
+            event.accept()
+            return
+
+        QtWidgets.QKeySequenceEdit.keyPressEvent(self, event)

@@ -1220,6 +1220,22 @@ class ClientSession:
         self.close_reason = ''
         self.rejected = False
 
+    def nick_for(self, session_id):
+        """
+        The nickname of a roster entry, or '' if it is not one we know.
+
+        The roster is the only place a client learns who anyone is: chat and
+        presence messages identify their sender by session id alone.
+        """
+        if not session_id:
+            return ''
+
+        for entry in self.participants:
+            if entry.get('session_id') == session_id:
+                return entry.get('nick', '') or ''
+
+        return ''
+
     def handle_message(self, connection, message):
         """
         Applies a host message to local state. Returns the message type handled,
@@ -1256,7 +1272,17 @@ class ClientSession:
             self._emit('room_info', payload)
 
         elif msg_type == protocol.T_CHAT:
-            self._emit('chat', payload)
+            # The sender's id lives on the envelope, not in the payload, so
+            # emitting the payload alone dropped it and the client had no way
+            # to name who was speaking - every remote line, the host's
+            # included, rendered without a nickname (Mone; reported by Zement
+            # 2026-08-28). Resolved against the roster here, where the roster
+            # actually lives.
+            sender_id = str(message.get('from', '') or '')
+            enriched = dict(payload)
+            enriched['session_id'] = sender_id
+            enriched['nick'] = self.nick_for(sender_id)
+            self._emit('chat', enriched)
 
         elif msg_type in (protocol.T_KICK, protocol.T_BANNED):
             self.close_reason = payload.get('reason', '')

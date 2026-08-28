@@ -354,6 +354,19 @@ class ReggieQuickPaintHook:
         if button != 2:
             return False
 
+        # Nothing below this point does anything unless one of QPT's tools is
+        # actually active, and right-click is also the editor's ordinary
+        # "place object" gesture. Bail out first.
+        #
+        # This used to open the undo session *before* checking, and the three
+        # early returns further down left it open. The object placed by that
+        # right-click was then collected into a dangling "Quick Paint stroke"
+        # session, which flushed on the next right-click - so every ordinary
+        # placement produced a phantom Quick Paint entry in the undo history,
+        # for users who had never opened QPT at all (Zement, 2026-08-28).
+        if not (is_fill_active or is_simple_brush_active or is_painting):
+            return False
+
         # Undo: everything mutated between this press and the matching release
         # is collected into one bulk session = one history step per stroke.
         # A stale session (release lost outside the view) is flushed first.
