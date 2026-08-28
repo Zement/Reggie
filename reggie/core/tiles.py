@@ -5,6 +5,7 @@ import struct
 from reggie.core import globals_
 from reggie.core import spritelib as SLib
 from reggie.core import archive
+from reggie.core import session
 from reggie.core import tileset_cache
 
 from libs import lh, lz77, tpl, lib_versions
@@ -903,15 +904,24 @@ def CountTiles(row):
 def CreateTilesets():
     """
     Blank out the tileset arrays
+
+    The four slots belong to the active editor session, not to the module: two
+    open areas will usually want different tilesets in the same four slots.
+    This is the only place that rebinds them - every other write is in place
+    (``Tiles[i] = ...``), so it lands on whichever list the session owns.
     """
-    globals_.Tiles = [None] * 0x200 * 4
-    globals_.Tiles += globals_.Overrides
-    globals_.TilesetFilesLoaded = [None, None, None, None]
+    tiles = [None] * 0x200 * 4
+    tiles += globals_.Overrides
+
+    session.set_current_tilesets(
+        tiles,
+        [None, None, None, None],   # TilesetFilesLoaded
+        [None] * 4,                 # ObjectDefinitions
+    )
+
     globals_.TilesetAnimTimer = QtCore.QTimer()
     globals_.TilesetAnimTimer.timeout.connect(IncrementTilesetFrame)
     globals_.TilesetAnimTimer.start(90)
-    globals_.ObjectDefinitions = [None] * 4
-    SLib.Tiles = globals_.Tiles
 
 
 def LoadTileset(idx, name, reload_=False):
@@ -1154,7 +1164,10 @@ def LoadTileset(idx, name, reload_=False):
     # Keep track of this filepath
     globals_.TilesetFilesLoaded[idx] = arcname
 
-    # Add Tiles to spritelib
+    # Keep spritelib's own binding pointed at the active session's list.
+    # Redundant while the session has not changed - CreateTilesets already did
+    # it - but harmless, and it covers a tileset loaded outside a fresh
+    # CreateTilesets call.
     SLib.Tiles = globals_.Tiles
 
     return True

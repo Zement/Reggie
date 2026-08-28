@@ -42,7 +42,6 @@ MusicInfo = None
 NumberFont = None
 NumSprites = 0
 ObjDesc = None
-ObjectDefinitions = None # 4 tilesets
 ObjectsFrozen = False
 OverriddenTilesets = {
     "Pa0": set(),
@@ -90,9 +89,10 @@ SpriteListData = None
 SpritesFrozen = False
 SpritesShown = True
 Sprites = None
-Tiles = None # 0x200 tiles per tileset, plus 64 for each type of override
+# Tiles, TilesetFilesLoaded and ObjectDefinitions are NOT declared here -
+# they are proxied to the active editor session, like Area and Level. See
+# "Session-backed globals" at the bottom of this module.
 TilesetAnimTimer = None
-TilesetFilesLoaded = [None, None, None, None]
 TilesetInfo = None
 TilesetNames = None
 TilesetsAnimating = False
@@ -159,7 +159,17 @@ trans = None
 _session_manager = None
 
 #: Names resolved from the active session rather than from this module.
-_PROXIED_GLOBALS = ('Area', 'Level')
+#
+# Area and Level are the level state; Tiles, TilesetFilesLoaded and
+# ObjectDefinitions are the four tileset slots, which two open areas will
+# usually want to fill differently.
+#
+# Only CreateTilesets() ever rebinds the three tileset names - everything else
+# writes into them in place (Tiles[i] = ..., ObjectDefinitions[idx] = ...), and
+# those writes land on whichever list the session owns, with no call-site
+# changes needed.
+_PROXIED_GLOBALS = ('Area', 'Level',
+                    'Tiles', 'TilesetFilesLoaded', 'ObjectDefinitions')
 
 #: Test-only overrides, consulted before the session manager.
 #
@@ -222,16 +232,33 @@ def _resolve_proxied(name):
     if override is not _NO_OVERRIDE:
         return override
 
-    manager = _session_manager
-    if manager is None:
-        return None
+    # The tileset slots have a home even with no session: CreateTilesets() runs
+    # from Area.__init__, which boot and the headless suites reach before any
+    # session exists.
+    _TILESET_ATTRS = {'Tiles': 'tiles',
+                      'TilesetFilesLoaded': 'tileset_files',
+                      'ObjectDefinitions': 'object_defs'}
 
-    session = manager.active
+    manager = _session_manager
+    session = manager.active if manager is not None else None
+
     if session is None:
+        if name in _TILESET_ATTRS:
+            from reggie.core import session as _session_module
+            return _session_module.fallback_tilesets(_TILESET_ATTRS[name])
         return None
 
     if name == 'Area':
         return session.area
+
+    if name in _TILESET_ATTRS:
+        value = getattr(session, _TILESET_ATTRS[name])
+        # A session that gave up its tiles to the eviction pass has None here;
+        # fall back rather than hand out None to indexing code.
+        if value is None:
+            from reggie.core import session as _session_module
+            return _session_module.fallback_tilesets(_TILESET_ATTRS[name])
+        return value
 
     # `Level` lives on the shared handle, not the session, because two tabs
     # showing different areas of one file must see the same Level object.

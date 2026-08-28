@@ -54,6 +54,59 @@ def open_level(level, file_path, area_num=1):
     return manager.open(level, file_path, area, area_num)
 
 
+def set_current_tilesets(tiles, tileset_files, object_defs):
+    """Install a fresh set of tileset slots on the active session.
+
+    The counterpart to :func:`set_current_area` for the four tileset slots, and
+    the only place they are rebound. Everything else in the editor writes into
+    them in place, so those writes follow the session automatically.
+
+    Like ``SLib.Area``, spritelib keeps its own ``SLib.Tiles`` binding that
+    sprite rendering reads through, so it is re-pointed here rather than at the
+    two ad-hoc sites it used to be set from.
+    """
+    from reggie.core import globals_
+    from reggie.core import spritelib as SLib
+
+    SLib.Tiles = tiles
+
+    manager = globals_.get_session_manager()
+    if manager is None:
+        # No editor around this call - boot, or a headless suite. Fall back to
+        # a module-level holder so the tileset code still has somewhere to
+        # write; see _fallback_tilesets below.
+        _fallback['tiles'] = tiles
+        _fallback['tileset_files'] = tileset_files
+        _fallback['object_defs'] = object_defs
+        return None
+
+    session = manager.active
+    if session is None:
+        _fallback['tiles'] = tiles
+        _fallback['tileset_files'] = tileset_files
+        _fallback['object_defs'] = object_defs
+        return None
+
+    session.tiles = tiles
+    session.tileset_files = tileset_files
+    session.object_defs = object_defs
+    return session
+
+
+#: Where the tileset slots live when there is no session yet.
+#
+# CreateTilesets() runs from Area.__init__, which the headless suites and the
+# very first moments of boot reach before any session exists. Without this the
+# slots would be None there and tile loading would fail on a NoneType index -
+# a regression with no upside, since single-area behaviour must keep working
+# unchanged throughout this block.
+_fallback = {'tiles': None, 'tileset_files': None, 'object_defs': None}
+
+
+def fallback_tilesets(name):
+    return _fallback.get(name)
+
+
 def set_current_area(area, area_num=None):
     """Point the active session - and spritelib - at ``area``.
 
@@ -148,6 +201,10 @@ class EditorSession:
         self.tileset_files = None  # the 4 slot paths      (phase D-2)
         self.object_defs = None    # ObjectDefinitions     (phase D-2)
 
+        # What release_tiles() dropped, so restore_tiles() knows what to
+        # rebuild. Empty until this session has actually been evicted once.
+        self.released_tileset_names = None
+
         self.dirty = False
 
         # Bumped by the manager on every activation, so the tile-eviction pass
@@ -177,10 +234,44 @@ class EditorSession:
         The memory-management half of the block: an idle tab gives back its
         tile arrays and re-decodes them when it is next activated. Cheap,
         because the tileset cache is keyed by resolved path.
+
+        The slot *names* are remembered so the session can rebuild itself; only
+        the decoded data goes. Without them a released session would not know
+        what to reload.
         """
+        if self.tileset_files is not None:
+            self.released_tileset_names = list(self.tileset_files)
+
         self.tiles = None
         self.tileset_files = None
         self.object_defs = None
+
+    def restore_tiles(self):
+        """Rebuild the tilesets released by :meth:`release_tiles`.
+
+        Called on activation. Returns True if anything was rebuilt. Kept here
+        rather than in the manager so that a session is responsible for its own
+        contents.
+        """
+        if self.tiles is not None:
+            return False
+
+        # Imported here: tiles.py imports this module, so a module-level import
+        # would be circular.
+        from reggie.core.tiles import CreateTilesets, LoadTileset
+
+        CreateTilesets()
+
+        for idx, arcname in enumerate(self.released_tileset_names or []):
+            if not arcname:
+                continue
+            # The names recorded are resolved paths; LoadTileset wants the
+            # tileset name, which the area still carries.
+            name = getattr(self.area, 'tileset%d' % idx, '')
+            if name:
+                LoadTileset(idx, name)
+
+        return True
 
     def dispose(self):
         """Tear the session down and detach from the shared level.
@@ -284,6 +375,23 @@ class SessionManager:
         if session is not None:
             self._serial += 1
             session.last_active_serial = self._serial
+
+        # A session evicted by the memory pass rebuilds its tilesets here,
+        # before anything can read them. Cheap: the archive bytes are still in
+        # the tileset cache, so this is the decode only, not the decompression.
+        if session is not None and session.tiles is None \
+                and session.released_tileset_names:
+            session.restore_tiles()
+
+        # spritelib keeps its own bindings, which sprite rendering reads
+        # through. If they are not moved with the session, sprites draw against
+        # the previous area's data and its tiles - wrong pixels rather than an
+        # exception, which is the hardest kind of bug to trace back to here.
+        from reggie.core import spritelib as SLib
+
+        SLib.Area = session.area if session is not None else None
+        if session is not None and session.tiles is not None:
+            SLib.Tiles = session.tiles
 
         return previous
 
