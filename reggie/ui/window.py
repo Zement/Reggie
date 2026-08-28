@@ -124,6 +124,27 @@ from reggie.io.translation import LoadTranslation
 ################################################################################
 
 
+def _list_row_is_live(item):
+    """Whether an item's side-list row still exists on the C++ side.
+
+    QListWidget.clear() *destroys* the QListWidgetItems it holds, and every
+    level item keeps a reference to its own row in `self.listitem`. So a row can
+    be present as a Python object and already freed underneath - and touching a
+    freed one is a hard crash inside Qt rather than an exception Python can
+    catch. text() is the cheapest probe that forces the round trip.
+    """
+    listitem = getattr(item, 'listitem', None)
+    if listitem is None:
+        return False
+
+    try:
+        listitem.text()
+    except RuntimeError:
+        return False
+
+    return True
+
+
 # NOTE: ReggieWindow was split out of reggie/app.py into this module
 # (Phase 2/3 refactor — see _docs/plan/REFACTORING_ANALYSIS.md). The import
 # preamble is shared verbatim with app.py; app.py imports ReggieWindow from here.
@@ -2420,6 +2441,31 @@ class ReggieWindow(QtWidgets.QMainWindow):
         for path in globals_.Area.paths:
             path.add_to_scene()
 
+            # Give each node a list row if it does not already have a live one.
+            #
+            # Paths are the one item type ResetPalette did not rebuild rows for,
+            # because the path list is filled during *parsing* - Path.add_node()
+            # adds the row - and ResetPalette had only ever run straight after a
+            # parse. An area switch is the first caller that breaks that: the
+            # side lists are cleared, and QListWidget.clear() *destroys* the
+            # QListWidgetItems, so every node was left holding a freed one.
+            # Coming back, the path list stayed empty and clicking a node handed
+            # that dangling pointer to setCurrentItem() - a hard crash inside
+            # Qt, not a Python exception (Zement, 2026-08-28).
+            #
+            # Conditional, not unconditional: on a fresh load the rows already
+            # exist from parsing, and rebuilding them there would give every
+            # node two.
+            for node in path._nodes:
+                node.positionChanged = self.HandlePathPosChange
+
+                if _list_row_is_live(node):
+                    continue
+
+                node.listitem = ListWidgetItem_SortsByOther(node, node.ListString())
+                self.pathList.addItem(node.listitem)
+                node.UpdateListItem()
+
         for com in globals_.Area.comments:
             com.positionChanged = self.HandleComPosChange
             com.textChanged = self.HandleComTxtChange
@@ -2472,6 +2518,36 @@ class ReggieWindow(QtWidgets.QMainWindow):
         search = self.spriteSearchTerm.text()
         if search != "":
             self.sprPicker.SetSearchString(search)
+
+    def _SelectListRowFor(self, listWidget, item):
+        """Highlight an item's row in its side list, if that row still exists.
+
+        Every caller used to do this inline as
+
+            self.UpdateFlag = True
+            someList.setCurrentItem(item.listitem)
+            self.UpdateFlag = False
+
+        which passes a raw pointer to Qt. QListWidget.clear() *destroys* the
+        QListWidgetItems it holds, so an item whose list has been cleared since
+        its row was made is holding freed memory - and handing that to
+        setCurrentItem() is not a Python exception but a hard crash inside Qt
+        (0xC0000409), which no excepthook can report.
+
+        Reachable since areas began staying open across a switch: the lists are
+        cleared on activation and rebuilt from the incoming area. Anything the
+        rebuild misses lands here. Path nodes were exactly that case.
+        """
+        if not _list_row_is_live(item):
+            return
+
+        self.UpdateFlag = True
+        try:
+            listWidget.setCurrentItem(item.listitem)
+        except RuntimeError:
+            pass
+        finally:
+            self.UpdateFlag = False
 
     def ChangeSelectionHandler(self):
         """
@@ -2532,30 +2608,22 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 updateModeInfo = True
             elif func_ii(item, type_ent):
                 self.creationTabs.setCurrentIndex(2)
-                self.UpdateFlag = True
-                self.entranceList.setCurrentItem(item.listitem)
-                self.UpdateFlag = False
+                self._SelectListRowFor(self.entranceList, item)
                 showEntrancePanel = True
                 updateModeInfo = True
             elif func_ii(item, type_loc):
                 self.creationTabs.setCurrentIndex(3)
-                self.UpdateFlag = True
-                self.locationList.setCurrentItem(item.listitem)
-                self.UpdateFlag = False
+                self._SelectListRowFor(self.locationList, item)
                 showLocationPanel = True
                 updateModeInfo = True
             elif func_ii(item, type_path):
                 self.creationTabs.setCurrentIndex(4)
-                self.UpdateFlag = True
-                self.pathList.setCurrentItem(item.listitem)
-                self.UpdateFlag = False
+                self._SelectListRowFor(self.pathList, item)
                 showPathPanel = True
                 updateModeInfo = True
             elif func_ii(item, type_com):
                 self.creationTabs.setCurrentIndex(7)
-                self.UpdateFlag = True
-                self.commentList.setCurrentItem(item.listitem)
-                self.UpdateFlag = False
+                self._SelectListRowFor(self.commentList, item)
                 updateModeInfo = True
 
         else:
