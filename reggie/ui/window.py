@@ -404,6 +404,81 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.HandleUndoTextChanged(stack.undoText())
         self.HandleRedoTextChanged(stack.redoText())
 
+    def ActivateSession(self, session):
+        """Show an already-open session's area, without touching the disk.
+
+        The editor-facing half of an area switch (Block D, phase D-4). The
+        session manager moves the state bindings - globals_.Area, spritelib, the
+        undo stack; this moves what the user sees.
+
+        The scene is emptied and rebuilt rather than swapped: one LevelScene is
+        window-owned for now, and a scene per session is the UI block's job. The
+        items themselves live on their area and survive being removed, so this
+        is a re-parent, not a reload - nothing is re-read or re-parsed.
+        """
+        manager = globals_.get_session_manager()
+        if manager is None or session is None:
+            return False
+
+        # The area's items are about to be pulled out from under the selection.
+        self.scene.clearSelection()
+        self.CurrentSelection = []
+        self.scene.clear()
+
+        for thingList in (self.spriteList, self.entranceList, self.locationList,
+                          self.pathList, self.commentList):
+            thingList.clear()
+            thingList.selectionModel().setCurrentIndex(
+                QtCore.QModelIndex(),
+                QtCore.QItemSelectionModel.SelectionFlag.Clear)
+
+        # Moves globals_.Area, spritelib's own bindings, this session's tilesets
+        # and the undo stack together. Everything below reads through them.
+        manager.activate(session)
+
+        # Rebuilding the scene moves items and fires their positionChanged
+        # handlers, which call SetDirty. Nothing here is a user edit.
+        globals_.DirtyOverride += 1
+        try:
+            self.ResetPalette()
+        finally:
+            globals_.DirtyOverride -= 1
+
+        self._RefillAreaComboBox()
+        self._SyncAreaComboBox()
+        self.UpdateTitle()
+
+        self.scene.update()
+        self.levelOverview.Reset()
+        self.levelOverview.update()
+
+        return True
+
+    def _RefillAreaComboBox(self):
+        """Rebuild the area selector from the level actually open.
+
+        _SyncAreaComboBox only moves the selection, and silently does nothing
+        when the wanted index does not exist yet. An area added since the box
+        was last filled - by Add Area, or by a peer's snapshot - would leave the
+        box a row short, and selecting that area would then be a no-op.
+        """
+        level = globals_.Level
+        if level is None:
+            return
+
+        areas = getattr(level, 'areas', None) or []
+        if self.areaComboBox.count() == len(areas):
+            return
+
+        blocked = self.areaComboBox.blockSignals(True)
+        try:
+            self.areaComboBox.clear()
+            for area in areas:
+                self.areaComboBox.addItem(
+                    globals_.trans.string('AreaCombobox', 0, '[num]', area.areanum))
+        finally:
+            self.areaComboBox.blockSignals(blocked)
+
     def HandleSwitchPatch(self, index):
         """
         Handle activated signals for patchComboBox
@@ -1634,9 +1709,16 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if idx == old_idx:
             return
 
-        if self.CheckDirty():
-            self.areaComboBox.setCurrentIndex(old_idx)
-            return
+        # No dirty check here any more (Block D, phase D-4). It used to be
+        # required: switching ran Level.changeArea(), which unloads the outgoing
+        # area, and Area.unload() drops the parsed data without serialising it -
+        # so an edited area that was switched away from lost its edits, and a
+        # later save wrote its pre-edit archive bytes. The prompt was the guard
+        # against that.
+        #
+        # Areas now stay live in their own sessions, so there is nothing to lose
+        # and nothing to ask about. The check stays everywhere work genuinely
+        # can be lost: closing the editor, changing patch, opening another file.
 
         # In a session, a client asks the host before moving everyone, and the
         # host's broadcast is what loads it (Block C - B3, phase 3d).
@@ -1656,11 +1738,39 @@ class ReggieWindow(QtWidgets.QMainWindow):
             self._SyncAreaComboBox()
             return
 
-        ok = self.LoadLevel(self.fileSavePath, True, idx + 1)
+        ok = self.SwitchToArea(idx + 1)
 
         if not ok:
-            # loading the new area failed, so reset the combobox
+            # switching to the new area failed, so reset the combobox
             self.areaComboBox.setCurrentIndex(old_idx)
+
+    def SwitchToArea(self, area_num):
+        """Show another area of the open level, keeping this one live.
+
+        Block D, phase D-4. This used to be LoadLevel(path, True, n), which
+        re-read the file from disk and handed off to Level.changeArea() -
+        destroying the outgoing area's parsed state in the process.
+
+        Now each area is its own session on the shared LevelHandle: the first
+        visit loads it, every later visit is an activation. Falls back to the
+        old path when there is no session manager, so nothing depends on one
+        existing.
+        """
+        from reggie.core import session as session_module
+
+        manager = globals_.get_session_manager()
+        if manager is None:
+            return bool(self.LoadLevel(self.fileSavePath, True, area_num))
+
+        session = session_module.open_area(area_num)
+        if session is None:
+            return bool(self.LoadLevel(self.fileSavePath, True, area_num))
+
+        # open_area activated the session to load into it; ActivateSession is
+        # what moves the *view*. Activating twice is harmless - the manager
+        # short-circuits on the session already being active - and keeping them
+        # separate is what lets the load happen against correct globals.
+        return self.ActivateSession(session)
 
     def LoadFirstLevelOfPatch(self):
         """

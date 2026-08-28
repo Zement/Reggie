@@ -449,9 +449,17 @@ class LevelIO:
         else:
             # We have already loaded this area's data - it's stored as
             # AbstractAreas in the Level. This means we do not have to open and
-            # optionally decompress the level file. Hence, we can just relay
-            # this to the level.
-            globals_.Level.changeArea(areaNum)
+            # optionally decompress the level file.
+            #
+            # Prefer a session over Level.changeArea() (Block D, phase D-4):
+            # changeArea unloads the outgoing area, and Area.unload() discards
+            # its parsed data without serialising, so any unsaved edit in it is
+            # lost. open_area keeps it live in its own session instead. The
+            # changeArea fallback stays for the case where no manager is
+            # installed, which is how the headless suites run.
+            if session.open_area(areaNum) is None:
+                globals_.Level.changeArea(areaNum)
+
             self.win.ResetPalette()
 
         # Fill up the area list

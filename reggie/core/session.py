@@ -36,10 +36,16 @@ def _globals():
 def open_level(level, file_path, area_num=1):
     """Replace the editor's open level with ``level``, as a session.
 
-    Phase D-1 keeps the editor single-session: this closes whatever was open
-    and opens one session on the new level, which reproduces the old
-    ``globals_.Level = Level_NSMBW()`` behaviour exactly. Phase D-4 is where
-    more than one may be open at a time.
+    Closes every open session and opens one on the new level. That is still the
+    right behaviour after phase D-4: this is reached only when a *new*
+    ``Level_NSMBW`` has been constructed - a new level, or a file read from disk
+    - and every session open against the previous level refers to areas of a
+    level object that is being replaced wholesale.
+
+    Moving between areas of the level already open does not come through here;
+    it goes to :func:`open_area`, which adds a session rather than replacing
+    them. Opening several *files* at once is the UI block's concern, since it
+    needs somewhere to show them.
 
     Returns the new session, or None when no manager is installed - the
     headless suites construct levels with no editor around them.
@@ -58,6 +64,80 @@ def open_level(level, file_path, area_num=1):
     area = level.areas[area_num - 1] if len(level.areas) >= area_num else None
 
     return manager.open(level, file_path, area, area_num)
+
+
+def open_area(area_num):
+    """Show another area of the level already open, as its own session.
+
+    The counterpart to :func:`open_level` for a switch *within* a file. Returns
+    the session showing that area - an existing one if it is already open, a new
+    one on the same :class:`LevelHandle` otherwise - or None when there is no
+    manager or no level open.
+
+    This is what makes an area switch non-destructive. Before it, switching ran
+    ``Level.changeArea()``, which calls ``Area.unload()`` on the outgoing area;
+    ``unload()`` drops the parsed data without serialising, and ``Area.save()``
+    then falls back to the raw archive bytes. So an edited area that was switched
+    away from lost its edits, and the editor guarded against that by refusing to
+    switch while dirty. Keeping both areas live removes the loss and the guard
+    together.
+    """
+    from reggie.core import globals_
+
+    manager = globals_.get_session_manager()
+    if manager is None:
+        return None
+
+    current = manager.active
+    if current is None:
+        return None
+
+    existing = manager.find(current.file_path, area_num)
+    if existing is not None:
+        manager.activate(existing)
+        return existing
+
+    level = current.level
+    if level is None or len(level.areas) < area_num:
+        return None
+
+    area = level.areas[area_num - 1]
+
+    # The session has to exist and be active *before* the area is loaded: an
+    # area's load() builds its sprites, and a sprite image's findZone() reads
+    # globals_.Area.zones while it is being constructed. That read resolves
+    # through the active session, so a session opened afterwards would leave it
+    # resolving to the outgoing area - the same ordering trap that made loading
+    # a level with sprites raise in phase D-1.
+    session = manager.open(level, current.file_path, area, area_num)
+
+    if not area._is_loaded:
+        area.load()
+    elif session.tiles is None:
+        # The area was already parsed - Add Area runs load_defaults(), and an
+        # imported area arrives loaded - so area.load() is not called and never
+        # builds this session's tilesets. Whatever loaded it did so against
+        # whichever session was active at the time, whose slots those tiles went
+        # into; the new session would otherwise hold none at all and render the
+        # previous area's tiles or nothing.
+        from reggie.core.tiles import CreateTilesets, LoadTileset
+
+        CreateTilesets()
+        for idx in range(4):
+            name = getattr(area, 'tileset%d' % idx, '')
+            if name:
+                LoadTileset(idx, name)
+
+    # Idle tabs give their decoded tiles back once enough have accumulated
+    # (state-model plan §6.2). Here rather than inside activate(): a session is
+    # activated the moment it is opened, before its tilesets have been loaded
+    # into it, so sweeping there counts a half-built session as tile-less and
+    # evicts a finished one to make room for it. Sweeping once the new session
+    # is complete is both correct and the only point where the set actually
+    # grows.
+    manager.evict_tiles()
+
+    return session
 
 
 def set_current_tilesets(tiles, tileset_files, object_defs):
