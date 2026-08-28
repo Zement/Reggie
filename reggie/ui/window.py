@@ -413,8 +413,19 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         The scene is emptied and rebuilt rather than swapped: one LevelScene is
         window-owned for now, and a scene per session is the UI block's job. The
-        items themselves live on their area and survive being removed, so this
+        items themselves live on their area and survive being detached, so this
         is a re-parent, not a reload - nothing is re-read or re-parsed.
+
+        **The scene is emptied with removeItem(), never clear().**
+        QGraphicsScene.clear() *destroys* the items it holds - the C++ objects
+        are deleted and the Python wrappers left dangling. That is right in
+        LoadLevel, which is discarding the level and rebuilding every item from
+        scratch, and wrong here, where the outgoing area has to stay intact in
+        its own session. Using clear() here left globals_.Area.zones full of
+        deleted ZoneItems, and the level overview raised "wrapped C/C++ object
+        of type ZoneItem has been deleted" on the way back - inside paintEvent,
+        so the error dialog repainted the widget and the crash repeated until
+        the process was killed (Zement, 2026-08-28, A1 -> A2 -> A1).
         """
         manager = globals_.get_session_manager()
         if manager is None or session is None:
@@ -423,7 +434,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # The area's items are about to be pulled out from under the selection.
         self.scene.clearSelection()
         self.CurrentSelection = []
-        self.scene.clear()
+        self._DetachSceneItems()
 
         for thingList in (self.spriteList, self.entranceList, self.locationList,
                           self.pathList, self.commentList):
@@ -453,6 +464,47 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.levelOverview.update()
 
         return True
+
+    def _DetachSceneItems(self):
+        """Empty the scene without destroying what was in it.
+
+        The counterpart to scene.clear() for a switch between two areas that
+        both stay open. clear() deletes the underlying C++ objects, which is
+        correct when the level is being thrown away and fatal when it is not:
+        the area keeps Python references to its zones, sprites and entrances,
+        and every one of them would be left wrapping freed memory.
+
+        removeItem() detaches instead, and an item detached this way can be
+        added back to a scene unchanged - which is exactly what ResetPalette
+        does when that area is activated again.
+        """
+        # Paths track whether their connecting line is in a scene, and
+        # add_to_scene() re-adds the line only when that flag is False. The line
+        # is about to be detached with everything else, so leaving the flag set
+        # would make the path's nodes come back with no line joining them.
+        # Nothing else in the editor detaches a path wholesale, which is why the
+        # flag has never needed clearing before.
+        #
+        # Two sources, because neither alone is enough. The scene's line items
+        # know their path, but globals_.Area may already be the *incoming* area
+        # by the time this runs - open_area() activates before ActivateSession
+        # is called - so the outgoing area is not reachable through the proxy.
+        # And a line that is already detached is not in the scene to be found,
+        # so a path left inconsistent by anything else would stay that way.
+        # Taking both makes this self-correcting rather than order-dependent.
+        for item in self.scene.items():
+            if isinstance(item, PathEditorLineItem):
+                path = getattr(item, '_path', None)
+                if path is not None:
+                    path._has_line = False
+
+        for path in getattr(globals_.Area, 'paths', None) or ():
+            line = getattr(path, '_line_item', None)
+            if line is None or line.scene() is None:
+                path._has_line = False
+
+        for item in self.scene.items():
+            self.scene.removeItem(item)
 
     def _RefillAreaComboBox(self):
         """Rebuild the area selector from the level actually open.
