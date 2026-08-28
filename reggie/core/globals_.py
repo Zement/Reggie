@@ -79,7 +79,7 @@ ReginaldVersionFloat = 0.95
 # build.yml greps for the literal string "ReggieVersionShort" in all four
 # platform jobs and throws if it is absent, so renaming it here breaks every
 # build. Rename the constant and the workflow greps together, or not at all.
-ReggieVersionShort = 'v0.95.0-2'  # Fallback if git is not available (update manually with each release)
+ReggieVersionShort = 'v0.95.0-3'  # Fallback if git is not available (update manually with each release)
 ResetDataWhenHiding = False
 RestoredFromAutoSave = False
 SettingsActions = None
