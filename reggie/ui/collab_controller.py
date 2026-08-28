@@ -2180,11 +2180,11 @@ class CollabController(QtCore.QObject):
         if self.status_window is None:
             return
 
-        # A client's roster carries the nickname; the host's events carry it
-        # directly. Resolve it here so the log always shows a name.
-        if not nick and self.client_session is not None:
-            nick = ''
-
+        # Both sides now arrive with a name: the host's events carry the
+        # participant, and ClientSession resolves the envelope's sender id
+        # against the roster. This used to blank the client's nick to '',
+        # which is why a client saw every remote line - the host's included -
+        # with no name attached.
         self.status_window.appendChat(nick, text, kind)
 
     def _onStatus(self, text):

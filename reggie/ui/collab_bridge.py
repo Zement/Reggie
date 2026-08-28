@@ -290,8 +290,11 @@ class CollabBridge(QtCore.QObject):
             self.signals.rosterChanged.emit(list(data.get('participants') or []))
 
         elif kind == 'chat':
+            # ClientSession resolves the envelope's sender id against the
+            # roster before emitting; this used to hardcode '' and so dropped
+            # every remote nickname, the host's included.
             self.signals.chatReceived.emit(
-                '', data.get('text', ''),
+                data.get('nick', '') or '', data.get('text', ''),
                 data.get('kind', protocol.CHAT_KIND_USER))
 
         elif kind == 'role_changed':
