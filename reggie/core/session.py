@@ -27,6 +27,12 @@ order tabs close in must not decide which one keeps the level alive.
 import weakref
 
 
+def _globals():
+    """Deferred import: globals_ is imported by nearly everything."""
+    from reggie.core import globals_
+    return globals_
+
+
 def open_level(level, file_path, area_num=1):
     """Replace the editor's open level with ``level``, as a session.
 
@@ -191,11 +197,13 @@ class EditorSession:
         self.area = area
         self.area_num = area_num
 
-        # Populated by later phases; declared here so the shape is visible in
-        # one place rather than accreting attributes across the block.
-        self.scene = None          # LevelScene            (phase D-3)
-        self.view = None           # LevelViewWidget       (phase D-3)
-        self.undo_stack = None     # UndoStack             (phase D-3)
+        # The scene and view stay window-owned for now: one canvas widget is
+        # shown at a time, and swapping QGraphicsScene per tab is D-2's job in
+        # the *UI* block, not this one. The undo stack is per session from
+        # here, because two tabs must not share a history.
+        self.scene = None          # LevelScene            (UI block)
+        self.view = None           # LevelViewWidget       (UI block)
+        self._undo_stack = None
 
         self.tiles = None          # 0x200*4 + overrides   (phase D-2)
         self.tileset_files = None  # the 4 slot paths      (phase D-2)
@@ -213,6 +221,33 @@ class EditorSession:
         self.last_active_serial = 0
 
         handle.attach(self)
+
+    @property
+    def undo_stack(self):
+        """This session's undo history, created on first use.
+
+        Per session rather than per file: undo is an editing history, and the
+        unit of editing is the area. Two tabs on the same level therefore have
+        separate histories, while sharing the level they save.
+
+        Built lazily so that constructing a session - which the headless suites
+        do freely - does not require a QApplication.
+        """
+        if self._undo_stack is None:
+            from reggie.core.undo import UndoStack
+
+            self._undo_stack = UndoStack()
+
+            limit = getattr(_globals(), 'UndoLimit', None)
+            if limit:
+                self._undo_stack.setUndoLimit(limit)
+
+        return self._undo_stack
+
+    @property
+    def has_undo_stack(self):
+        """Whether a stack has actually been created, without creating one."""
+        return self._undo_stack is not None
 
     @property
     def level(self):
@@ -282,7 +317,10 @@ class EditorSession:
         self.release_tiles()
         self.scene = None
         self.view = None
-        self.undo_stack = None
+        # The private attribute, not the property: undo_stack is read-only and
+        # creates a stack on access, so assigning it would raise and asking for
+        # it would build one purely to throw it away.
+        self._undo_stack = None
         return self.handle.detach(self)
 
     def __repr__(self):
@@ -392,6 +430,14 @@ class SessionManager:
         SLib.Area = session.area if session is not None else None
         if session is not None and session.tiles is not None:
             SLib.Tiles = session.tiles
+
+        # The undo/redo menu items follow the active session's stack. Guarded
+        # because the manager exists before the window does during boot, and
+        # the headless suites run with no window at all.
+        window = getattr(_globals(), 'mainWindow', None)
+        binder = getattr(window, 'BindUndoStack', None)
+        if binder is not None and session is not None:
+            binder(session.undo_stack)
 
         return previous
 

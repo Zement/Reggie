@@ -148,8 +148,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.ZoomLevels = [7.5, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0,
                            85.0, 90.0, 95.0, 100.0, 125.0, 150.0, 175.0, 200.0, 250.0, 300.0, 350.0, 400.0]
 
-        # add the undo stack object
-        self.undoStack = UndoStack()
+        # The undo stack lives on the editor session, not here - two open areas
+        # must not share a history. `self.undoStack` is a property below that
+        # forwards to the active session, so the ~40 call sites that push onto
+        # `mainWindow.undoStack` keep working untouched.
+        #
+        # This one is the fallback for when no session exists yet: the window is
+        # constructed before the first level is opened, and its signals are
+        # wired to it during __init2__.
+        self._fallbackUndoStack = UndoStack()
 
         # required variables
         self.UpdateFlag = False
@@ -219,10 +226,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # Undo/redo menu items follow the QUndoStack state (Block C - A1)
         self._undoBaseText = self.actions['undo'].text()
         self._redoBaseText = self.actions['redo'].text()
-        self.undoStack.canUndoChanged.connect(self.actions['undo'].setEnabled)
-        self.undoStack.canRedoChanged.connect(self.actions['redo'].setEnabled)
-        self.undoStack.undoTextChanged.connect(self.HandleUndoTextChanged)
-        self.undoStack.redoTextChanged.connect(self.HandleRedoTextChanged)
+        self.BindUndoStack(self.undoStack)
 
         # set up the status bar
         print("[INIT2] Creating status bar widgets...")
@@ -341,6 +345,64 @@ class ReggieWindow(QtWidgets.QMainWindow):
     # Populated by MenuBuilder.CreateAction via self.win.actions. Kept as a
     # ReggieWindow class attribute so self.actions resolves everywhere it's read.
     actions = {}
+
+    @property
+    def undoStack(self):
+        """The active session's undo history.
+
+        A property rather than an attribute so the ~40 sites that push onto
+        ``mainWindow.undoStack`` reach whichever area is in front, without any
+        of them changing. Falls back to a window-owned stack before the first
+        session exists - the window is built before a level is opened.
+        """
+        manager = globals_.get_session_manager()
+        session = manager.active if manager is not None else None
+
+        if session is None:
+            return self._fallbackUndoStack
+
+        return session.undo_stack
+
+    def BindUndoStack(self, stack):
+        """Point the undo/redo menu items at ``stack``.
+
+        Called once at startup and again whenever the active session changes,
+        since each session owns its own stack and the menu state - enabled, and
+        the "Undo <action>" label - belongs to whichever one is in front.
+        """
+        previous = getattr(self, '_boundUndoStack', None)
+        if previous is stack:
+            return
+
+        if previous is not None:
+            # Qt keeps every connection, so without this the menu items would
+            # follow all stacks at once and the last signal to arrive would win.
+            for signal, slot in (
+                (previous.canUndoChanged, self.actions['undo'].setEnabled),
+                (previous.canRedoChanged, self.actions['redo'].setEnabled),
+                (previous.undoTextChanged, self.HandleUndoTextChanged),
+                (previous.redoTextChanged, self.HandleRedoTextChanged),
+            ):
+                try:
+                    signal.disconnect(slot)
+                except (TypeError, RuntimeError):
+                    # Already gone, or the stack was destroyed with its session.
+                    pass
+
+        stack.canUndoChanged.connect(self.actions['undo'].setEnabled)
+        stack.canRedoChanged.connect(self.actions['redo'].setEnabled)
+        stack.undoTextChanged.connect(self.HandleUndoTextChanged)
+        stack.redoTextChanged.connect(self.HandleRedoTextChanged)
+
+        self._boundUndoStack = stack
+
+        # Bring the menu items in line with the stack we just bound: the
+        # signals above only fire on *changes*, so switching to a session whose
+        # stack is already non-empty would otherwise leave Undo greyed out.
+        self.actions['undo'].setEnabled(stack.canUndo())
+        self.actions['redo'].setEnabled(stack.canRedo())
+        self.HandleUndoTextChanged(stack.undoText())
+        self.HandleRedoTextChanged(stack.redoText())
 
     def HandleSwitchPatch(self, index):
         """
