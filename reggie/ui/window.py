@@ -1976,21 +1976,21 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # the next restart: turning dragging off also drops any manual order the
         # user had arranged, which they should see happen while the reason for
         # it is still on screen.
-        setSetting('TabsDraggable', dlg.generalTab.tabsDraggable.isChecked())
+        # The shell settings live on the Interface tab, which is where new,
+        # not-yet-sorted preferences go. All applied at once rather than at the
+        # next restart: the point of each is seeing the layout it produces.
+        shell = dlg.interfaceTab
+
+        setSetting('TabsDraggable', shell.tabsDraggable.isChecked())
         self.tabs.applySettings()
 
-        # Which side the sidebar is docked to (Block D-c). Also applied at once:
-        # the whole point of the setting is seeing the layout it produces.
-        setSetting('SidebarSide', dlg.generalTab.sidebarSide.currentData())
+        setSetting('SidebarSide', shell.sidebarSide.currentData())
         self.PlaceSidebar()
 
-        # Level overview placement and size (Block D-c). Applied at once, like
-        # the two above: the point of these settings is seeing the result.
-        setSetting('OverviewCorner', dlg.generalTab.overviewCorner.currentData())
-        setSetting('OverviewHeightPct', dlg.generalTab.overviewHeight.value())
-        setSetting('OverviewTranslucent',
-                   dlg.generalTab.overviewTranslucent.isChecked())
-        setSetting('OverviewOpacityPct', dlg.generalTab.overviewOpacity.value())
+        setSetting('OverviewCorner', shell.overviewCorner.currentData())
+        setSetting('OverviewHeightPct', shell.overviewHeight.value())
+        setSetting('OverviewTranslucent', shell.overviewTranslucent.isChecked())
+        setSetting('OverviewOpacityPct', shell.overviewOpacity.value())
         self.tabs.applyOverlaySettings()
 
         # Undo history limit setting. Qt only allows changing the limit of an

@@ -47,6 +47,45 @@ def configured_side():
     return SIDE_RIGHT if value == SIDE_RIGHT else SIDE_LEFT
 
 
+def _expandVertically(widget, depth=0):
+    """Let ``widget`` and the containers inside it grow to fill their space.
+
+    A vertical stretch factor is only half the job: Qt gives a widget the space
+    the layout allots, but most widgets refuse to *use* more than their size
+    hint, so a stretched panel full of tab widgets still renders at its natural
+    height with the rest of the sidebar left blank. The palette is nested three
+    deep - panel host, creationTabs, objAllTab/sprAllTab, then the list itself -
+    and every level has to agree before the innermost list can grow (Zement,
+    2026-08-29: the palette capped at ~50% of the sidebar, then ~30% once a
+    property panel opened).
+
+    Recurses only through *containers* - tab widgets, stacks, item views,
+    scroll areas - and plain QWidgets, which is what the palette's pages are.
+    Buttons, labels and spin boxes are left alone: making those expand would
+    stretch a "Change Layer" button down the sidebar rather than the list.
+    """
+    if depth > 6:
+        return
+
+    policy = widget.sizePolicy()
+    policy.setVerticalPolicy(QtWidgets.QSizePolicy.Policy.Expanding)
+    widget.setSizePolicy(policy)
+
+    # A maximum set elsewhere silently wins over the policy.
+    if widget.maximumHeight() < QtWidgets.QWIDGETSIZE_MAX:
+        widget.setMaximumHeight(QtWidgets.QWIDGETSIZE_MAX)
+
+    growable = (QtWidgets.QTabWidget, QtWidgets.QStackedWidget,
+                QtWidgets.QAbstractItemView, QtWidgets.QScrollArea,
+                QtWidgets.QSplitter, QtWidgets.QGroupBox)
+
+    for child in widget.findChildren(QtWidgets.QWidget):
+        if child.parentWidget() is not widget:
+            continue
+        if isinstance(child, growable) or type(child) is QtWidgets.QWidget:
+            _expandVertically(child, depth + 1)
+
+
 class PanelHost(QtWidgets.QWidget):
     """Holds one panel widget and answers the QDockWidget API used on it.
 
@@ -111,6 +150,7 @@ class Sidebar(QtWidgets.QWidget):
 
         self.win = window
         self._panels = []
+        self._panelStretches = []
         self._side = configured_side()
 
         # slice 1 - the icon rail.
@@ -125,8 +165,14 @@ class Sidebar(QtWidgets.QWidget):
             QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.rail.currentRowChanged.connect(self._handleRailChanged)
 
-        # slice 2 - one page per rail entry.
+        # slice 2 - one page per rail entry. Empty until D-d fills it in, so it
+        # asks for nothing: a stretch factor here would hand a third of the
+        # column to a widget with nothing in it, which is what squeezed the
+        # palette into half the sidebar and then a third of it once a property
+        # panel appeared (Zement, 2026-08-29).
         self.pages = QtWidgets.QStackedWidget(self)
+        self.pages.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
+                                 QtWidgets.QSizePolicy.Policy.Preferred)
 
         # slice 3 - the palette and the property panels, stacked vertically and
         # scrollable: four property editors plus the palette is more than fits
@@ -136,7 +182,7 @@ class Sidebar(QtWidgets.QWidget):
         self._panelLayout = QtWidgets.QVBoxLayout(self.panelArea)
         self._panelLayout.setContentsMargins(2, 2, 2, 2)
         self._panelLayout.setSpacing(4)
-        self._panelLayout.addStretch(1)
+        self._panelLayout.addStretch(0)
 
         self.panelScroll = QtWidgets.QScrollArea(self)
         self.panelScroll.setWidgetResizable(True)
@@ -146,12 +192,14 @@ class Sidebar(QtWidgets.QWidget):
             QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         # slices 2 and 3 share a column, split vertically so the user decides
-        # how much of it the panels get.
+        # how much of it the panels get. Slice 3 takes the space: it is the one
+        # with content today, and until D-d fills slice 2 anything given to
+        # slice 2 is space taken from the palette for nothing.
         self.column = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical, self)
         self.column.addWidget(self.pages)
         self.column.addWidget(self.panelScroll)
-        self.column.setStretchFactor(0, 1)
-        self.column.setStretchFactor(1, 2)
+        self.column.setStretchFactor(0, 0)
+        self.column.setStretchFactor(1, 1)
 
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal, self)
         self.splitter.setChildrenCollapsible(False)
@@ -246,6 +294,7 @@ class Sidebar(QtWidgets.QWidget):
         # space no panel claims collects at the bottom rather than between them.
         self._panelLayout.insertWidget(self._panelLayout.count() - 1, host, stretch)
         self._panels.append(host)
+        self._panelStretches.append(stretch)
 
         if stretch:
             # A stretched panel only fills if its own contents will expand into
@@ -253,10 +302,21 @@ class Sidebar(QtWidgets.QWidget):
             # size hint however much room the layout offers.
             host.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                QtWidgets.QSizePolicy.Policy.Expanding)
-            widget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
-                                 QtWidgets.QSizePolicy.Policy.Expanding)
+            _expandVertically(widget)
 
         return host
+
+    def relaxPanelHeights(self):
+        """Re-apply the expanding policy to every stretched panel's contents.
+
+        Called once the palette's tabs have actually been filled - addPanel gets
+        the tab widget empty and the builder populates it afterwards, so the
+        recursion has to happen at the end rather than at the moment the panel
+        is added.
+        """
+        for host, stretch in zip(self._panels, self._panelStretches):
+            if stretch:
+                _expandVertically(host.panelWidget)
 
     def setPanelsEnabled(self, enabled):
         """Show or hide slice 3 as a whole.

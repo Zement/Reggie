@@ -442,3 +442,12 @@ class DockBuilder:
 
         # Set the current tab to the Object tab
         self.win.CreationTabChanged(0)
+
+        # Let the palette's contents grow into the sidebar, now that they exist
+        # (Block D-c). Here rather than in addPanel: the palette's tab widget is
+        # handed over empty and filled across the ~300 lines above, so anything
+        # recursing into it earlier would find nothing to relax. Every level
+        # from the panel host down to the innermost list has to agree before the
+        # list can use the height, which is why one setSizePolicy on the panel
+        # was not enough.
+        self.win.sidebar.relaxPanelHeights()

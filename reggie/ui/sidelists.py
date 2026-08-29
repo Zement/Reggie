@@ -61,6 +61,26 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         self._wlocator = 80
         self.mainWindowScale = 1
 
+    @staticmethod
+    def _mappedBounds(item, transform):
+        """An item's scene rect through ``transform``, or None if it is dead.
+
+        An area keeps its own lists - Area.zones, .locations, each path's nodes
+        - and those outlive the scene the items were in, so an item whose
+        session has been closed is still in the list while its C++ object is
+        not. Touching one raises RuntimeError.
+
+        That matters more here than almost anywhere: this runs from paintEvent,
+        and an exception in a paint handler is what the D-b.4 unbreakable loop
+        was made of - the error box's nested event loop repaints, which raises
+        again. Zement's host log for 2026-08-29 shows exactly that, starting
+        from a ZoneItem in CalcSize.
+        """
+        try:
+            return transform.mapRect(item.sceneBoundingRect())
+        except RuntimeError:
+            return None
+
     def setBackgroundAlpha(self, alpha):
         """Set how opaque this widget's own background is (Block D-c).
 
@@ -202,7 +222,9 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         painter.setPen(QtGui.QPen(globals_.theme.color('overview_zone_lines'), 1))
 
         for zone in globals_.Area.zones:
-            rect = transform.mapRect(zone.sceneBoundingRect())
+            rect = self._mappedBounds(zone, transform)
+            if rect is None:
+                continue
             fr(rect, b)
             dr(rect)
 
@@ -226,7 +248,9 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         painter.setPen(QtGui.QPen(globals_.theme.color('overview_location_lines'), 1))
 
         for location in globals_.Area.locations:
-            rect = transform.mapRect(location.sceneBoundingRect())
+            rect = self._mappedBounds(location, transform)
+            if rect is None:
+                continue
             fr(rect, b)
             dr(rect)
 
@@ -234,18 +258,29 @@ class LevelOverviewWidget(QtWidgets.QWidget):
 
         for path in globals_.Area.paths:
             for node in path._nodes:
-                rect = transform.mapRect(node.sceneBoundingRect())
-                fr(rect, b)
+                rect = self._mappedBounds(node, transform)
+                if rect is not None:
+                    fr(rect, b)
 
             # TODO: Draw the path lines
 
         painter.setPen(QtGui.QPen(globals_.theme.color('overview_viewbox'), 1))
 
+        # The rectangle showing where the canvas is looking. Clipped to the
+        # level's own extent: the canvas can be scrolled past the last object,
+        # or be larger than the whole level on an almost-empty one, and an
+        # unclipped rectangle then spills outside the widget drawing it. Zement
+        # reports this has looked wrong since the Reggie 1.0 days.
         scalar = 1 / (24 * self.mainWindowScale)
-        painter.drawRect(QtCore.QRectF(
+        locator = QtCore.QRectF(
             scalar * self.Xposlocator, scalar * self.Yposlocator,
             scalar * self.Wlocator, scalar * self.Hlocator
-        ))
+        )
+
+        # In the same units CalcSize works in, so the bound is the level extent
+        # the rest of this method has just drawn.
+        painter.drawRect(locator.intersected(
+            QtCore.QRectF(0, 0, self.maxX, self.maxY)))
 
         self._paintPeerViews(painter)
 
@@ -325,7 +360,9 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         rect = QtCore.QRectF()
 
         for zone in globals_.Area.zones:
-            rect |= transform.mapRect(zone.sceneBoundingRect())
+            mapped = self._mappedBounds(zone, transform)
+            if mapped is not None:
+                rect |= mapped
 
         for layer in globals_.Area.layers:
             for obj in layer:
@@ -338,11 +375,27 @@ class LevelOverviewWidget(QtWidgets.QWidget):
             rect |= ent.LevelRect
 
         for location in globals_.Area.locations:
-            rect |= transform.mapRect(location.sceneBoundingRect())
+            mapped = self._mappedBounds(location, transform)
+            if mapped is not None:
+                rect |= mapped
 
         for path in globals_.Area.paths:
             for node in path._nodes:
                 rect |= node.LevelRect
+
+        if rect.isNull():
+            # Nothing placed yet, so there is no level geometry to measure. The
+            # old code left maxX/maxY at 0 here, which made Rescale divide the
+            # widget width by 45 - an enormous scale - and the viewport
+            # rectangle then drew far larger than the widget holding it. Zement
+            # reports this has been so since the Reggie 1.0 days.
+            #
+            # A default the size of one screen of level gives an empty canvas
+            # the same proportions a level with one object in the corner has,
+            # which is what it should look like.
+            self.maxX = 100
+            self.maxY = 40
+            return
 
         _, _, self.maxX, self.maxY = rect.getCoords()
 

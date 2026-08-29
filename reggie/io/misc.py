@@ -2024,69 +2024,6 @@ class PreferencesDialog(QtWidgets.QDialog):
                 # Display full filepath
                 self.fullFileTitle = QtWidgets.QCheckBox(globals_.trans.string('PrefsDlg', 49))
 
-                # Draggable area tabs (Block D-c). Literal rather than a
-                # trans.string: the translation files are numbered XML entries
-                # shipped per language, so adding one is its own change and not
-                # something to slip into a UI phase.
-                self.tabsDraggable = QtWidgets.QCheckBox('Allow dragging area tabs to reorder them')
-                self.tabsDraggable.setToolTip(
-                    'Off: tabs are always sorted by patch, then by level.\n'
-                    'On: the first tab you drag switches to manual order, and\n'
-                    'new tabs are added at the end.')
-
-                # Which side the sidebar is docked to (Block D-c).
-                self.sidebarSide = QtWidgets.QComboBox()
-                self.sidebarSide.addItem('Left', 'left')
-                self.sidebarSide.addItem('Right', 'right')
-                self.sidebarSide.setToolTip(
-                    'Which side of the window the sidebar is docked to.\n'
-                    'The icon rail stays on the outside either way.')
-
-                # Which corner of the canvas the level overview sits in, and how
-                # tall it is (Block D-c). Height is a percentage of the canvas
-                # rather than pixels: the overview is a scaled picture of the
-                # whole level, so what matters is how much of the window it
-                # takes, and a pixel height right on one monitor is wrong on the
-                # next. Dragging its grip writes the same setting.
-                self.overviewCorner = QtWidgets.QComboBox()
-                self.overviewCorner.addItem('Bottom right', 'bottomright')
-                self.overviewCorner.addItem('Bottom left', 'bottomleft')
-                self.overviewCorner.addItem('Top right', 'topright')
-                self.overviewCorner.addItem('Top left', 'topleft')
-                self.overviewCorner.setToolTip(
-                    'Which corner of the canvas the level overview sits in.')
-
-                from reggie.ui.overlay import (MAX_OPACITY_PCT, MAX_SIZE_PCT,
-                                               MIN_OPACITY_PCT, MIN_SIZE_PCT)
-
-                self.overviewHeight = QtWidgets.QDoubleSpinBox()
-                self.overviewHeight.setRange(MIN_SIZE_PCT, MAX_SIZE_PCT)
-                self.overviewHeight.setSingleStep(0.5)
-                self.overviewHeight.setDecimals(1)
-                self.overviewHeight.setSuffix(' % of canvas height')
-                self.overviewHeight.setToolTip(
-                    'How tall the level overview is, as a share of the canvas.\n'
-                    'You can also drag its inward corner to resize it.')
-
-                # Background opacity. Two controls rather than one, because
-                # "off" is a distinct state from "100%": off means the setting
-                # is not in play at all, and the spinbox greys out to say so.
-                self.overviewTranslucent = QtWidgets.QCheckBox(
-                    'Fade the level overview background')
-                self.overviewTranslucent.setToolTip(
-                    'When on, the overview background is see-through.\n'
-                    'It becomes solid while the pointer is over it.')
-
-                self.overviewOpacity = QtWidgets.QDoubleSpinBox()
-                self.overviewOpacity.setRange(MIN_OPACITY_PCT, MAX_OPACITY_PCT)
-                self.overviewOpacity.setSingleStep(5.0)
-                self.overviewOpacity.setDecimals(0)
-                self.overviewOpacity.setSuffix(' % opaque')
-                self.overviewOpacity.setToolTip(
-                    'How solid the faded background is. Lower is more \n'
-                    'see-through. The level drawing itself is never faded.')
-                self.overviewTranslucent.toggled.connect(
-                    self.overviewOpacity.setEnabled)
 
                 # Create the main layout
                 L = QtWidgets.QFormLayout()
@@ -2101,12 +2038,6 @@ class PreferencesDialog(QtWidgets.QDialog):
                 L.addWidget(self.fullObjSize)
                 L.addWidget(self.insertPathNode)
                 L.addWidget(self.fullFileTitle)
-                L.addWidget(self.tabsDraggable)
-                L.addRow('Sidebar side:', self.sidebarSide)
-                L.addRow('Level overview corner:', self.overviewCorner)
-                L.addRow('Level overview height:', self.overviewHeight)
-                L.addWidget(self.overviewTranslucent)
-                L.addRow('Overview background:', self.overviewOpacity)
                 self.setLayout(L)
 
                 # Set the buttons
@@ -2146,41 +2077,6 @@ class PreferencesDialog(QtWidgets.QDialog):
                 self.fullObjSize.setChecked(globals_.PlaceObjectsAtFullSize)
                 self.insertPathNode.setChecked(globals_.InsertPathNode)
                 self.fullFileTitle.setChecked(globals_.UseFullFilepath)
-                self.tabsDraggable.setChecked(bool(setting('TabsDraggable', False)))
-
-                side = str(setting('SidebarSide', 'left') or 'left').lower()
-                index = self.sidebarSide.findData('right' if side == 'right' else 'left')
-                if index >= 0:
-                    self.sidebarSide.setCurrentIndex(index)
-
-                from reggie.ui.overlay import (DEFAULT_OPACITY_PCT,
-                                               configured_corner,
-                                               configured_height_pct)
-
-                index = self.overviewCorner.findData(configured_corner())
-                if index >= 0:
-                    self.overviewCorner.setCurrentIndex(index)
-                self.overviewHeight.setValue(configured_height_pct())
-
-                translucent = setting('OverviewTranslucent', True)
-                if isinstance(translucent, str):
-                    translucent = translucent.strip().lower() not in (
-                        'false', '0', 'no', '')
-                translucent = bool(translucent)
-
-                self.overviewTranslucent.setChecked(translucent)
-                self.overviewOpacity.setEnabled(translucent)
-
-                # Read the stored percentage directly, not configured_opacity_
-                # pct(): that returns 100 when fading is off, which would
-                # overwrite the user's chosen value the moment they turn it off
-                # and on again.
-                try:
-                    stored = float(setting('OverviewOpacityPct',
-                                           DEFAULT_OPACITY_PCT))
-                except (TypeError, ValueError):
-                    stored = DEFAULT_OPACITY_PCT
-                self.overviewOpacity.setValue(stored)
 
             def ClearRecent(self):
                 """
@@ -2525,6 +2421,82 @@ class PreferencesDialog(QtWidgets.QDialog):
                 self.scalingWorkingLabel = QtWidgets.QLabel('')
                 scalingGrid.addWidget(self.scalingWorkingLabel, 2, 0, 1, 3)  # Span all columns
 
+                # -- the shell (Block D-c) --------------------------------
+                #
+                # This tab is where new, not-yet-sorted preferences go, agreed a
+                # few blocks back; proper grouping comes later. Literals rather
+                # than trans.string throughout: the translation files are
+                # numbered XML entries shipped per language, so adding entries
+                # is its own change and not something to slip into a UI phase.
+                self.shellLabel = QtWidgets.QLabel('<b>Tabs, sidebar and overview:</b>')
+
+                self.tabsDraggable = QtWidgets.QCheckBox(
+                    'Allow dragging area tabs to reorder them')
+                self.tabsDraggable.setToolTip(
+                    'Off: tabs are always sorted by patch, then by level.\n'
+                    'On: the first tab you drag switches to manual order, and\n'
+                    'new tabs are added at the end.')
+
+                self.sidebarSide = QtWidgets.QComboBox()
+                self.sidebarSide.addItem('Left', 'left')
+                self.sidebarSide.addItem('Right', 'right')
+                self.sidebarSide.setToolTip(
+                    'Which side of the window the sidebar is docked to.\n'
+                    'The icon rail stays on the outside either way.')
+
+                # Height is a percentage of the canvas rather than pixels: the
+                # overview is a scaled picture of the whole level, so what
+                # matters is how much of the window it takes, and a pixel height
+                # right on one monitor is wrong on the next. Dragging the
+                # overview's grip writes the same setting.
+                self.overviewCorner = QtWidgets.QComboBox()
+                self.overviewCorner.addItem('Bottom right', 'bottomright')
+                self.overviewCorner.addItem('Bottom left', 'bottomleft')
+                self.overviewCorner.addItem('Top right', 'topright')
+                self.overviewCorner.addItem('Top left', 'topleft')
+                self.overviewCorner.setToolTip(
+                    'Which corner of the canvas the level overview sits in.')
+
+                from reggie.ui.overlay import (MAX_OPACITY_PCT, MAX_SIZE_PCT,
+                                               MIN_OPACITY_PCT, MIN_SIZE_PCT)
+
+                self.overviewHeight = QtWidgets.QDoubleSpinBox()
+                self.overviewHeight.setRange(MIN_SIZE_PCT, MAX_SIZE_PCT)
+                self.overviewHeight.setSingleStep(0.5)
+                self.overviewHeight.setDecimals(1)
+                self.overviewHeight.setSuffix(' % of canvas height')
+                self.overviewHeight.setToolTip(
+                    'How tall the level overview is, as a share of the canvas.\n'
+                    'You can also drag its inward corner to resize it.')
+
+                # Two controls rather than one, because "off" is a distinct
+                # state from "100%": off means the setting is not in play at
+                # all, and the spinbox greys out to say so.
+                self.overviewTranslucent = QtWidgets.QCheckBox(
+                    'Fade the level overview background')
+                self.overviewTranslucent.setToolTip(
+                    'When on, the overview background is see-through.\n'
+                    'It becomes solid while the pointer is over it.')
+
+                self.overviewOpacity = QtWidgets.QDoubleSpinBox()
+                self.overviewOpacity.setRange(MIN_OPACITY_PCT, MAX_OPACITY_PCT)
+                self.overviewOpacity.setSingleStep(5.0)
+                self.overviewOpacity.setDecimals(0)
+                self.overviewOpacity.setSuffix(' % opaque')
+                self.overviewOpacity.setToolTip(
+                    'How solid the faded background is. Lower is more \n'
+                    'see-through. The level drawing itself is never faded.')
+                self.overviewTranslucent.toggled.connect(
+                    self.overviewOpacity.setEnabled)
+
+                shellForm = QtWidgets.QFormLayout()
+                shellForm.addRow(self.tabsDraggable)
+                shellForm.addRow('Sidebar side:', self.sidebarSide)
+                shellForm.addRow('Level overview corner:', self.overviewCorner)
+                shellForm.addRow('Level overview height:', self.overviewHeight)
+                shellForm.addRow(self.overviewTranslucent)
+                shellForm.addRow('Overview background:', self.overviewOpacity)
+
                 # Create the main layout
                 L = QtWidgets.QVBoxLayout()
                 L.addWidget(self.toolbarDockingLabel)
@@ -2533,6 +2505,9 @@ class PreferencesDialog(QtWidgets.QDialog):
                 L.addSpacing(20)
                 L.addWidget(self.scalingLabel)
                 L.addLayout(scalingGrid)
+                L.addSpacing(20)
+                L.addWidget(self.shellLabel)
+                L.addLayout(shellForm)
                 L.addStretch(1)
                 self.setLayout(L)
 
@@ -2616,6 +2591,43 @@ class PreferencesDialog(QtWidgets.QDialog):
                 
                 self.uiScaleSlider.blockSignals(False)
                 self.fontScaleSlider.blockSignals(False)
+
+                # -- the shell (Block D-c) --------------------------------
+                from reggie.ui.overlay import (DEFAULT_OPACITY_PCT,
+                                               configured_corner,
+                                               configured_height_pct)
+
+                self.tabsDraggable.setChecked(bool(setting('TabsDraggable', False)))
+
+                side = str(setting('SidebarSide', 'left') or 'left').lower()
+                index = self.sidebarSide.findData(
+                    'right' if side == 'right' else 'left')
+                if index >= 0:
+                    self.sidebarSide.setCurrentIndex(index)
+
+                index = self.overviewCorner.findData(configured_corner())
+                if index >= 0:
+                    self.overviewCorner.setCurrentIndex(index)
+                self.overviewHeight.setValue(configured_height_pct())
+
+                translucent = setting('OverviewTranslucent', True)
+                if isinstance(translucent, str):
+                    translucent = translucent.strip().lower() not in (
+                        'false', '0', 'no', '')
+                translucent = bool(translucent)
+
+                self.overviewTranslucent.setChecked(translucent)
+                self.overviewOpacity.setEnabled(translucent)
+
+                # The stored percentage directly, not configured_opacity_pct():
+                # that returns 100 when fading is off, which would overwrite the
+                # chosen value the moment the user turns it off and on again.
+                try:
+                    stored = float(setting('OverviewOpacityPct',
+                                           DEFAULT_OPACITY_PCT))
+                except (TypeError, ValueError):
+                    stored = DEFAULT_OPACITY_PCT
+                self.overviewOpacity.setValue(stored)
 
         return InterfaceTab()
 
