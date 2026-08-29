@@ -277,17 +277,17 @@ class EditorSession:
         self.area = area
         self.area_num = area_num
 
-        # The scene and view stay window-owned for now: one canvas widget is
-        # shown at a time, and swapping QGraphicsScene per tab is D-2's job in
-        # the *UI* block, not this one. The undo stack is per session from
-        # here, because two tabs must not share a history.
-        self.scene = None          # LevelScene            (UI block)
-        self.view = None           # LevelViewWidget       (UI block)
+        # Built on first use, like the undo stack - see the scene/view
+        # properties. Per session since D-c.1: before that one scene was shared
+        # and emptied on every switch, which is what made an area change able to
+        # destroy the outgoing area's items.
+        self._scene = None         # LevelScene
+        self._view = None          # LevelViewWidget
         self._undo_stack = None
 
-        self.tiles = None          # 0x200*4 + overrides   (phase D-2)
-        self.tileset_files = None  # the 4 slot paths      (phase D-2)
-        self.object_defs = None    # ObjectDefinitions     (phase D-2)
+        self.tiles = None          # 0x200*4 + overrides   (phase D-b.2)
+        self.tileset_files = None  # the 4 slot paths      (phase D-b.2)
+        self.object_defs = None    # ObjectDefinitions     (phase D-b.2)
 
         # What release_tiles() dropped, so restore_tiles() knows what to
         # rebuild. Empty until this session has actually been evicted once.
@@ -328,6 +328,71 @@ class EditorSession:
     def has_undo_stack(self):
         """Whether a stack has actually been created, without creating one."""
         return self._undo_stack is not None
+
+    @property
+    def scene(self):
+        """This session's canvas scene, created on first use.
+
+        One scene per session, so an area's items live in their own scene for as
+        long as the tab is open. Until D-c.1 a single window-owned scene was
+        shared and emptied on every activation - which is why switching areas
+        could destroy the outgoing area's items, and why the level overview then
+        painted deleted ZoneItems.
+
+        Lazy for the same reason the undo stack is: a session can be constructed
+        headlessly, and building a QGraphicsScene needs a QApplication.
+        """
+        if self._scene is None:
+            self._scene = self._build_canvas()[0]
+
+        return self._scene
+
+    @property
+    def view(self):
+        """This session's canvas view, created on first use with its scene."""
+        if self._view is None:
+            self._build_canvas()
+
+        return self._view
+
+    @property
+    def has_canvas(self):
+        """Whether a scene/view pair exists, without building one."""
+        return self._scene is not None
+
+    def _build_canvas(self):
+        """Create this session's scene and view, wired to the main window.
+
+        Both at once: a view is meaningless without its scene, and the signal
+        wiring below is what the window used to do inline for the single shared
+        pair. Returns (scene, view).
+        """
+        from PyQt6 import QtWidgets
+
+        from reggie.io.misc2 import LevelScene, LevelViewWidget
+
+        window = getattr(_globals(), 'mainWindow', None)
+
+        scene = LevelScene(0, 0, 1024 * 24, 512 * 24, window)
+        scene.setItemIndexMethod(
+            QtWidgets.QGraphicsScene.ItemIndexMethod.NoIndex)
+
+        view = LevelViewWidget(scene, window)
+        view.centerOn(0, 0)
+
+        # Guarded: the headless suites build sessions with no window at all, and
+        # a session that cannot be wired is still a usable scene container.
+        if window is not None:
+            scene.selectionChanged.connect(window.ChangeSelectionHandler)
+            view.PositionHover.connect(window.PositionHovered)
+            view.XScrollBar.valueChanged.connect(window.XScrollChange)
+            view.YScrollBar.valueChanged.connect(window.YScrollChange)
+            view.FrameSize.connect(window.HandleWindowSizeChange)
+
+        self._scene = scene
+        self._view = view
+
+        return scene, view
 
     @property
     def level(self):
@@ -395,11 +460,47 @@ class EditorSession:
         the level itself should now be released.
         """
         self.release_tiles()
-        self.scene = None
-        self.view = None
-        # The private attribute, not the property: undo_stack is read-only and
-        # creates a stack on access, so assigning it would raise and asking for
-        # it would build one purely to throw it away.
+
+        # Private attributes throughout, never the properties: scene, view and
+        # undo_stack are all read-only and all *build* on access, so assigning
+        # one would raise and reading one would construct the very object being
+        # thrown away.
+        if self._view is not None:
+            # If this session's canvas is the one on screen, take it out before
+            # destroying it - otherwise the window is left with a central widget
+            # that is being deleted underneath it. The manager activates a
+            # survivor after close(), which puts the right canvas back.
+            window = getattr(_globals(), 'mainWindow', None)
+            if window is not None and window.centralWidget() is self._view:
+                window.takeCentralWidget()
+
+            # The view holds the scene; dropping the reference is not enough
+            # while Qt still has the widget parented to the window.
+            self._view.setParent(None)
+            self._view.deleteLater()
+            self._view = None
+
+        if self._scene is not None:
+            # Items belong to the area, which outlives this session whenever the
+            # level stays open. Detach rather than clear() - clear() would
+            # delete them, which is D-b.4's lesson: the crash on switching back
+            # to an edited area, and the path-node crash after it.
+            #
+            # Paths need one extra step. A path tracks whether its connecting
+            # line is in a scene, and add_to_scene() re-adds the line only when
+            # that flag is False - so detaching the line without clearing the
+            # flag would bring the nodes back later with nothing joining them.
+            for item in self._scene.items():
+                path = getattr(item, '_path', None)
+                if path is not None and hasattr(path, '_has_line'):
+                    path._has_line = False
+
+            for item in self._scene.items():
+                self._scene.removeItem(item)
+
+            self._scene.deleteLater()
+            self._scene = None
+
         self._undo_stack = None
         return self.handle.detach(self)
 
@@ -545,6 +646,15 @@ class SessionManager:
                 key=lambda s: s.last_active_serial,
                 default=None,
             )
+
+            # The closed session's canvas has just been destroyed, so the window
+            # has no central widget until the survivor's is put up. Assigned
+            # directly above rather than through activate(), because the state
+            # bindings do not need moving again - only what is on screen does.
+            window = getattr(_globals(), 'mainWindow', None)
+            shower = getattr(window, 'ShowSessionCanvas', None)
+            if shower is not None:
+                shower(self._active)
 
         return released
 

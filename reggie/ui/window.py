@@ -195,20 +195,27 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.setIconSize(QtCore.QSize(16, 16))
         self.setUnifiedTitleAndToolBarOnMac(True)
 
-        # create the level view
-        self.scene = LevelScene(0, 0, 1024 * 24, 512 * 24, self)
-        self.scene.setItemIndexMethod(QtWidgets.QGraphicsScene.ItemIndexMethod.NoIndex)
-        self.scene.selectionChanged.connect(self.ChangeSelectionHandler)
+        # The canvas belongs to the active session from D-c.1 on; self.scene and
+        # self.view are properties reading it. This pair is the fallback, used
+        # before the first level is opened - the window exists and is shown well
+        # before any session does, and ~87 call sites read mainWindow.scene /
+        # .view without checking.
+        self._fallbackScene = LevelScene(0, 0, 1024 * 24, 512 * 24, self)
+        self._fallbackScene.setItemIndexMethod(QtWidgets.QGraphicsScene.ItemIndexMethod.NoIndex)
+        self._fallbackScene.selectionChanged.connect(self.ChangeSelectionHandler)
 
-        self.view = LevelViewWidget(self.scene, self)
-        self.view.centerOn(0, 0)  # this scrolls to the top left
-        self.view.PositionHover.connect(self.PositionHovered)
-        self.view.XScrollBar.valueChanged.connect(self.XScrollChange)
-        self.view.YScrollBar.valueChanged.connect(self.YScrollChange)
-        self.view.FrameSize.connect(self.HandleWindowSizeChange)
+        self._fallbackView = LevelViewWidget(self._fallbackScene, self)
+        self._fallbackView.centerOn(0, 0)  # this scrolls to the top left
+        self._fallbackView.PositionHover.connect(self.PositionHovered)
+        self._fallbackView.XScrollBar.valueChanged.connect(self.XScrollChange)
+        self._fallbackView.YScrollBar.valueChanged.connect(self.YScrollChange)
+        self._fallbackView.FrameSize.connect(self.HandleWindowSizeChange)
 
         # done creating the window!
-        self.setCentralWidget(self.view)
+        # D-c.2 replaces this with the tabbed master container; until then the
+        # window still shows exactly one canvas, and ShowSessionCanvas swaps
+        # which one when the active session changes.
+        self.setCentralWidget(self._fallbackView)
 
         # Composed controllers extracted from this class (Phase 2 refactor).
         # Instantiated before the clipboard wiring below, because
@@ -368,6 +375,63 @@ class ReggieWindow(QtWidgets.QMainWindow):
     actions = {}
 
     @property
+    def scene(self):
+        """The active session's canvas scene.
+
+        A property rather than an attribute so the ~87 sites that read
+        ``mainWindow.scene`` / ``.view`` reach whichever tab is in front without
+        any of them changing - the same trick ``undoStack`` uses, and the same
+        reason: many readers, and none of them holds the value across a switch.
+
+        Falls back to a window-owned scene before the first session exists; the
+        window is built and shown before a level is opened.
+        """
+        session = self._activeSession()
+        return self._fallbackScene if session is None else session.scene
+
+    @property
+    def view(self):
+        """The active session's canvas view. See :attr:`scene`."""
+        session = self._activeSession()
+        return self._fallbackView if session is None else session.view
+
+    def _activeSession(self):
+        """The active session, or None before one exists."""
+        manager = globals_.get_session_manager()
+        return manager.active if manager is not None else None
+
+    def ShowSessionCanvas(self, session):
+        """Put a session's canvas on screen.
+
+        Until D-c.2's tab bar exists the window shows exactly one canvas, so
+        activating a session means swapping the central widget. Deliberately
+        *not* reparenting anything else: the outgoing view keeps its scene and
+        its items, which is the whole point of a canvas per session.
+        """
+        view = self._fallbackView if session is None else session.view
+
+        if self.centralWidget() is view:
+            return False
+
+        # takeCentralWidget rather than setCentralWidget alone. Measured: with
+        # PyQt the replaced widget does in fact survive, because the session
+        # still holds a Python reference to it - so this is not the same live
+        # hazard as QGraphicsScene.clear(). It is still the right call: taking
+        # the widget back makes the ownership transfer explicit instead of
+        # resting on a reference existing somewhere else, and a future caller
+        # that drops its reference first would otherwise lose the whole scene
+        # with no warning.
+        previous = self.takeCentralWidget()
+        if previous is not None:
+            previous.setParent(None)
+            previous.hide()
+
+        self.setCentralWidget(view)
+        view.show()
+
+        return True
+
+    @property
     def undoStack(self):
         """The active session's undo history.
 
@@ -376,13 +440,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         of them changing. Falls back to a window-owned stack before the first
         session exists - the window is built before a level is opened.
         """
-        manager = globals_.get_session_manager()
-        session = manager.active if manager is not None else None
-
-        if session is None:
-            return self._fallbackUndoStack
-
-        return session.undo_stack
+        session = self._activeSession()
+        return self._fallbackUndoStack if session is None else session.undo_stack
 
     def BindUndoStack(self, stack):
         """Point the undo/redo menu items at ``stack``.
@@ -428,34 +487,23 @@ class ReggieWindow(QtWidgets.QMainWindow):
     def ActivateSession(self, session):
         """Show an already-open session's area, without touching the disk.
 
-        The editor-facing half of an area switch (Block D, phase D-4). The
-        session manager moves the state bindings - globals_.Area, spritelib, the
-        undo stack; this moves what the user sees.
+        The editor-facing half of an area switch (Block D-b.4). The session
+        manager moves the state bindings - globals_.Area, spritelib, the undo
+        stack; this moves what the user sees.
 
-        The scene is emptied and rebuilt rather than swapped: one LevelScene is
-        window-owned for now, and a scene per session is the UI block's job. The
-        items themselves live on their area and survive being detached, so this
-        is a re-parent, not a reload - nothing is re-read or re-parsed.
+        **Since D-c.1 each session owns its scene**, so activation shows a
+        different canvas rather than emptying and refilling a shared one. That
+        deletes the most dangerous code in D-b: the old path detached every item
+        from one scene and rebuilt it from the incoming area, and getting that
+        subtly wrong destroyed the outgoing area's items twice over (the
+        ZoneItem crash, then the path-node crash). Nothing is detached here at
+        all - the outgoing scene simply stops being on screen.
 
-        **The scene is emptied with removeItem(), never clear().**
-        QGraphicsScene.clear() *destroys* the items it holds - the C++ objects
-        are deleted and the Python wrappers left dangling. That is right in
-        LoadLevel, which is discarding the level and rebuilding every item from
-        scratch, and wrong here, where the outgoing area has to stay intact in
-        its own session. Using clear() here left globals_.Area.zones full of
-        deleted ZoneItems, and the level overview raised "wrapped C/C++ object
-        of type ZoneItem has been deleted" on the way back - inside paintEvent,
-        so the error dialog repainted the widget and the crash repeated until
-        the process was killed (Zement, 2026-08-28, A1 -> A2 -> A1).
+        The side lists are still window-owned, so they are still rebuilt.
         """
         manager = globals_.get_session_manager()
         if manager is None or session is None:
             return False
-
-        # The area's items are about to be pulled out from under the selection.
-        self.scene.clearSelection()
-        self.CurrentSelection = []
-        self._DetachSceneItems()
 
         for thingList in (self.spriteList, self.entranceList, self.locationList,
                           self.pathList, self.commentList):
@@ -464,12 +512,23 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 QtCore.QModelIndex(),
                 QtCore.QItemSelectionModel.SelectionFlag.Clear)
 
+        self.CurrentSelection = []
+
         # Moves globals_.Area, spritelib's own bindings, this session's tilesets
-        # and the undo stack together. Everything below reads through them.
+        # and the undo stack together. Everything below reads through them -
+        # including self.scene and self.view, which resolve to this session's.
         manager.activate(session)
 
-        # Rebuilding the scene moves items and fires their positionChanged
-        # handlers, which call SetDirty. Nothing here is a user edit.
+        # Put this session's canvas on screen before anything reads self.scene:
+        # the property already answers with the new one, but the widget on
+        # display would otherwise still be the old.
+        self.ShowSessionCanvas(session)
+
+        # ResetPalette adds each item to the scene and fires positionChanged
+        # handlers, which call SetDirty. Nothing here is a user edit. It is
+        # still called on every activation because the *side lists* were just
+        # cleared; the scene work inside it is a no-op the second time, since
+        # QGraphicsScene ignores an item it already holds.
         globals_.DirtyOverride += 1
         try:
             self.ResetPalette()
@@ -485,47 +544,6 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.levelOverview.update()
 
         return True
-
-    def _DetachSceneItems(self):
-        """Empty the scene without destroying what was in it.
-
-        The counterpart to scene.clear() for a switch between two areas that
-        both stay open. clear() deletes the underlying C++ objects, which is
-        correct when the level is being thrown away and fatal when it is not:
-        the area keeps Python references to its zones, sprites and entrances,
-        and every one of them would be left wrapping freed memory.
-
-        removeItem() detaches instead, and an item detached this way can be
-        added back to a scene unchanged - which is exactly what ResetPalette
-        does when that area is activated again.
-        """
-        # Paths track whether their connecting line is in a scene, and
-        # add_to_scene() re-adds the line only when that flag is False. The line
-        # is about to be detached with everything else, so leaving the flag set
-        # would make the path's nodes come back with no line joining them.
-        # Nothing else in the editor detaches a path wholesale, which is why the
-        # flag has never needed clearing before.
-        #
-        # Two sources, because neither alone is enough. The scene's line items
-        # know their path, but globals_.Area may already be the *incoming* area
-        # by the time this runs - open_area() activates before ActivateSession
-        # is called - so the outgoing area is not reachable through the proxy.
-        # And a line that is already detached is not in the scene to be found,
-        # so a path left inconsistent by anything else would stay that way.
-        # Taking both makes this self-correcting rather than order-dependent.
-        for item in self.scene.items():
-            if isinstance(item, PathEditorLineItem):
-                path = getattr(item, '_path', None)
-                if path is not None:
-                    path._has_line = False
-
-        for path in getattr(globals_.Area, 'paths', None) or ():
-            line = getattr(path, '_line_item', None)
-            if line is None or line.scene() is None:
-                path._has_line = False
-
-        for item in self.scene.items():
-            self.scene.removeItem(item)
 
     def _RefillAreaComboBox(self):
         """Rebuild the area selector from the level actually open.
