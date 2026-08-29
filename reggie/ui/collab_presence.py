@@ -342,7 +342,16 @@ class PresenceOverlay:
     """
 
     def __init__(self, scene):
-        self.scene = scene
+        # `scene` is a property below, resolving to whichever session's canvas
+        # is in front. This flag is what it answers None for once stop() has run
+        # - the overlay is built per session and must draw nothing after it.
+        #
+        # It used to be a captured scene, which was right while the editor had
+        # exactly one. Since D-c.1 every session owns its own, so a captured
+        # scene meant peers' cursors were added to whichever canvas happened to
+        # be active when the collab session started - invisible from every other
+        # tab, and from all of them after an area switch (Zement, 2026-08-29).
+        self._active = scene is not None
         self._cursors = {}     # session_id -> PeerCursor
         self._flashes = []
         self._views = {}       # session_id -> {'x','y','w','h'}
@@ -359,6 +368,29 @@ class PresenceOverlay:
         self._idle_timer.setInterval(2000)
         self._idle_timer.timeout.connect(self._dropIdleCursors)
         self._idle_timer.start()
+
+    @property
+    def scene(self):
+        """The canvas peers should appear on: whichever one is in front.
+
+        Resolved on every access rather than captured, so a cursor arriving
+        while the user is on area 2 lands on area 2's canvas. Reads through
+        mainWindow.scene, which is itself a property following the active
+        session - the same chain everything else in the editor uses.
+        """
+        if not self._active:
+            return None
+
+        from reggie.core import globals_
+
+        window = getattr(globals_, 'mainWindow', None)
+        return getattr(window, 'scene', None) if window is not None else None
+
+    @scene.setter
+    def scene(self, value):
+        # stop() assigns None to mean "draw nothing from now on"; the property
+        # cannot be given a scene, since which one is right changes with the tab.
+        self._active = value is not None
 
     # -- configuration ------------------------------------------------------
 
@@ -427,6 +459,7 @@ class PresenceOverlay:
             return
 
         cursor = self._cursors.get(session_id)
+        scene = self.scene
 
         # A cursor destroyed by a scene rebuild leaves a live Python wrapper
         # with no C++ object, and every call on it raises. Detect that here so
@@ -440,8 +473,16 @@ class PresenceOverlay:
             if cursor is None:
                 info = self._roster.get(session_id, {})
                 cursor = PeerCursor(info.get('nick', ''), info.get('color'))
-                self.scene.addItem(cursor)
+                scene.addItem(cursor)
                 self._cursors[session_id] = cursor
+            elif cursor.scene() is not scene:
+                # The user changed tabs since this cursor was made. Move it to
+                # the canvas now in front rather than leaving it on the old one,
+                # where nobody would see it. removeItem, never clear(): the
+                # latter destroys, which is D-b.4's lesson.
+                if cursor.scene() is not None:
+                    cursor.scene().removeItem(cursor)
+                scene.addItem(cursor)
 
             cursor.setPos(x, y)
             cursor.setVisible(True)
@@ -583,8 +624,13 @@ class PresenceOverlay:
         turning into a crash.
         """
         try:
-            if self.scene is not None and item.scene() is self.scene:
-                self.scene.removeItem(item)
+            # Whichever scene the item is actually in, not whichever is active:
+            # since D-c.1 a cursor may sit on a tab the user has since left, and
+            # comparing against the current scene would silently leave it there
+            # for the rest of the session.
+            owner = item.scene()
+            if owner is not None:
+                owner.removeItem(item)
         except RuntimeError:
             pass
 

@@ -266,21 +266,20 @@ class LevelOverviewWidget(QtWidgets.QWidget):
 
         painter.setPen(QtGui.QPen(globals_.theme.color('overview_viewbox'), 1))
 
-        # The rectangle showing where the canvas is looking. Clipped to the
-        # level's own extent: the canvas can be scrolled past the last object,
-        # or be larger than the whole level on an almost-empty one, and an
-        # unclipped rectangle then spills outside the widget drawing it. Zement
-        # reports this has looked wrong since the Reggie 1.0 days.
+        # The rectangle showing where the canvas is looking.
+        #
+        # Deliberately NOT clipped to the level extent. A first attempt at the
+        # empty-level bug clipped it there, which broke the working case badly:
+        # the rectangle is free to sit anywhere the canvas can scroll to, which
+        # is well outside the bounding box of the placed items, so clipping made
+        # it shrink to nothing as it moved and refuse to pass the last object
+        # (Zement, 2026-08-29). The empty-level case is fixed in CalcSize, where
+        # it belongs - by giving an empty level a real extent instead of zero.
         scalar = 1 / (24 * self.mainWindowScale)
-        locator = QtCore.QRectF(
+        painter.drawRect(QtCore.QRectF(
             scalar * self.Xposlocator, scalar * self.Yposlocator,
             scalar * self.Wlocator, scalar * self.Hlocator
-        )
-
-        # In the same units CalcSize works in, so the bound is the level extent
-        # the rest of this method has just drawn.
-        painter.drawRect(locator.intersected(
-            QtCore.QRectF(0, 0, self.maxX, self.maxY)))
+        ))
 
         self._paintPeerViews(painter)
 
