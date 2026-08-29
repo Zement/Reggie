@@ -98,6 +98,12 @@ class MasterTabWidget(QtWidgets.QTabWidget):
         self.tabCloseRequested.connect(self._handleCloseRequested)
         self.tabBar().tabMoved.connect(self._handleTabMoved)
 
+        # The level overview floats over the canvas (D-c.4) rather than living
+        # in a dock. Parented here so it moves with the canvas area and is
+        # clipped by it; positioned by _positionOverlay on every resize.
+        self.overlay = None
+        self.overlayMargin = 12
+
     # -- reading the tabs ------------------------------------------------
 
     def sessionAt(self, index):
@@ -346,3 +352,43 @@ class MasterTabWidget(QtWidgets.QTabWidget):
             return
 
         self._manualOrder = True
+
+    # -- the canvas overlay ----------------------------------------------
+
+    def setOverlay(self, widget, width=260, height=110):
+        """Float a widget over the bottom-right of the canvas area.
+
+        Used for the level overview (D-c.4), which was a dock the user had to
+        position and could lose behind the window. Over the canvas it is always
+        where the canvas is, and it costs no layout space.
+
+        Deliberately a plain child rather than a Qt::Tool window: a real window
+        would sit above the editor when the editor is not focused, which is what
+        made the floating overview annoying in the first place.
+        """
+        self.overlay = widget
+
+        if widget is None:
+            return
+
+        widget.setParent(self)
+        widget.resize(width, height)
+        widget.raise_()
+        widget.show()
+        self._positionOverlay()
+
+    def _positionOverlay(self):
+        if self.overlay is None or not self.overlay.isVisible():
+            return
+
+        margin = self.overlayMargin
+        size = self.overlay.size()
+
+        # Bottom-right of the *page* area, not of the whole widget, so the tab
+        # bar's height does not push it off the bottom.
+        self.overlay.move(max(margin, self.width() - size.width() - margin),
+                          max(margin, self.height() - size.height() - margin))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._positionOverlay()

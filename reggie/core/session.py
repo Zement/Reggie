@@ -295,6 +295,19 @@ class EditorSession:
 
         self.dirty = False
 
+        # What the user is looking at and what they have picked, per area
+        # (phase D-c.4). Window attributes until the tab bar made them visibly
+        # wrong: the canvas moved to the session in D-c.1, so the zoom % in the
+        # status bar reported whichever area was zoomed last, and a sprite's
+        # property panel stayed up over a tab where nothing was selected.
+        #
+        # zoom_level is None until the session is first shown, at which point it
+        # takes the editor's default - a session cannot pick one at construction
+        # because ZoomLevels lives on the window, which may not exist yet.
+        self.zoom_level = None
+        self.sel_obj = None
+        self.current_selection = []
+
         # Bumped by the manager on every activation, so the tile-eviction pass
         # in phase D-2 can find the least recently used session without
         # needing a clock. Date.now-free by construction.
@@ -647,6 +660,14 @@ class SessionManager:
         if shower is not None and session is not None:
             shower(session)
 
+        # ...and so does what the toolbar offers. Here for the same reason as
+        # the canvas above: opening a file reaches activate() without going
+        # through ReggieWindow.ActivateSession, so a level opened after the last
+        # one closed would come up with every level action still greyed out.
+        syncer = getattr(window, 'SyncToolbarContext', None)
+        if syncer is not None and session is not None:
+            syncer()
+
         return previous
 
     def close(self, session):
@@ -682,6 +703,14 @@ class SessionManager:
             shower = getattr(window, 'ShowSessionCanvas', None)
             if shower is not None:
                 shower(self._active)
+
+            # With no session left there is no level to act on, so the level
+            # actions go inactive (D-c.4). activate() covers the case where a
+            # survivor took over; this covers closing the last one.
+            if self._active is None:
+                syncer = getattr(window, 'SyncToolbarContext', None)
+                if syncer is not None:
+                    syncer()
 
         return released
 

@@ -44,27 +44,30 @@ class DockBuilder:
         self.win.sidebar = Sidebar(self.win)
         self.win.PlaceSidebar()
 
-        # level overview
-        dock = QtWidgets.QDockWidget(globals_.trans.string('MenuItems', 94), self.win)
-        dock.setFeatures(
-            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable)
-        # dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
-        dock.setObjectName('leveloverview')  # needed for the state to save/restore correctly
-
+        # Level overview (D-c.4): floats over the bottom-right of the canvas
+        # instead of living in a dock the user has to place and can lose behind
+        # the window. It costs no layout space and is always where the canvas is.
         self.win.levelOverview = LevelOverviewWidget()
         self.win.levelOverview.moveIt.connect(self.win.HandleOverviewClick)
-        self.win.levelOverviewDock = dock
-        dock.setWidget(self.win.levelOverview)
+        self.win.tabs.setOverlay(self.win.levelOverview)
 
-        self.win.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
-        dock.setVisible(True)
-        act = dock.toggleViewAction()
+        # A dock gave away toggleViewAction() for free; an overlay needs the
+        # action made by hand. Two-way, so the menu entry reports the state
+        # rather than only setting it.
+        act = QtGui.QAction(globals_.trans.string('MenuItems', 94), self.win)
+        act.setCheckable(True)
+        act.setChecked(True)
+        act.toggled.connect(self.win.levelOverview.setVisible)
         act.setShortcut(GetKeybind('leveloverview'))
         act.setIcon(GetIcon('overview'))
         act.setStatusTip(globals_.trans.string('MenuItems', 95))
         # Register so the keybind editor (SetKeybind) can update the shortcut
         self.win.actions['leveloverview'] = act
         self.win.vmenu.addAction(act)
+
+        # No levelOverviewDock alias: nothing outside this builder ever used it
+        # (only a stale comment in menus.py mentions it), so keeping the name
+        # would suggest a dock that no longer exists.
 
         # The four item-property editors (D-c.3). These were QDockWidgets, each
         # floating and separately closable; they are now panels in slice 3 of
@@ -98,8 +101,12 @@ class DockBuilder:
         tabs.currentChanged.connect(self.win.CreationTabChanged)
         self.win.creationTabs = tabs
 
+        # stretch=1: the palette takes the vertical space the property editors
+        # do not want. It is a scrolling list of objects, so height is directly
+        # more of what the user came for; the editors are fixed-size forms that
+        # would only gain padding.
         dock = self.win.sidebar.addPanel(
-            globals_.trans.string('MenuItems', 96), tabs)
+            globals_.trans.string('MenuItems', 96), tabs, stretch=1)
         self.win.creationDock = dock
         dock.setVisible(True)
 

@@ -230,14 +230,31 @@ class Sidebar(QtWidgets.QWidget):
 
     # -- slice 3 ---------------------------------------------------------
 
-    def addPanel(self, title, widget):
-        """Put a widget in slice 3 and return the host standing in for its dock."""
+    def addPanel(self, title, widget, stretch=0):
+        """Put a widget in slice 3 and return the host standing in for its dock.
+
+        ``stretch`` gives a panel the leftover vertical space. The palette wants
+        it - it is a scrolling list of objects, so extra height is directly more
+        of the thing the user came for - while the property editors are forms of
+        a fixed size that would only gain padding. With every panel at zero the
+        space below them is simply dead, which is what the first D-c.3 build
+        looked like.
+        """
         host = PanelHost(title, widget, self.panelArea)
 
-        # Before the trailing stretch, so the panels stay top-aligned and the
-        # empty space collects at the bottom rather than between them.
-        self._panelLayout.insertWidget(self._panelLayout.count() - 1, host)
+        # Before the trailing stretch, so the panels stay top-aligned and any
+        # space no panel claims collects at the bottom rather than between them.
+        self._panelLayout.insertWidget(self._panelLayout.count() - 1, host, stretch)
         self._panels.append(host)
+
+        if stretch:
+            # A stretched panel only fills if its own contents will expand into
+            # the space; the default policy for most widgets is to stay at their
+            # size hint however much room the layout offers.
+            host.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
+                               QtWidgets.QSizePolicy.Policy.Expanding)
+            widget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
+                                 QtWidgets.QSizePolicy.Policy.Expanding)
 
         return host
 

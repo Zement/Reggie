@@ -5,9 +5,10 @@ window *state* across the composition boundary (see
 _docs/plan/REFACTORING_ANALYSIS.md). The handlers read/write ``self.win.<attr>``
 where they previously used ``self.<attr>``:
 
-* ``win.ZoomLevel`` / ``win.ZoomLevels`` stay **window attributes** — other
-  clusters (e.g. clipboard's ``getEncodedObjects``) read ``self.ZoomLevel`` — so
-  the controller mutates them through ``self.win`` rather than owning them.
+* ``win.ZoomLevels`` (the list of steps) stays a window attribute. ``ZoomLevel``
+  (the current one) became a **property forwarding to the active session** in
+  D-c.4, so zooming one area no longer changes what another reports; the
+  controller still reads and writes it through ``self.win``, unchanged.
 * ``win.view``, ``win.levelOverview``, ``win.actions``, ``win.ZoomWidget``,
   ``win.ZoomStatusWidget``, ``win.scene`` are all pre-existing window widgets.
 
@@ -73,26 +74,23 @@ class ZoomController:
 
         tr = QtGui.QTransform()
         tr.scale(z / 100.0, z / 100.0)
+        # Since D-c.4 this writes the *active session's* zoom, and win.view is
+        # that session's view - so zooming one area leaves the others alone.
         self.win.ZoomLevel = z
         self.win.view.setTransform(tr)
-        self.win.levelOverview.mainWindowScale = z / 100.0
 
         if towardsCursor:
             # (reset back to original transformation anchor)
             self.win.view.setTransformationAnchor(QtWidgets.QGraphicsView.ViewportAnchor.AnchorViewCenter)
 
-        zi = self.win.ZoomLevels.index(z)
-        self.win.actions['zoommax'].setEnabled(zi < len(self.win.ZoomLevels) - 1)
-        self.win.actions['zoomin'].setEnabled(zi < len(self.win.ZoomLevels) - 1)
-        self.win.actions['zoomactual'].setEnabled(z != 100.0)
-        self.win.actions['zoomout'].setEnabled(zi > 0)
-        self.win.actions['zoommin'].setEnabled(zi > 0)
-
-        self.win.ZoomWidget.setZoomLevel(z)
-        self.win.ZoomStatusWidget.setZoomLevel(z)
+        # The status widget, the slider, the five zoom actions and the overview
+        # scale, all from the value just stored. Shared with the tab switch,
+        # which has to do exactly the same work from the other direction - two
+        # copies of this list is how the switch came to disagree with the zoom.
+        self.win.SyncZoomToSession()
 
         # Update the zone grabber rects, to resize for the new zoom level
-        for z in globals_.Area.zones:
-            z.UpdateRects()
+        for zone in globals_.Area.zones:
+            zone.UpdateRects()
 
         self.win.scene.update()

@@ -192,8 +192,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # required variables
         self.UpdateFlag = False
         self.SelectionUpdateFlag = False
-        self.selObj = None
-        self.CurrentSelection = []
+
+        # selObj / CurrentSelection / ZoomLevel are properties below, forwarding
+        # to the active session (D-c.4). These are the fallbacks they use before
+        # a session exists - the window is built before the first level opens.
+        self._fallbackSelObj = None
+        self._fallbackSelection = []
+        self._fallbackZoomLevel = 100.0
 
         # set up the window
         QtWidgets.QMainWindow.__init__(self, None)
@@ -428,6 +433,67 @@ class ReggieWindow(QtWidgets.QMainWindow):
         manager = globals_.get_session_manager()
         return manager.active if manager is not None else None
 
+    @property
+    def ZoomLevel(self):
+        """The active session's zoom, as a percentage.
+
+        Per session since D-c.4. The *view* has held its own transform since
+        D-c.1, so the canvas already zoomed correctly per area; this number did
+        not, and the status bar therefore reported whichever area was zoomed
+        last. Writable, because ZoomTo assigns it.
+
+        A session that has never been shown has no zoom yet and takes the
+        window's default - it cannot pick one at construction, since the list of
+        levels lives here.
+        """
+        session = self._activeSession()
+        if session is None:
+            return self._fallbackZoomLevel
+        if session.zoom_level is None:
+            session.zoom_level = self._fallbackZoomLevel
+        return session.zoom_level
+
+    @ZoomLevel.setter
+    def ZoomLevel(self, value):
+        session = self._activeSession()
+        if session is None:
+            self._fallbackZoomLevel = value
+        else:
+            session.zoom_level = value
+
+    @property
+    def selObj(self):
+        """The item whose property panel is open, per session (D-c.4).
+
+        Window-owned until the tab bar made it visibly wrong: a sprite selected
+        in one area kept its panel up over a tab where nothing was selected, and
+        UpdateModeInfo would then fill that panel from the other area's item.
+        """
+        session = self._activeSession()
+        return self._fallbackSelObj if session is None else session.sel_obj
+
+    @selObj.setter
+    def selObj(self, value):
+        session = self._activeSession()
+        if session is None:
+            self._fallbackSelObj = value
+        else:
+            session.sel_obj = value
+
+    @property
+    def CurrentSelection(self):
+        """The active session's selected items. See :attr:`selObj`."""
+        session = self._activeSession()
+        return self._fallbackSelection if session is None else session.current_selection
+
+    @CurrentSelection.setter
+    def CurrentSelection(self, value):
+        session = self._activeSession()
+        if session is None:
+            self._fallbackSelection = value
+        else:
+            session.current_selection = value
+
     def ShowSessionCanvas(self, session):
         """Bring a session's canvas to the front of the master container.
 
@@ -536,7 +602,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 QtCore.QModelIndex(),
                 QtCore.QItemSelectionModel.SelectionFlag.Clear)
 
-        self.CurrentSelection = []
+        # Note: CurrentSelection is NOT cleared here. It was, before D-c.4 made
+        # it per session - at which point clearing it before activate() would
+        # wipe the *outgoing* area's selection, so leaving that area would lose
+        # what was picked in it. The incoming session brings its own.
 
         # Moves globals_.Area, spritelib's own bindings, this session's tilesets
         # and the undo stack together. Everything below reads through them -
@@ -560,11 +629,94 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self._SyncAreaComboBox()
         self.UpdateTitle()
 
+        # Bring the toolbar, the zoom controls and the property panels in line
+        # with this session (D-c.4). All three read state that now belongs to
+        # the session, and none is driven by a signal a tab switch fires - so
+        # without this the status bar keeps the previous area's zoom % and a
+        # property panel stays open over an area where nothing is selected.
+        self.SyncToolbarContext()
+
         self.scene.update()
         self.levelOverview.Reset()
         self.levelOverview.update()
 
         return True
+
+    def SyncToolbarContext(self):
+        """Enable only what the thing in front can actually do (D-c.4).
+
+        "Context-sensitive" here means the *enabled state* follows what is in
+        front, not that the buttons rearrange themselves. Which buttons the
+        toolbar holds is the user's choice, made in Preferences, and a toolbar
+        that reshuffles under the pointer would be worse than one with a few
+        greyed items.
+
+        Two thirds of it already worked and are not repeated here: the
+        selection-dependent actions (cut, copy, shift, merge, deselect) are set
+        by ChangeSelectionHandler, and the zoom actions by SyncZoomToSession -
+        both of which an area switch now calls. What was missing is the case
+        with no canvas at all, where every level action was still enabled and
+        would act on nothing.
+        """
+        session = self._activeSession()
+        has_canvas = session is not None and session.area is not None
+
+        # Everything that edits or reports on a level. Deliberately a list of
+        # names rather than "all actions": File > Open and Preferences must
+        # stay reachable with no level open, which is how the user gets one.
+        level_actions = (
+            'save', 'saveas', 'savecopyas', 'screenshot',
+            'selectall', 'deselect', 'shiftitems', 'mergelocations',
+            'zoommax', 'zoomin', 'zoomactual', 'zoomout', 'zoommin',
+            'areaoptions', 'zones', 'backgrounds', 'camprofiles',
+            'addarea', 'importarea', 'deletearea', 'reloadgfx',
+            'swapobjectstypes', 'swapobjectstilesets', 'diagnostic',
+        )
+
+        # Names are checked rather than assumed: they are registered across
+        # menus.py and docks.py, and a typo here would silently leave an action
+        # enabled forever rather than raising.
+        for name in level_actions:
+            act = self.actions.get(name)
+            if act is not None:
+                act.setEnabled(has_canvas)
+
+        if has_canvas:
+            # Hand the finer-grained state back to the handlers that own it,
+            # rather than leaving everything blanket-enabled by the loop above.
+            self.ChangeSelectionHandler()
+            self.SyncZoomToSession()
+
+    def SyncZoomToSession(self):
+        """Point the zoom controls at the active session's zoom.
+
+        The view already carries its own transform - it has been per session
+        since D-c.1 - so this is about the *reporting*: the status-bar widget,
+        the slider, and which of the five zoom actions are enabled. Applying the
+        transform again here would be redundant but harmless; not doing it keeps
+        this a read of state rather than a second writer of it.
+        """
+        z = self.ZoomLevel
+
+        try:
+            zi = self.ZoomLevels.index(z)
+        except ValueError:
+            # A zoom that is not one of the steps - reachable by fitting the
+            # window to a zone. The buttons stay usable; only the exact index
+            # is unavailable, so bracket it.
+            zi = min(range(len(self.ZoomLevels)),
+                     key=lambda i: abs(self.ZoomLevels[i] - z))
+
+        self.actions['zoommax'].setEnabled(zi < len(self.ZoomLevels) - 1)
+        self.actions['zoomin'].setEnabled(zi < len(self.ZoomLevels) - 1)
+        self.actions['zoomactual'].setEnabled(z != 100.0)
+        self.actions['zoomout'].setEnabled(zi > 0)
+        self.actions['zoommin'].setEnabled(zi > 0)
+
+        self.ZoomWidget.setZoomLevel(z)
+        self.ZoomStatusWidget.setZoomLevel(z)
+
+        self.levelOverview.mainWindowScale = z / 100.0
 
     def PlaceSidebar(self):
         """Put the sidebar on its configured side of the master container.
@@ -2317,7 +2469,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
     # Zoom controls extracted to reggie.ui.zoom.ZoomController (Phase 2 — see
     # _docs/plan/REFACTORING_ANALYSIS.md). Thin delegators keep the QAction
     # wiring (self.HandleZoomIn, ...) and external self.ZoomTo() calls working.
-    # ZoomLevel / ZoomLevels stay window attributes (other code reads them).
+    # ZoomLevels (the steps) stays a window attribute; ZoomLevel (the current
+    # one) is a property forwarding to the active session since D-c.4.
     def HandleZoomIn(self, *, towardsCursor=False):
         return self._zoom.HandleZoomIn(towardsCursor=towardsCursor)
 
