@@ -100,6 +100,8 @@ from reggie.ui.menus import MenuBuilder
 from reggie.ui.docks import DockBuilder
 from reggie.ui.level_io import LevelIO
 from reggie.ui.tabs import MasterTabWidget
+from reggie.ui import tooltabs
+from reggie.ui.tooltabs import ToolTabManager
 
 #: Version marker for saveState/restoreState (Block D-c).
 #
@@ -233,6 +235,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # and in the headless suites that never open one.
         self.tabs = MasterTabWidget(self)
         self.sidebar = None
+
+        # The tool tabs (D-c.5) - Preferences, the Patch Manager, the undo
+        # history and the collaboration window, as pages rather than windows.
+        # Built here, before anything can open one, and beside the session
+        # manager rather than inside it: sessions are levels, and none of these
+        # four is a level.
+        self.toolTabs = ToolTabManager(self)
 
         self.centralSplitter = QtWidgets.QSplitter(
             QtCore.Qt.Orientation.Horizontal, self)
@@ -573,6 +582,18 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.actions['redo'].setEnabled(stack.canRedo())
         self.HandleUndoTextChanged(stack.undoText())
         self.HandleRedoTextChanged(stack.redoText())
+
+        # The undo history page, if it is open, shows the same stack the menu
+        # items do - so it moves here rather than being wired once at creation.
+        # A QUndoView bound to a dead session's stack is both wrong and a
+        # crash waiting to happen, since the stack goes when the session does.
+        # getattr: the manager can call this during the window's constructor,
+        # before toolTabs exists.
+        manager = getattr(self, 'toolTabs', None)
+        page = manager.dialog(tooltabs.UNDO_HISTORY) if manager is not None else None
+        view = getattr(page, 'undoView', None)
+        if view is not None:
+            view.setStack(stack)
 
     def ActivateSession(self, session):
         """Show an already-open session's area, without touching the disk.
@@ -1258,25 +1279,38 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
     def HandleShowUndoHistory(self):
         """
-        Shows the undo history in a modal dialog (File menu; moves to a
-        nicer home in Block D)
-        """
-        dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle(globals_.trans.string('Undo', 2))
-        dlg.resize(400, 500)
+        Shows the undo history as a tool tab (D-c.5)
 
-        view = QtWidgets.QUndoView(self.undoStack, dlg)
+        The clearest case of the four for being a tab rather than a dialog: it
+        is a live view of the stack you are pushing to, and as a modal dialog
+        you could not edit while watching it.
+        """
+        self.toolTabs.openTool(tooltabs.UNDO_HISTORY,
+                               self._buildUndoHistoryPage,
+                               globals_.trans.string('Undo', 2))
+
+    def _buildUndoHistoryPage(self):
+        """The undo history page, for the tool-tab manager to place."""
+        page = QtWidgets.QDialog()
+        page.setWindowTitle(globals_.trans.string('Undo', 2))
+
+        # Bound to the *stack*, which since D-b belongs to a session - so this
+        # follows BindUndoStack rather than being wired once here. Without that
+        # the page would show whichever level was open when it was opened, and
+        # go quiet after the first area switch.
+        view = QtWidgets.QUndoView(self.undoStack, page)
         view.setEmptyLabel(globals_.trans.string('Undo', 3))
+        page.undoView = view
 
         buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(dlg.reject)
-        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(page.reject)
+        buttons.accepted.connect(page.accept)
 
-        layout = QtWidgets.QVBoxLayout(dlg)
+        layout = QtWidgets.QVBoxLayout(page)
         layout.addWidget(view)
         layout.addWidget(buttons)
 
-        dlg.exec()
+        return page
 
     def _maySaveInSession(self):
         """
@@ -1919,20 +1953,32 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
     def HandlePatchManager(self):
         """
-        Open the Patch Manager dialog
+        Open the Patch Manager as a tool tab (D-c.5)
         """
-        dlg = deferred.PatchManagerDialog()
-        dlg.exec()
+        self.toolTabs.openTool(tooltabs.PATCH_MANAGER,
+                               deferred.PatchManagerDialog,
+                               'Patch Manager')
 
     def HandlePreferences(self):
         """
-        Edit Reggie Next preferences
-        """
-        # Show the dialog
-        dlg = PreferencesDialog()
-        if dlg.exec() == QtWidgets.QDialog.DialogCode.Rejected:
-            return
+        Open the preferences as a tool tab (D-c.5)
 
+        Was a modal ``exec()`` whose caller read a hundred widget values on the
+        line after it returned. As a tab there is no line after, so the reading
+        moved into ApplyPreferences and the tab manager calls it when the user
+        presses OK - which is the same moment, reached differently.
+        """
+        self.toolTabs.openTool(tooltabs.PREFERENCES,
+                               PreferencesDialog,
+                               globals_.trans.string('PrefsDlg', 0))
+
+    def ApplyPreferences(self, dlg):
+        """
+        Write back everything the preferences page holds.
+
+        Called by ToolTabManager when the page is confirmed, with the page still
+        whole. Every line below is what used to follow ``dlg.exec()``.
+        """
         # Get the translation
         name = str(dlg.generalTab.Trans.itemData(dlg.generalTab.Trans.currentIndex(), Qt.ItemDataRole.UserRole))
         setSetting('Translation', name)

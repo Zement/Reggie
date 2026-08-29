@@ -61,7 +61,10 @@ class DockBuilder:
         act = QtGui.QAction(globals_.trans.string('MenuItems', 94), self.win)
         act.setCheckable(True)
         act.setChecked(True)
-        act.toggled.connect(overlayFrame.setVisible)
+        # setUserVisible, not setVisible: a tool tab in front hides the overlay
+        # without the menu's intent changing, and only the former keeps the two
+        # apart (D-c.5).
+        act.toggled.connect(overlayFrame.setUserVisible)
         act.setShortcut(GetKeybind('leveloverview'))
         act.setIcon(GetIcon('overview'))
         act.setStatusTip(globals_.trans.string('MenuItems', 95))

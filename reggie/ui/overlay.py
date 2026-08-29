@@ -179,6 +179,14 @@ class CanvasOverlay(QtWidgets.QFrame):
         # the note in reposition().
         self._userSized = False
 
+        # Whether the user wants this overlay at all, as opposed to whether it
+        # happens to be on screen right now. The two part company over a tool
+        # tab (D-c.5), where the overlay is taken away without the View menu's
+        # toggle changing - so the toggle's state is tracked here rather than
+        # read back from isVisible(), which would answer "no" for the wrong
+        # reason and leave the menu entry unticked after a visit to Preferences.
+        self._userVisible = True
+
         self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
         self.setAutoFillBackground(True)
 
@@ -203,6 +211,20 @@ class CanvasOverlay(QtWidgets.QFrame):
         self.grip = _ResizeGrip(self)
         self.grip.show()
         self.grip.raise_()
+
+    # -- visibility ------------------------------------------------------
+
+    def setUserVisible(self, visible):
+        """The View menu's toggle. Records the intent, then acts on it.
+
+        What the menu drives, so that the tool-tab hide can borrow the overlay
+        away and give it back without the menu entry ever being wrong.
+        """
+        self._userVisible = bool(visible)
+        self.setVisible(self._userVisible)
+
+    def isEnabledByUser(self):
+        return self._userVisible
 
     # -- opacity ---------------------------------------------------------
 

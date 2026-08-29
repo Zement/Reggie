@@ -34,6 +34,7 @@ from PyQt6 import QtCore, QtWidgets
 
 from reggie.core import globals_
 from reggie.core.dirty import setting
+from reggie.ui.tooltabs import ToolTabHost
 
 
 #: Sort key for a tab that is not a canvas - tool tabs go after every level.
@@ -107,10 +108,32 @@ class MasterTabWidget(QtWidgets.QTabWidget):
     # -- reading the tabs ------------------------------------------------
 
     def sessionAt(self, index):
-        """The session shown by tab ``index``, or None for a tool tab."""
+        """The session shown by tab ``index``, or None for a tool tab.
+
+        Tool tabs (D-c.5) carry their ``ToolTabHost`` as tab data, so the check
+        is "is this a session" rather than "is there data". Returning a host
+        here would hand a widget to every caller that expects a session - and
+        several of them go straight on to read ``.file_path``.
+        """
         if index < 0 or index >= self.count():
             return None
-        return self.tabBar().tabData(index)
+
+        data = self.tabBar().tabData(index)
+        return None if isinstance(data, ToolTabHost) else data
+
+    def toolAt(self, index):
+        """The tool host shown by tab ``index``, or None for a canvas tab."""
+        if index < 0 or index >= self.count():
+            return None
+
+        data = self.tabBar().tabData(index)
+        return data if isinstance(data, ToolTabHost) else None
+
+    def indexOfTool(self, host):
+        for index in range(self.count()):
+            if self.toolAt(index) is host:
+                return index
+        return -1
 
     def indexOfSession(self, session):
         for index in range(self.count()):
@@ -319,6 +342,10 @@ class MasterTabWidget(QtWidgets.QTabWidget):
         if self._syncing:
             return
 
+        # The level overview belongs to a canvas; over a tool tab it would float
+        # above a settings form showing the last level's shape.
+        self._syncOverlayVisibility()
+
         session = self.sessionAt(index)
         if session is None:
             return
@@ -338,6 +365,17 @@ class MasterTabWidget(QtWidgets.QTabWidget):
         self._positionOverlay()
 
     def _handleCloseRequested(self, index):
+        host = self.toolAt(index)
+        if host is not None:
+            # Through the manager, not removeTab: the dialog has cleanup to run
+            # and the manager owns the one-instance-per-kind bookkeeping. A tab
+            # closed behind its back would leave the kind marked open forever.
+            #
+            # A tab's X is a dismissal, not a confirmation - so nothing is
+            # applied, exactly as Cancel would not.
+            self.win.toolTabs.closeTool(host.key, apply=False)
+            return
+
         session = self.sessionAt(index)
         if session is None:
             self.removeTab(index)
@@ -357,6 +395,53 @@ class MasterTabWidget(QtWidgets.QTabWidget):
             return
 
         self._manualOrder = True
+
+    # -- tool tabs (D-c.5) -----------------------------------------------
+
+    def addToolTab(self, host, title):
+        """Append a tool tab. Always after every canvas tab.
+
+        Appending is enough to keep the ordering rule: ``sync()`` places canvas
+        tabs at positions 0..n-1 and never moves a tab it does not own, so tool
+        tabs stay in the block above n as canvases come and go. That holds in
+        manual-order mode too, where the user can drag canvas tabs among
+        themselves but a tool tab dragged into the middle is simply where they
+        put it - deliberate, since the mode's whole point is that a tab the user
+        moved is left where they moved it.
+        """
+        index = self.addTab(host, title)
+        self.tabBar().setTabData(index, host)
+
+        # A tool tab is a real tab, so the bar has to be up even if the only
+        # canvas is still the placeholder - otherwise Preferences would open
+        # into a page with no way back to it.
+        self.tabBar().show()
+
+        return index
+
+    def removeToolTab(self, host):
+        index = self.indexOfTool(host)
+        if index == -1:
+            return
+
+        # removeTab does not destroy the page; ToolTabManager owns the host's
+        # lifetime and disposes of it after this returns.
+        self.removeTab(index)
+
+        if self._placeholder is not None and self.count() <= 1:
+            # Back to nothing but the placeholder - hide the bar again, per
+            # showPlaceholder's reasoning.
+            self.tabBar().hide()
+
+    def showTool(self, host):
+        index = self.indexOfTool(host)
+        if index == -1:
+            return False
+
+        if self.currentIndex() != index:
+            self.setCurrentIndex(index)
+
+        return True
 
     # -- the canvas overlay ----------------------------------------------
 
@@ -392,6 +477,22 @@ class MasterTabWidget(QtWidgets.QTabWidget):
         if self.overlay is None:
             return
         self.overlay.reposition()
+
+    def _syncOverlayVisibility(self):
+        """Hide the level overview while a tool tab is in front.
+
+        Its own visibility setting still wins - the View menu's toggle must not
+        be undone by visiting Preferences - so this only takes it away over a
+        tool tab and gives it back over a canvas.
+        """
+        if self.overlay is None:
+            return
+
+        on_canvas = self.toolAt(self.currentIndex()) is None
+        self.overlay.setVisible(on_canvas and self.overlay.isEnabledByUser())
+
+        if on_canvas:
+            self._positionOverlay()
 
     def applyOverlaySettings(self):
         """Re-read the overlay's corner and size settings."""
