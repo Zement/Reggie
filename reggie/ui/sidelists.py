@@ -32,8 +32,8 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         # palette so it follows a light or dark system theme with no setting of
         # its own, and it is the first of the theme colours to be retired; see
         # "Retire the old theming engine" in DEFERRED_ITEMS.md for the other 44.
-        self.bgbrush = QtGui.QBrush(
-            self.palette().color(QtGui.QPalette.ColorRole.Mid))
+        self._bgcolor = self.palette().color(QtGui.QPalette.ColorRole.Mid)
+        self.bgbrush = QtGui.QBrush(self._bgcolor)
         self.objbrush = QtGui.QBrush(globals_.theme.color('overview_object'))
         self.viewbrush = QtGui.QBrush(globals_.theme.color('overview_zone_fill'))
         self.view = QtCore.QRectF()
@@ -44,11 +44,99 @@ class LevelOverviewWidget(QtWidgets.QWidget):
 
         self.Reset()
 
-        self.Xposlocator = 0
-        self.Yposlocator = 0
-        self.Hlocator = 50
-        self.Wlocator = 80
+        # The white rectangle showing where the canvas is looking. These four
+        # were plain attributes fed by whichever view's scrollbars last fired,
+        # so with tabs open every area drew the same rectangle - the position of
+        # whichever one was scrolled most recently (Zement, 2026-08-29).
+        #
+        # They are properties now, derived from the ACTIVE view rather than
+        # stored: every session's view already knows its own scroll position and
+        # size, so reading it cannot go stale, and there is no fifth copy of the
+        # state to keep in step. The setters are kept because XScrollChange and
+        # friends still assign them, and they write the fallback used before any
+        # view exists.
+        self._xposlocator = 0
+        self._yposlocator = 0
+        self._hlocator = 50
+        self._wlocator = 80
         self.mainWindowScale = 1
+
+    def setBackgroundAlpha(self, alpha):
+        """Set how opaque this widget's own background is (Block D-c).
+
+        The overlay frame paints a translucent background, but this widget then
+        fills its whole rect before drawing the level - so without matching the
+        alpha here the frame's transparency would be entirely hidden behind an
+        opaque overview. Only the background: the level drawing itself stays at
+        full strength, which is the point of fading the background at all.
+        """
+        colour = QtGui.QColor(self._bgcolor)
+        colour.setAlpha(max(0, min(255, int(alpha))))
+        self.bgbrush = QtGui.QBrush(colour)
+        self.update()
+
+    def _activeView(self):
+        """The view the locator should describe, or None."""
+        window = getattr(globals_, 'mainWindow', None)
+        return getattr(window, 'view', None) if window is not None else None
+
+    @property
+    def Xposlocator(self):
+        view = self._activeView()
+        if view is None:
+            return self._xposlocator
+        try:
+            return view.XScrollBar.value()
+        except RuntimeError:
+            # The view was destroyed with its session; fall back rather than
+            # take a repaint down.
+            return self._xposlocator
+
+    @Xposlocator.setter
+    def Xposlocator(self, value):
+        self._xposlocator = value
+
+    @property
+    def Yposlocator(self):
+        view = self._activeView()
+        if view is None:
+            return self._yposlocator
+        try:
+            return view.YScrollBar.value()
+        except RuntimeError:
+            return self._yposlocator
+
+    @Yposlocator.setter
+    def Yposlocator(self, value):
+        self._yposlocator = value
+
+    @property
+    def Wlocator(self):
+        view = self._activeView()
+        if view is None:
+            return self._wlocator
+        try:
+            return view.viewport().width()
+        except RuntimeError:
+            return self._wlocator
+
+    @Wlocator.setter
+    def Wlocator(self, value):
+        self._wlocator = value
+
+    @property
+    def Hlocator(self):
+        view = self._activeView()
+        if view is None:
+            return self._hlocator
+        try:
+            return view.viewport().height()
+        except RuntimeError:
+            return self._hlocator
+
+    @Hlocator.setter
+    def Hlocator(self, value):
+        self._hlocator = value
 
     def Reset(self):
         """

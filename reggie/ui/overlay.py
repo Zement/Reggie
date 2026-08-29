@@ -31,13 +31,25 @@ from reggie.core.dirty import setting
 #: Where the overlay can sit. Stored in settings as these strings.
 CORNERS = ('topleft', 'topright', 'bottomleft', 'bottomright')
 
-#: Height as a fraction of the canvas, and the range the user may drag within.
-MIN_HEIGHT_PCT = 3.0
-MAX_HEIGHT_PCT = 20.0
-DEFAULT_HEIGHT_PCT = 6.0
+#: Size as a fraction of the canvas, and the range the user may drag within.
+#
+# Both axes are clamped by the same three numbers. The first version clamped
+# only the height, so the overlay could be dragged as wide as the window while
+# refusing to be dragged as tall (Zement, 2026-08-29).
+MIN_SIZE_PCT = 5.0
+MAX_SIZE_PCT = 25.0
+DEFAULT_SIZE_PCT = 15.0
 
-#: The overlay keeps a 16:9-ish shape unless dragged; width follows height.
-DEFAULT_ASPECT = 2.4
+# Kept as aliases: several call sites and the suites read the height names, and
+# the two axes genuinely share one range.
+MIN_HEIGHT_PCT = MIN_SIZE_PCT
+MAX_HEIGHT_PCT = MAX_SIZE_PCT
+DEFAULT_HEIGHT_PCT = DEFAULT_SIZE_PCT
+
+#: Default opacity of the overlay's background, as a percentage.
+MIN_OPACITY_PCT = 5.0
+MAX_OPACITY_PCT = 100.0
+DEFAULT_OPACITY_PCT = 20.0
 
 
 def configured_corner():
@@ -46,21 +58,45 @@ def configured_corner():
     return value if value in CORNERS else 'bottomright'
 
 
-def configured_height_pct():
+def _clamped_pct(name, default, low=MIN_SIZE_PCT, high=MAX_SIZE_PCT):
     try:
-        value = float(setting('OverviewHeightPct', DEFAULT_HEIGHT_PCT))
+        value = float(setting(name, default))
     except (TypeError, ValueError):
-        value = DEFAULT_HEIGHT_PCT
-    return max(MIN_HEIGHT_PCT, min(MAX_HEIGHT_PCT, value))
+        value = default
+    return max(low, min(high, value))
+
+
+def configured_height_pct():
+    return _clamped_pct('OverviewHeightPct', DEFAULT_SIZE_PCT)
 
 
 def configured_width_pct():
-    try:
-        value = float(setting('OverviewWidthPct', DEFAULT_HEIGHT_PCT * DEFAULT_ASPECT))
-    except (TypeError, ValueError):
-        value = DEFAULT_HEIGHT_PCT * DEFAULT_ASPECT
-    # Wide enough to be a picture, never so wide it becomes the canvas.
-    return max(MIN_HEIGHT_PCT, min(80.0, value))
+    """The width as a share of the canvas.
+
+    Defaults to the height in *pixels* scaled by the canvas aspect, so an
+    untouched overlay is the same shape as the level view it summarises - which
+    is what makes its viewport rectangle read naturally. Expressed as a
+    percentage of the width, that is just the height percentage again, since
+    both are shares of the same rectangle.
+    """
+    return _clamped_pct('OverviewWidthPct', DEFAULT_SIZE_PCT)
+
+
+def configured_opacity_pct():
+    """Background opacity, or 100 when the setting is off.
+
+    Off means opaque rather than invisible: the setting turns *transparency*
+    on and off, and the natural reading of "background opacity: off" is "no
+    see-through background", not "no background".
+    """
+    enabled = setting('OverviewTranslucent', True)
+    if isinstance(enabled, str):
+        enabled = enabled.strip().lower() not in ('false', '0', 'no', '')
+    if not enabled:
+        return 100.0
+
+    return _clamped_pct('OverviewOpacityPct', DEFAULT_OPACITY_PCT,
+                        MIN_OPACITY_PCT, MAX_OPACITY_PCT)
 
 
 class _ResizeGrip(QtWidgets.QWidget):
@@ -138,6 +174,11 @@ class CanvasOverlay(QtWidgets.QFrame):
         self.margin = margin
         self._corner = configured_corner()
 
+        # False until a drag or a settings change has sized this frame, so
+        # reposition() knows whether the current geometry means anything. See
+        # the note in reposition().
+        self._userSized = False
+
         self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
         self.setAutoFillBackground(True)
 
@@ -146,10 +187,10 @@ class CanvasOverlay(QtWidgets.QFrame):
         # theme file: the theme's `bg` is the canvas colour, which is exactly
         # what it must NOT match. Mid/Dark come from the running palette, so
         # this follows a light or dark system theme without a setting.
-        palette = self.palette()
-        base = palette.color(QtGui.QPalette.ColorRole.Mid)
-        palette.setColor(QtGui.QPalette.ColorRole.Window, base)
-        self.setPalette(palette)
+        self._baseColour = self.palette().color(QtGui.QPalette.ColorRole.Mid)
+        self._hovered = False
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
+        self._applyOpacity()
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(1, 1, 1, 1)
@@ -162,6 +203,55 @@ class CanvasOverlay(QtWidgets.QFrame):
         self.grip = _ResizeGrip(self)
         self.grip.show()
         self.grip.raise_()
+
+    # -- opacity ---------------------------------------------------------
+
+    def _applyOpacity(self):
+        """Paint the background at the configured opacity.
+
+        An alpha on the background colour rather than setWindowOpacity or a
+        QGraphicsOpacityEffect: both of those fade the *contents* too, and the
+        level drawing is the part that must stay readable - it is the background
+        the user wants out of the way. Alpha on the brush leaves the overview's
+        own painting at full strength.
+
+        Hovering restores full opacity, so pointing at the overview to use it
+        makes it solid. Focus would be the better trigger, but this frame is not
+        a focusable control and giving it focus would steal it from the canvas
+        mid-edit; hover is what Zement offered as sufficient, and it is also the
+        correct choice here.
+        """
+        colour = QtGui.QColor(self._baseColour)
+
+        if not self._hovered:
+            colour.setAlpha(int(255 * configured_opacity_pct() / 100.0))
+
+        palette = self.palette()
+        palette.setColor(QtGui.QPalette.ColorRole.Window, colour)
+        self.setPalette(palette)
+
+        # A translucent background needs the parent painted behind it, which
+        # autoFillBackground alone does not arrange.
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground,
+                          colour.alpha() < 255)
+        self.setAutoFillBackground(True)
+
+        content_bg = getattr(self.content, 'setBackgroundAlpha', None)
+        if content_bg is not None:
+            content_bg(255 if self._hovered
+                       else int(255 * configured_opacity_pct() / 100.0))
+
+        self.update()
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self._hovered = True
+        self._applyOpacity()
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self._hovered = False
+        self._applyOpacity()
 
     # -- placement -------------------------------------------------------
 
@@ -176,6 +266,11 @@ class CanvasOverlay(QtWidgets.QFrame):
         height, and repositioning alone would keep whatever the last drag left.
         """
         self._corner = configured_corner()
+        self._applyOpacity()
+
+        # Settings win over a previous drag: the user has just said what size
+        # they want, so the drag's _userSized claim is stale.
+        self._userSized = False
 
         area = self._availableRect()
         if area.width() > 0 and area.height() > 0:
@@ -185,14 +280,29 @@ class CanvasOverlay(QtWidgets.QFrame):
 
     def preferredSize(self, area):
         """The frame's size for a canvas of ``area``, from the percentages."""
-        height = area.height() * configured_height_pct() / 100.0
-        width = area.width() * configured_width_pct() / 100.0
+        return self._clampSize(area.height() * configured_height_pct() / 100.0,
+                               area.width() * configured_width_pct() / 100.0,
+                               area)
 
-        # Never larger than the space it sits in, whatever the settings say -
-        # a small window must not be entirely covered by the overview.
-        return QtCore.QSize(
-            int(max(60, min(width, area.width() - 2 * self.margin))),
-            int(max(40, min(height, area.height() - 2 * self.margin))))
+    def _clampSize(self, height, width, area):
+        """Hold both axes inside the allowed percentage range.
+
+        Both, on the same three numbers. The first version clamped only the
+        height, so the overlay refused to be dragged taller than 20% while
+        happily being dragged as wide as the whole window.
+        """
+        min_h = area.height() * MIN_SIZE_PCT / 100.0
+        max_h = area.height() * MAX_SIZE_PCT / 100.0
+        min_w = area.width() * MIN_SIZE_PCT / 100.0
+        max_w = area.width() * MAX_SIZE_PCT / 100.0
+
+        # The percentage range wins, but never at the cost of spilling out of a
+        # window too small for it.
+        max_h = min(max_h, area.height() - 2 * self.margin)
+        max_w = min(max_w, area.width() - 2 * self.margin)
+
+        return QtCore.QSize(int(max(1, min(max(min_w, width), max_w))),
+                            int(max(1, min(max(min_h, height), max_h))))
 
     def resizeToPixels(self, width, height):
         """Resize from a drag, clamped to the allowed percentage range."""
@@ -200,15 +310,8 @@ class CanvasOverlay(QtWidgets.QFrame):
         if area.height() <= 0 or area.width() <= 0:
             return
 
-        min_h = area.height() * MIN_HEIGHT_PCT / 100.0
-        max_h = area.height() * MAX_HEIGHT_PCT / 100.0
-        min_w = area.width() * MIN_HEIGHT_PCT / 100.0
-        max_w = area.width() * 80.0 / 100.0
-
-        height = max(min_h, min(max_h, height))
-        width = max(min_w, min(max_w, width))
-
-        self.resize(int(width), int(height))
+        self._userSized = True
+        self.resize(self._clampSize(height, width, area))
         self.reposition()
 
     def saveSize(self):
@@ -255,10 +358,17 @@ class CanvasOverlay(QtWidgets.QFrame):
         if area.width() <= 0 or area.height() <= 0:
             return
 
+        # Size from the settings until the user has actually resized it. The
+        # first version only re-sized when width OR height was <= 1, which never
+        # fired: a QFrame with a layout takes a sensible *height* from its
+        # child's size hint while its width stays at the minimum, so the frame
+        # booted one pixel wide and only corrected once something else forced a
+        # resize (Zement, 2026-08-29). A flag is the honest test of "has the
+        # user chosen a size", rather than inferring it from the geometry.
+        if not self._userSized:
+            self.resize(self.preferredSize(area))
+
         size = self.size()
-        if size.width() <= 1 or size.height() <= 1:
-            size = self.preferredSize(area)
-            self.resize(size)
 
         margin = self.margin
         left = area.left() + margin

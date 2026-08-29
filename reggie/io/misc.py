@@ -2056,14 +2056,37 @@ class PreferencesDialog(QtWidgets.QDialog):
                 self.overviewCorner.setToolTip(
                     'Which corner of the canvas the level overview sits in.')
 
+                from reggie.ui.overlay import (MAX_OPACITY_PCT, MAX_SIZE_PCT,
+                                               MIN_OPACITY_PCT, MIN_SIZE_PCT)
+
                 self.overviewHeight = QtWidgets.QDoubleSpinBox()
-                self.overviewHeight.setRange(3.0, 20.0)
+                self.overviewHeight.setRange(MIN_SIZE_PCT, MAX_SIZE_PCT)
                 self.overviewHeight.setSingleStep(0.5)
                 self.overviewHeight.setDecimals(1)
                 self.overviewHeight.setSuffix(' % of canvas height')
                 self.overviewHeight.setToolTip(
                     'How tall the level overview is, as a share of the canvas.\n'
                     'You can also drag its inward corner to resize it.')
+
+                # Background opacity. Two controls rather than one, because
+                # "off" is a distinct state from "100%": off means the setting
+                # is not in play at all, and the spinbox greys out to say so.
+                self.overviewTranslucent = QtWidgets.QCheckBox(
+                    'Fade the level overview background')
+                self.overviewTranslucent.setToolTip(
+                    'When on, the overview background is see-through.\n'
+                    'It becomes solid while the pointer is over it.')
+
+                self.overviewOpacity = QtWidgets.QDoubleSpinBox()
+                self.overviewOpacity.setRange(MIN_OPACITY_PCT, MAX_OPACITY_PCT)
+                self.overviewOpacity.setSingleStep(5.0)
+                self.overviewOpacity.setDecimals(0)
+                self.overviewOpacity.setSuffix(' % opaque')
+                self.overviewOpacity.setToolTip(
+                    'How solid the faded background is. Lower is more \n'
+                    'see-through. The level drawing itself is never faded.')
+                self.overviewTranslucent.toggled.connect(
+                    self.overviewOpacity.setEnabled)
 
                 # Create the main layout
                 L = QtWidgets.QFormLayout()
@@ -2082,6 +2105,8 @@ class PreferencesDialog(QtWidgets.QDialog):
                 L.addRow('Sidebar side:', self.sidebarSide)
                 L.addRow('Level overview corner:', self.overviewCorner)
                 L.addRow('Level overview height:', self.overviewHeight)
+                L.addWidget(self.overviewTranslucent)
+                L.addRow('Overview background:', self.overviewOpacity)
                 self.setLayout(L)
 
                 # Set the buttons
@@ -2128,13 +2153,34 @@ class PreferencesDialog(QtWidgets.QDialog):
                 if index >= 0:
                     self.sidebarSide.setCurrentIndex(index)
 
-                from reggie.ui.overlay import (configured_corner,
+                from reggie.ui.overlay import (DEFAULT_OPACITY_PCT,
+                                               configured_corner,
                                                configured_height_pct)
 
                 index = self.overviewCorner.findData(configured_corner())
                 if index >= 0:
                     self.overviewCorner.setCurrentIndex(index)
                 self.overviewHeight.setValue(configured_height_pct())
+
+                translucent = setting('OverviewTranslucent', True)
+                if isinstance(translucent, str):
+                    translucent = translucent.strip().lower() not in (
+                        'false', '0', 'no', '')
+                translucent = bool(translucent)
+
+                self.overviewTranslucent.setChecked(translucent)
+                self.overviewOpacity.setEnabled(translucent)
+
+                # Read the stored percentage directly, not configured_opacity_
+                # pct(): that returns 100 when fading is off, which would
+                # overwrite the user's chosen value the moment they turn it off
+                # and on again.
+                try:
+                    stored = float(setting('OverviewOpacityPct',
+                                           DEFAULT_OPACITY_PCT))
+                except (TypeError, ValueError):
+                    stored = DEFAULT_OPACITY_PCT
+                self.overviewOpacity.setValue(stored)
 
             def ClearRecent(self):
                 """

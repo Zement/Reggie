@@ -1988,6 +1988,9 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # the two above: the point of these settings is seeing the result.
         setSetting('OverviewCorner', dlg.generalTab.overviewCorner.currentData())
         setSetting('OverviewHeightPct', dlg.generalTab.overviewHeight.value())
+        setSetting('OverviewTranslucent',
+                   dlg.generalTab.overviewTranslucent.isChecked())
+        setSetting('OverviewOpacityPct', dlg.generalTab.overviewOpacity.value())
         self.tabs.applyOverlaySettings()
 
         # Undo history limit setting. Qt only allows changing the limit of an
