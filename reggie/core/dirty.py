@@ -25,7 +25,8 @@ SETTING_GROUPS = {
     'Preferences': ['Translation', 'ZoneEntIndicators', 'ZoneBoundIndicators',
                     'ResetDataWhenHiding', 'HideResetSpritedata', 'EnablePadding',
                     'PaddingLength', 'PlaceObjectsAtFullSize', 'InsertPathNode', 'Theme',
-                    'UIScale', 'FontScale', 'TabsDraggable', 'SidebarSide'],
+                    'UIScale', 'FontScale', 'TabsDraggable', 'SidebarSide',
+                    'OverviewCorner', 'OverviewHeightPct', 'OverviewWidthPct'],
     # Geometry settings are NOT in a group - they stay at root level for Qt
 }
 
@@ -193,6 +194,7 @@ def ensureSettingsVisible():
         ('ResetDataWhenHiding', False), ('HideResetSpritedata', False), ('EnablePadding', False),
         ('PaddingLength', 0), ('PlaceObjectsAtFullSize', True), ('InsertPathNode', False),
         ('TabsDraggable', False), ('SidebarSide', 'left'),
+        ('OverviewCorner', 'bottomright'), ('OverviewHeightPct', 6.0),
     ]
     
     # Write each setting if it doesn't exist

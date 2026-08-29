@@ -2042,6 +2042,29 @@ class PreferencesDialog(QtWidgets.QDialog):
                     'Which side of the window the sidebar is docked to.\n'
                     'The icon rail stays on the outside either way.')
 
+                # Which corner of the canvas the level overview sits in, and how
+                # tall it is (Block D-c). Height is a percentage of the canvas
+                # rather than pixels: the overview is a scaled picture of the
+                # whole level, so what matters is how much of the window it
+                # takes, and a pixel height right on one monitor is wrong on the
+                # next. Dragging its grip writes the same setting.
+                self.overviewCorner = QtWidgets.QComboBox()
+                self.overviewCorner.addItem('Bottom right', 'bottomright')
+                self.overviewCorner.addItem('Bottom left', 'bottomleft')
+                self.overviewCorner.addItem('Top right', 'topright')
+                self.overviewCorner.addItem('Top left', 'topleft')
+                self.overviewCorner.setToolTip(
+                    'Which corner of the canvas the level overview sits in.')
+
+                self.overviewHeight = QtWidgets.QDoubleSpinBox()
+                self.overviewHeight.setRange(3.0, 20.0)
+                self.overviewHeight.setSingleStep(0.5)
+                self.overviewHeight.setDecimals(1)
+                self.overviewHeight.setSuffix(' % of canvas height')
+                self.overviewHeight.setToolTip(
+                    'How tall the level overview is, as a share of the canvas.\n'
+                    'You can also drag its inward corner to resize it.')
+
                 # Create the main layout
                 L = QtWidgets.QFormLayout()
                 L.addRow(globals_.trans.string('PrefsDlg', 14), self.Trans)
@@ -2057,6 +2080,8 @@ class PreferencesDialog(QtWidgets.QDialog):
                 L.addWidget(self.fullFileTitle)
                 L.addWidget(self.tabsDraggable)
                 L.addRow('Sidebar side:', self.sidebarSide)
+                L.addRow('Level overview corner:', self.overviewCorner)
+                L.addRow('Level overview height:', self.overviewHeight)
                 self.setLayout(L)
 
                 # Set the buttons
@@ -2102,6 +2127,14 @@ class PreferencesDialog(QtWidgets.QDialog):
                 index = self.sidebarSide.findData('right' if side == 'right' else 'left')
                 if index >= 0:
                     self.sidebarSide.setCurrentIndex(index)
+
+                from reggie.ui.overlay import (configured_corner,
+                                               configured_height_pct)
+
+                index = self.overviewCorner.findData(configured_corner())
+                if index >= 0:
+                    self.overviewCorner.setCurrentIndex(index)
+                self.overviewHeight.setValue(configured_height_pct())
 
             def ClearRecent(self):
                 """

@@ -26,7 +26,14 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         # Set minimum height to ensure visibility when docked
         self.setMinimumHeight(80)
 
-        self.bgbrush = QtGui.QBrush(globals_.theme.color('bg'))
+        # Qt-native, not theme.color('bg'). The theme's `bg` is the *canvas*
+        # colour, which is exactly what this must not match - against it the
+        # overview was invisible (Zement, 2026-08-29). Taken from the running
+        # palette so it follows a light or dark system theme with no setting of
+        # its own, and it is the first of the theme colours to be retired; see
+        # "Retire the old theming engine" in DEFERRED_ITEMS.md for the other 44.
+        self.bgbrush = QtGui.QBrush(
+            self.palette().color(QtGui.QPalette.ColorRole.Mid))
         self.objbrush = QtGui.QBrush(globals_.theme.color('overview_object'))
         self.viewbrush = QtGui.QBrush(globals_.theme.color('overview_zone_fill'))
         self.view = QtCore.QRectF()

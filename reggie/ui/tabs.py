@@ -332,6 +332,11 @@ class MasterTabWidget(QtWidgets.QTabWidget):
         # reset the overview - and ActivateSession is where that lives.
         self.win.ActivateSession(session)
 
+        # Each page is its own view with its own scrollbars, and the overlay is
+        # placed against the visible one's viewport - so it has to be re-placed
+        # when the page underneath it changes.
+        self._positionOverlay()
+
     def _handleCloseRequested(self, index):
         session = self.sessionAt(index)
         if session is None:
@@ -355,8 +360,8 @@ class MasterTabWidget(QtWidgets.QTabWidget):
 
     # -- the canvas overlay ----------------------------------------------
 
-    def setOverlay(self, widget, width=260, height=110):
-        """Float a widget over the bottom-right of the canvas area.
+    def setOverlay(self, widget):
+        """Float a widget over a corner of the canvas area.
 
         Used for the level overview (D-c.4), which was a dock the user had to
         position and could lose behind the window. Over the canvas it is always
@@ -365,30 +370,41 @@ class MasterTabWidget(QtWidgets.QTabWidget):
         Deliberately a plain child rather than a Qt::Tool window: a real window
         would sit above the editor when the editor is not focused, which is what
         made the floating overview annoying in the first place.
+
+        Returns the CanvasOverlay frame wrapping ``widget`` - which owns the
+        corner, the size and the background, so this container's job stays "one
+        tab per session".
         """
-        self.overlay = widget
+        from reggie.ui.overlay import CanvasOverlay
 
         if widget is None:
-            return
+            self.overlay = None
+            return None
 
-        widget.setParent(self)
-        widget.resize(width, height)
-        widget.raise_()
-        widget.show()
+        self.overlay = CanvasOverlay(self, widget, margin=self.overlayMargin)
+        self.overlay.show()
+        self.overlay.raise_()
         self._positionOverlay()
 
+        return self.overlay
+
     def _positionOverlay(self):
-        if self.overlay is None or not self.overlay.isVisible():
+        if self.overlay is None:
             return
+        self.overlay.reposition()
 
-        margin = self.overlayMargin
-        size = self.overlay.size()
-
-        # Bottom-right of the *page* area, not of the whole widget, so the tab
-        # bar's height does not push it off the bottom.
-        self.overlay.move(max(margin, self.width() - size.width() - margin),
-                          max(margin, self.height() - size.height() - margin))
+    def applyOverlaySettings(self):
+        """Re-read the overlay's corner and size settings."""
+        if self.overlay is not None:
+            self.overlay.applySettings()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._positionOverlay()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # The viewport has no useful geometry until the container is shown, and
+        # _availableRect measures against it - so the first placement has to
+        # happen here rather than at construction.
         self._positionOverlay()

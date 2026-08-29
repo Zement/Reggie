@@ -642,6 +642,51 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         return True
 
+    def SetMenuEnabled(self, name, enabled):
+        """Enable or disable a whole menu by name (Block D-c).
+
+        Names are 'file', 'edit', 'view', 'level', 'help' - untranslated, since
+        the menu *titles* change with the language and keying on them would make
+        every caller depend on the translation.
+
+        Disabling the menu greys the top-level entry, so the menu cannot be
+        opened at all; the actions inside keep their own enabled state, which is
+        what makes this composable with SyncToolbarContext rather than fighting
+        it. Returns False for an unknown name rather than raising - a caller
+        naming a menu that does not exist should not take the editor down.
+        """
+        menu = getattr(self, 'menus', {}).get(name)
+        if menu is None:
+            return False
+
+        menu.menuAction().setEnabled(bool(enabled))
+        return True
+
+    def SetMenusEnabled(self, enabled, names=None):
+        """Enable or disable several menus at once. Defaults to all of them."""
+        menus = getattr(self, 'menus', {})
+        wanted = list(menus) if names is None else list(names)
+        return [name for name in wanted if self.SetMenuEnabled(name, enabled)]
+
+    def SetToolbarEnabled(self, enabled):
+        """Enable or disable every toolbar button at once (Block D-c).
+
+        The toolbar itself, not the actions on it: an action is usually shared
+        with a menu entry, so disabling the actions would grey the menus too.
+        Disabling the widget leaves each action's own state untouched, so
+        turning the toolbar back on restores exactly what was enabled before
+        rather than enabling everything.
+        """
+        bars = [getattr(self, 'toolbar', None), getattr(self, 'patchToolbar', None)]
+        touched = 0
+
+        for bar in bars:
+            if bar is not None:
+                bar.setEnabled(bool(enabled))
+                touched += 1
+
+        return touched
+
     def SyncToolbarContext(self):
         """Enable only what the thing in front can actually do (D-c.4).
 
@@ -1938,6 +1983,12 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # the whole point of the setting is seeing the layout it produces.
         setSetting('SidebarSide', dlg.generalTab.sidebarSide.currentData())
         self.PlaceSidebar()
+
+        # Level overview placement and size (Block D-c). Applied at once, like
+        # the two above: the point of these settings is seeing the result.
+        setSetting('OverviewCorner', dlg.generalTab.overviewCorner.currentData())
+        setSetting('OverviewHeightPct', dlg.generalTab.overviewHeight.value())
+        self.tabs.applyOverlaySettings()
 
         # Undo history limit setting. Qt only allows changing the limit of an
         # empty stack, so a non-empty stack picks the new value up on its next

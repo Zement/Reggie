@@ -49,15 +49,19 @@ class DockBuilder:
         # the window. It costs no layout space and is always where the canvas is.
         self.win.levelOverview = LevelOverviewWidget()
         self.win.levelOverview.moveIt.connect(self.win.HandleOverviewClick)
-        self.win.tabs.setOverlay(self.win.levelOverview)
+        overlayFrame = self.win.tabs.setOverlay(self.win.levelOverview)
 
         # A dock gave away toggleViewAction() for free; an overlay needs the
         # action made by hand. Two-way, so the menu entry reports the state
         # rather than only setting it.
+        #
+        # Toggles the *frame*, not the overview inside it: hiding only the inner
+        # widget would leave its bordered background sitting on the canvas as an
+        # empty box.
         act = QtGui.QAction(globals_.trans.string('MenuItems', 94), self.win)
         act.setCheckable(True)
         act.setChecked(True)
-        act.toggled.connect(self.win.levelOverview.setVisible)
+        act.toggled.connect(overlayFrame.setVisible)
         act.setShortcut(GetKeybind('leveloverview'))
         act.setIcon(GetIcon('overview'))
         act.setStatusTip(globals_.trans.string('MenuItems', 95))

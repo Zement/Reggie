@@ -558,7 +558,20 @@ class MenuBuilder:
 
         hmenu = menubar.addMenu(globals_.trans.string('Menubar', 4))
         self.SetupHelpMenu(hmenu)
-        
+
+        # Registered by name so whole menus can be enabled or disabled as a
+        # group (Block D-c), the way single actions already can. Keyed on the
+        # untranslated names rather than the menu titles, which change with the
+        # language and would make callers depend on the translation.
+        self.win.menus = {
+            'file': fmenu,
+            'edit': emenu,
+            'view': vmenu,
+            'level': lmenu,
+            'help': hmenu,
+        }
+
+
         # create a toolbar
         self.win.toolbar = self.win.addToolBar(globals_.trans.string('Menubar', 5))
         self.win.toolbar.setObjectName('MainToolbar')
