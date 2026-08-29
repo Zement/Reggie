@@ -346,7 +346,12 @@ class LevelIO:
                 return False
 
             name = checkname
-            same = name == self.win.fileSavePath  # Just an area change
+            # "Just an area change" - but only if that level is still open.
+            # fileSavePath survives every session being closed, so on its own it
+            # would send a genuine re-open down the area-change branch, where
+            # globals_.Level is None and there is nothing to change the area of.
+            same = (name == self.win.fileSavePath
+                    and getattr(globals_, 'Level', None) is not None)
             
             # If we just discarded changes, force a full reload even if it's the same level
             if hasattr(self.win, 'justDiscardedChanges') and self.win.justDiscardedChanges:

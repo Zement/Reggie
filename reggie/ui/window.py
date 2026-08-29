@@ -99,6 +99,7 @@ from reggie.ui.clipboard import ClipboardController
 from reggie.ui.menus import MenuBuilder
 from reggie.ui.docks import DockBuilder
 from reggie.ui.level_io import LevelIO
+from reggie.ui.tabs import MasterTabWidget
 from reggie.ui import deferred
 from reggie.ui import qpt_boot
 # Defer imports that depend on ui to avoid Qt object creation before QApplication
@@ -211,11 +212,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self._fallbackView.YScrollBar.valueChanged.connect(self.YScrollChange)
         self._fallbackView.FrameSize.connect(self.HandleWindowSizeChange)
 
-        # done creating the window!
-        # D-c.2 replaces this with the tabbed master container; until then the
-        # window still shows exactly one canvas, and ShowSessionCanvas swaps
-        # which one when the active session changes.
-        self.setCentralWidget(self._fallbackView)
+        # The master container (D-c.2): one tab per open session, and the only
+        # thing that is ever the central widget from here on. The fallback view
+        # is what it shows while no session exists - during this constructor,
+        # and in the headless suites that never open one.
+        self.tabs = MasterTabWidget(self)
+        self.setCentralWidget(self.tabs)
+        self.ShowSessionCanvas(None)
 
         # Composed controllers extracted from this class (Phase 2 refactor).
         # Instantiated before the clipboard wiring below, because
@@ -401,35 +404,31 @@ class ReggieWindow(QtWidgets.QMainWindow):
         return manager.active if manager is not None else None
 
     def ShowSessionCanvas(self, session):
-        """Put a session's canvas on screen.
+        """Bring a session's canvas to the front of the master container.
 
-        Until D-c.2's tab bar exists the window shows exactly one canvas, so
-        activating a session means swapping the central widget. Deliberately
-        *not* reparenting anything else: the outgoing view keeps its scene and
-        its items, which is the whole point of a canvas per session.
+        Since D-c.2 the central widget is the tab container and every session's
+        view is a page in it, so this selects a tab rather than swapping the
+        window's centre. Deliberately *not* reparenting anything: the outgoing
+        view keeps its scene and its items, which is the whole point of a canvas
+        per session.
+
+        Called from ``SessionManager.activate()``, so it runs for every path
+        that makes a session active - including the ones that never reach
+        ``ActivateSession``. Opening a file goes open_level -> open() ->
+        activate(), and when this only ran from the window's method the boot
+        canvas was left showing the empty fallback: the level was loaded, in a
+        view nobody had put on screen.
         """
-        view = self._fallbackView if session is None else session.view
-
-        if self.centralWidget() is view:
+        tabs = getattr(self, 'tabs', None)
+        if tabs is None:
             return False
 
-        # takeCentralWidget rather than setCentralWidget alone. Measured: with
-        # PyQt the replaced widget does in fact survive, because the session
-        # still holds a Python reference to it - so this is not the same live
-        # hazard as QGraphicsScene.clear(). It is still the right call: taking
-        # the widget back makes the ownership transfer explicit instead of
-        # resting on a reference existing somewhere else, and a future caller
-        # that drops its reference first would otherwise lose the whole scene
-        # with no warning.
-        previous = self.takeCentralWidget()
-        if previous is not None:
-            previous.setParent(None)
-            previous.hide()
+        if session is None:
+            tabs.showPlaceholder(self._fallbackView)
+            return True
 
-        self.setCentralWidget(view)
-        view.show()
-
-        return True
+        tabs.sync()
+        return tabs.showSession(session)
 
     @property
     def undoStack(self):
@@ -517,12 +516,9 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # Moves globals_.Area, spritelib's own bindings, this session's tilesets
         # and the undo stack together. Everything below reads through them -
         # including self.scene and self.view, which resolve to this session's.
+        # activate() also brings this session's tab to the front, so by the time
+        # it returns the property and the widget on screen already agree.
         manager.activate(session)
-
-        # Put this session's canvas on screen before anything reads self.scene:
-        # the property already answers with the new one, but the widget on
-        # display would otherwise still be the old.
-        self.ShowSessionCanvas(session)
 
         # ResetPalette adds each item to the scene and fires positionChanged
         # handlers, which call SetDirty. Nothing here is a user edit. It is
@@ -542,6 +538,38 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.scene.update()
         self.levelOverview.Reset()
         self.levelOverview.update()
+
+        return True
+
+    def CloseSession(self, session):
+        """Close one open area, keeping the rest of the level open.
+
+        The tab bar's close button, and the only place a single session is torn
+        down at the user's request. Refuses the last canvas tab: Zement's rule is
+        that one area stays loaded at all times, so there is no editor state with
+        no level in it.
+
+        No dirty prompt. A session's edits live in the shared level object, not
+        in the session, so closing a tab does not discard them - saving the file
+        afterwards still writes that area, exactly as saving from another tab
+        always did. The prompt stays where work genuinely can be lost: quitting,
+        changing patch, opening another file.
+        """
+        manager = globals_.get_session_manager()
+        if manager is None or session is None:
+            return False
+
+        if len(manager) <= 1:
+            return False
+
+        manager.close(session)
+        self.tabs.sync()
+
+        # close() activated a survivor, but only moved the state bindings and
+        # the tab - the side lists, the title and the overview still describe
+        # the session that just went away.
+        if manager.active is not None:
+            self.ActivateSession(manager.active)
 
         return True
 
@@ -716,6 +744,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         # ' - Reggie Next' is added automatically by Qt (see QApplication.setApplicationDisplayName()).
         self.setWindowTitle('%s%s' % (self.fileTitle, (' ' + globals_.trans.string('MainWindow', 0)) if globals_.Dirty else ''))
+
+        # The tab labels carry the same dirty marker, per tab rather than for
+        # the window as a whole. Hooked here because UpdateTitle is what the
+        # editor already calls whenever the dirty state may have moved.
+        tabs = getattr(self, 'tabs', None)
+        if tabs is not None:
+            tabs.refreshTitles()
 
     def CheckDirty(self):
         """
@@ -1684,6 +1719,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # Display full filepath setting
         globals_.UseFullFilepath = dlg.generalTab.fullFileTitle.isChecked()
         setSetting('UseFullFilepath', globals_.UseFullFilepath)
+
+        # Draggable area tabs (Block D-c). Applied immediately rather than at
+        # the next restart: turning dragging off also drops any manual order the
+        # user had arranged, which they should see happen while the reason for
+        # it is still on screen.
+        setSetting('TabsDraggable', dlg.generalTab.tabsDraggable.isChecked())
+        self.tabs.applySettings()
 
         # Undo history limit setting. Qt only allows changing the limit of an
         # empty stack, so a non-empty stack picks the new value up on its next

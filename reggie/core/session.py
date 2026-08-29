@@ -466,13 +466,21 @@ class EditorSession:
         # one would raise and reading one would construct the very object being
         # thrown away.
         if self._view is not None:
-            # If this session's canvas is the one on screen, take it out before
-            # destroying it - otherwise the window is left with a central widget
-            # that is being deleted underneath it. The manager activates a
-            # survivor after close(), which puts the right canvas back.
+            # Take the canvas out of whatever is showing it before destroying
+            # it, so the container is never left holding a widget that is being
+            # deleted underneath it. Since D-c.2 that is a page in the master
+            # tab widget; before it, the window's central widget. Both are
+            # handled, because the headless suites build a window whose
+            # container may not exist yet.
             window = getattr(_globals(), 'mainWindow', None)
-            if window is not None and window.centralWidget() is self._view:
-                window.takeCentralWidget()
+            if window is not None:
+                tabs = getattr(window, 'tabs', None)
+                if tabs is not None:
+                    index = tabs.indexOf(self._view)
+                    if index != -1:
+                        tabs.removeTab(index)
+                elif window.centralWidget() is self._view:
+                    window.takeCentralWidget()
 
             # The view holds the scene; dropping the reference is not enough
             # while Qt still has the widget parented to the window.

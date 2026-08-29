@@ -2024,6 +2024,16 @@ class PreferencesDialog(QtWidgets.QDialog):
                 # Display full filepath
                 self.fullFileTitle = QtWidgets.QCheckBox(globals_.trans.string('PrefsDlg', 49))
 
+                # Draggable area tabs (Block D-c). Literal rather than a
+                # trans.string: the translation files are numbered XML entries
+                # shipped per language, so adding one is its own change and not
+                # something to slip into a UI phase.
+                self.tabsDraggable = QtWidgets.QCheckBox('Allow dragging area tabs to reorder them')
+                self.tabsDraggable.setToolTip(
+                    'Off: tabs are always sorted by patch, then by level.\n'
+                    'On: the first tab you drag switches to manual order, and\n'
+                    'new tabs are added at the end.')
+
                 # Create the main layout
                 L = QtWidgets.QFormLayout()
                 L.addRow(globals_.trans.string('PrefsDlg', 14), self.Trans)
@@ -2037,6 +2047,7 @@ class PreferencesDialog(QtWidgets.QDialog):
                 L.addWidget(self.fullObjSize)
                 L.addWidget(self.insertPathNode)
                 L.addWidget(self.fullFileTitle)
+                L.addWidget(self.tabsDraggable)
                 self.setLayout(L)
 
                 # Set the buttons
@@ -2076,6 +2087,7 @@ class PreferencesDialog(QtWidgets.QDialog):
                 self.fullObjSize.setChecked(globals_.PlaceObjectsAtFullSize)
                 self.insertPathNode.setChecked(globals_.InsertPathNode)
                 self.fullFileTitle.setChecked(globals_.UseFullFilepath)
+                self.tabsDraggable.setChecked(bool(setting('TabsDraggable', False)))
 
             def ClearRecent(self):
                 """
