@@ -15,7 +15,8 @@ CurrentLayer = 1
 CurrentObject = -1
 CurrentPaintType = 0
 CurrentSprite = -1
-Dirty = False
+# Dirty is NOT declared here - it is proxied to the active editor session, the
+# same as Area and Level. See "Session-backed globals" at the bottom.
 DirtyOverride = 0
 DrawEntIndicators = False
 EditActions = None
@@ -168,8 +169,22 @@ _session_manager = None
 # writes into them in place (Tiles[i] = ..., ObjectDefinitions[idx] = ...), and
 # those writes land on whichever list the session owns, with no call-site
 # changes needed.
-_PROXIED_GLOBALS = ('Area', 'Level',
+_PROXIED_GLOBALS = ('Area', 'Level', 'Dirty',
                     'Tiles', 'TilesetFilesLoaded', 'ObjectDefinitions')
+
+#: Proxied names that may still be assigned, routed to the active session.
+#
+# `Dirty` is the exception to the read-only rule, and deliberately so. The other
+# proxied names are *state the session owns*, where an assignment could only
+# mean "replace the session's contents" and is therefore a mistake. Dirty is a
+# fact ABOUT the active session that six existing sites legitimately set - a
+# save clears it, a load resets it, an edit sets it - so refusing the assignment
+# would mean rewriting all six for no gain.
+#
+# Read-only is still the default for everything else: a writable proxy costs the
+# guarantee that a stray assignment cannot silently disable area switching, and
+# that is worth keeping wherever it can be kept.
+_WRITABLE_PROXIED = ('Dirty',)
 
 #: Test-only overrides, consulted before the session manager.
 #
@@ -246,10 +261,18 @@ def _resolve_proxied(name):
         if name in _TILESET_ATTRS:
             from reggie.core import session as _session_module
             return _session_module.fallback_tilesets(_TILESET_ATTRS[name])
-        return None
+        # False, not None: `Dirty` is asked as a boolean by every reader, and
+        # the honest answer with nothing open is "no unsaved work".
+        return False if name == 'Dirty' else None
 
     if name == 'Area':
         return session.area
+
+    if name == 'Dirty':
+        # Per area, which is the point. One shared flag meant an edit in any tab
+        # marked them all, so the tab labels could not tell them apart and
+        # CheckDirty prompted about areas the user had not touched.
+        return session.dirty
 
     if name in _TILESET_ATTRS:
         value = getattr(session, _TILESET_ATTRS[name])
@@ -263,6 +286,41 @@ def _resolve_proxied(name):
     # `Level` lives on the shared handle, not the session, because two tabs
     # showing different areas of one file must see the same Level object.
     return session.level
+
+
+def _assign_proxied(name, value):
+    """Write a writable proxied global through to the active session.
+
+    Only `Dirty` today. A test override wins, so a suite that pinned the value
+    is not fought by production code assigning it.
+
+    With no session, the write is *remembered as an override* rather than
+    dropped. That matters for the headless suites, which set `globals_.Dirty`
+    to drive code that reads it - CheckDirty, the collab proposal dialog -
+    without a level open. Dropping the write there would make the flag silently
+    unsettable and those tests would assert against a value nothing could
+    change. In the running editor there is always a session (Zement's rule that
+    one area stays loaded), so this path is the test harness's, not the
+    editor's.
+    """
+    if name in _proxy_overrides:
+        _proxy_overrides[name] = value
+        return
+
+    manager = _session_manager
+    session = manager.active if manager is not None else None
+
+    if session is None:
+        _proxy_overrides[name] = value
+        return
+
+    # A session exists, so it is the answer - drop any value stashed while none
+    # did. Without this, one session-less write would shadow every real session
+    # for the rest of the process, since overrides are consulted first.
+    _proxy_overrides.pop(name, None)
+
+    if name == 'Dirty':
+        session.dirty = bool(value)
 
 
 def _install_proxy():
@@ -287,6 +345,9 @@ def _install_proxy():
             )
 
         def __setattr__(self, name, value):
+            if name in _WRITABLE_PROXIED:
+                _assign_proxied(name, value)
+                return
             if name in _PROXIED_GLOBALS:
                 raise AttributeError(
                     "globals_.%s is owned by the editor session and cannot be "

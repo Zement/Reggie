@@ -603,6 +603,13 @@ class SessionManager:
             self._serial += 1
             session.last_active_serial = self._serial
 
+            # `Dirty` is writable-proxied, and a write with no session active is
+            # stashed as an override so the headless suites can drive it. Once a
+            # real session is in front it owns the answer, and a leftover
+            # override would shadow it - and being consulted first, would do so
+            # for every session from then on.
+            _globals().clear_proxied('Dirty')
+
         # A session evicted by the memory pass rebuilds its tilesets here,
         # before anything can read them. Cheap: the archive bytes are still in
         # the tileset cache, so this is the decode only, not the decompression.
