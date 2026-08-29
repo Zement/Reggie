@@ -100,6 +100,15 @@ from reggie.ui.menus import MenuBuilder
 from reggie.ui.docks import DockBuilder
 from reggie.ui.level_io import LevelIO
 from reggie.ui.tabs import MasterTabWidget
+
+#: Version marker for saveState/restoreState (Block D-c).
+#
+# Bump this whenever the set of docks changes. Qt ignores a state whose version
+# does not match, so a bump discards a layout describing a window that no longer
+# exists and applies the new default instead - no migration code, no prompt, and
+# no partly-applied layout. 0 was the pre-D-c editor; 1 is D-c.3, where the
+# palette and the four property editors stopped being docks.
+LAYOUT_VERSION = 1
 from reggie.ui import deferred
 from reggie.ui import qpt_boot
 # Defer imports that depend on ui to avoid Qt object creation before QApplication
@@ -212,12 +221,20 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self._fallbackView.YScrollBar.valueChanged.connect(self.YScrollChange)
         self._fallbackView.FrameSize.connect(self.HandleWindowSizeChange)
 
-        # The master container (D-c.2): one tab per open session, and the only
-        # thing that is ever the central widget from here on. The fallback view
-        # is what it shows while no session exists - during this constructor,
+        # The master container (D-c.2): one tab per open session. Since D-c.3 it
+        # is no longer the central widget itself - it shares a splitter with the
+        # sidebar, and that splitter is the centre. The fallback view is what
+        # the container shows while no session exists: during this constructor,
         # and in the headless suites that never open one.
         self.tabs = MasterTabWidget(self)
-        self.setCentralWidget(self.tabs)
+        self.sidebar = None
+
+        self.centralSplitter = QtWidgets.QSplitter(
+            QtCore.Qt.Orientation.Horizontal, self)
+        self.centralSplitter.setChildrenCollapsible(False)
+        self.centralSplitter.addWidget(self.tabs)
+        self.setCentralWidget(self.centralSplitter)
+
         self.ShowSessionCanvas(None)
 
         # Composed controllers extracted from this class (Phase 2 refactor).
@@ -348,7 +365,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if globals_.settings.contains('MainWindowGeometry'):
             self.restoreGeometry(setting('MainWindowGeometry'))
         if globals_.settings.contains('MainWindowState'):
-            self.restoreState(setting('MainWindowState'), 0)
+            # Version 1 since D-c.3. The palette and the four property editors
+            # stopped being docks in that phase, so a saved version-0 state
+            # describes a window that no longer exists. Qt returns False and
+            # ignores a state whose version does not match, which is exactly the
+            # migration wanted here: the new default layout applies, and the
+            # next save writes a version-1 state. Measured in §2.4 of the plan -
+            # a stale state is inert rather than dangerous, so this is about
+            # giving a sensible default, not about avoiding breakage.
+            self.restoreState(setting('MainWindowState'), LAYOUT_VERSION)
 
         # Aaaaaand... initializing is done!
         globals_.Initializing = False
@@ -539,6 +564,36 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.levelOverview.Reset()
         self.levelOverview.update()
 
+        return True
+
+    def PlaceSidebar(self):
+        """Put the sidebar on its configured side of the master container.
+
+        A QSplitter is ordered by insertion, so moving the sidebar from one side
+        to the other is re-inserting it - insertWidget(0) or addWidget - not a
+        rebuild. Called when the sidebar is created and again whenever the side
+        setting changes.
+        """
+        from reggie.ui.sidebar import SIDE_LEFT, configured_side
+
+        if self.sidebar is None:
+            return False
+
+        side = configured_side()
+        wanted = 0 if side == SIDE_LEFT else 1
+
+        if self.centralSplitter.indexOf(self.sidebar) == wanted:
+            return False
+
+        self.centralSplitter.insertWidget(wanted, self.sidebar)
+
+        # The canvas takes the slack; the sidebar keeps the width the user gave
+        # it. Set by position rather than remembered, so it stays right after a
+        # flip.
+        self.centralSplitter.setStretchFactor(wanted, 0)
+        self.centralSplitter.setStretchFactor(1 - wanted, 1)
+
+        self.sidebar.applySide(side)
         return True
 
     def CloseSession(self, session):
@@ -1727,6 +1782,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         setSetting('TabsDraggable', dlg.generalTab.tabsDraggable.isChecked())
         self.tabs.applySettings()
 
+        # Which side the sidebar is docked to (Block D-c). Also applied at once:
+        # the whole point of the setting is seeing the layout it produces.
+        setSetting('SidebarSide', dlg.generalTab.sidebarSide.currentData())
+        self.PlaceSidebar()
+
         # Undo history limit setting. Qt only allows changing the limit of an
         # empty stack, so a non-empty stack picks the new value up on its next
         # clear() (level load / area switch / save).
@@ -2319,7 +2379,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         # state: determines positions of docks
         # geometry: determines the main window position
-        setSetting('MainWindowState', self.saveState(0))
+        setSetting('MainWindowState', self.saveState(LAYOUT_VERSION))
         setSetting('MainWindowGeometry', self.saveGeometry())
 
         if hasattr(self, 'HelpBoxInstance'):

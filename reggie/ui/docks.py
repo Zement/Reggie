@@ -35,6 +35,15 @@ class DockBuilder:
         from reggie.ui.spriteeditor import SpriteEditorWidget
         from reggie.ui.editors import LocationEditorWidget, PathNodeEditorWidget, EntranceEditorWidget
         from reggie.io.misc import LoadSpriteCategories, GetKeybind
+        from reggie.ui.sidebar import Sidebar
+
+        # The docked sidebar (D-c.3). Built first so the panels below can be
+        # placed into it as they are created, rather than made as docks and
+        # moved afterwards - which would leave the dock objects alive and
+        # save/restore state for panels that are no longer docks.
+        self.win.sidebar = Sidebar(self.win)
+        self.win.PlaceSidebar()
+
         # level overview
         dock = QtWidgets.QDockWidget(globals_.trans.string('MenuItems', 94), self.win)
         dock.setFeatures(
@@ -57,93 +66,57 @@ class DockBuilder:
         self.win.actions['leveloverview'] = act
         self.win.vmenu.addAction(act)
 
-        # create the sprite editor panel
-        dock = QtWidgets.QDockWidget(globals_.trans.string('SpriteDataEditor', 0), self.win)
-        dock.setVisible(False)
-        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable)
-        dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
-        dock.setObjectName('spriteeditor')  # needed for the state to save/restore correctly
-        dock.move(100, 100) # offset the dock from the top-left corner
-
+        # The four item-property editors (D-c.3). These were QDockWidgets, each
+        # floating and separately closable; they are now panels in slice 3 of
+        # the sidebar.
+        #
+        # The `...EditorDock` attributes keep their names and are PanelHosts,
+        # which answer setVisible / isVisible / isFloating exactly as the docks
+        # did. That is what leaves the ~20 sites in window.py that drive these
+        # panels - the whole selection-to-panel protocol - untouched by the move.
         self.win.spriteDataEditor = SpriteEditorWidget()
         self.win.spriteDataEditor.DataUpdate.connect(self.win.SpriteDataUpdated)
-        dock.setWidget(self.win.spriteDataEditor)
-        self.win.spriteEditorDock = dock
-
-        self.win.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
-        dock.setFloating(True)
-
-        # create the entrance editor panel
-        dock = QtWidgets.QDockWidget(globals_.trans.string('EntranceDataEditor', 24), self.win)
-        dock.setVisible(False)
-        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable)
-        dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
-        dock.setObjectName('entranceeditor')  # needed for the state to save/restore correctly
-        dock.move(100, 100) # offset the dock from the top-left corner
+        self.win.spriteEditorDock = self.win.sidebar.addPanel(
+            globals_.trans.string('SpriteDataEditor', 0), self.win.spriteDataEditor)
 
         self.win.entranceEditor = EntranceEditorWidget()
-        dock.setWidget(self.win.entranceEditor)
-        self.win.entranceEditorDock = dock
-
-        self.win.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
-        dock.setFloating(True)
-
-        # create the path node editor panel
-        dock = QtWidgets.QDockWidget(globals_.trans.string('PathDataEditor', 10), self.win)
-        dock.setVisible(False)
-        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable)
-        dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
-        dock.setObjectName('pathnodeeditor')  # needed for the state to save/restore correctly
-        dock.move(100, 100) # offset the dock from the top-left corner
+        self.win.entranceEditorDock = self.win.sidebar.addPanel(
+            globals_.trans.string('EntranceDataEditor', 24), self.win.entranceEditor)
 
         self.win.pathEditor = PathNodeEditorWidget()
-        dock.setWidget(self.win.pathEditor)
-        self.win.pathEditorDock = dock
-
-        self.win.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
-        dock.setFloating(True)
-
-        # create the location editor panel
-        dock = QtWidgets.QDockWidget(globals_.trans.string('LocationDataEditor', 12), self.win)
-        dock.setVisible(False)
-        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable)
-        dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
-        dock.setObjectName('locationeditor')  # needed for the state to save/restore correctly
-        dock.move(100, 100) # offset the dock from the top-left corner
+        self.win.pathEditorDock = self.win.sidebar.addPanel(
+            globals_.trans.string('PathDataEditor', 10), self.win.pathEditor)
 
         self.win.locationEditor = LocationEditorWidget()
-        dock.setWidget(self.win.locationEditor)
-        self.win.locationEditorDock = dock
+        self.win.locationEditorDock = self.win.sidebar.addPanel(
+            globals_.trans.string('LocationDataEditor', 12), self.win.locationEditor)
 
-        self.win.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
-        dock.setFloating(True)
+        # create the palette (D-c.3: a sidebar panel, not a dock)
+        tabs = QtWidgets.QTabWidget()
+        tabs.setTabBar(IconsOnlyTabBar())
+        tabs.setIconSize(QtCore.QSize(16, 16))
+        tabs.currentChanged.connect(self.win.CreationTabChanged)
+        self.win.creationTabs = tabs
 
-        # create the palette
-        dock = QtWidgets.QDockWidget(globals_.trans.string('MenuItems', 96), self.win)
-        dock.setFeatures(
-            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable)
-        dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
-        dock.setObjectName('palette')  # needed for the state to save/restore correctly
-
+        dock = self.win.sidebar.addPanel(
+            globals_.trans.string('MenuItems', 96), tabs)
         self.win.creationDock = dock
-        act = dock.toggleViewAction()
+        dock.setVisible(True)
+
+        # A dock gave away toggleViewAction() for free; a panel host needs the
+        # action made by hand. Checkable and kept in step with the panel, so the
+        # menu entry still reports the state rather than only setting it.
+        act = QtGui.QAction(globals_.trans.string('MenuItems', 96), self.win)
+        act.setCheckable(True)
+        act.setChecked(True)
+        act.toggled.connect(dock.setVisible)
+        dock.visibilityChanged.connect(act.setChecked)
         act.setShortcut(GetKeybind('palette'))
         act.setIcon(GetIcon('palette'))
         act.setStatusTip(globals_.trans.string('MenuItems', 97))
         # Register so the keybind editor (SetKeybind) can update the shortcut
         self.win.actions['palette'] = act
         self.win.vmenu.addAction(act)
-
-        self.win.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
-        dock.setVisible(True)
-
-        # add tabs to it
-        tabs = QtWidgets.QTabWidget()
-        tabs.setTabBar(IconsOnlyTabBar())
-        tabs.setIconSize(QtCore.QSize(16, 16))
-        tabs.currentChanged.connect(self.win.CreationTabChanged)
-        dock.setWidget(tabs)
-        self.win.creationTabs = tabs
 
         # object choosing tabs
         tsicon = GetIcon('objects')

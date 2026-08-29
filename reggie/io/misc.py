@@ -2034,6 +2034,14 @@ class PreferencesDialog(QtWidgets.QDialog):
                     'On: the first tab you drag switches to manual order, and\n'
                     'new tabs are added at the end.')
 
+                # Which side the sidebar is docked to (Block D-c).
+                self.sidebarSide = QtWidgets.QComboBox()
+                self.sidebarSide.addItem('Left', 'left')
+                self.sidebarSide.addItem('Right', 'right')
+                self.sidebarSide.setToolTip(
+                    'Which side of the window the sidebar is docked to.\n'
+                    'The icon rail stays on the outside either way.')
+
                 # Create the main layout
                 L = QtWidgets.QFormLayout()
                 L.addRow(globals_.trans.string('PrefsDlg', 14), self.Trans)
@@ -2048,6 +2056,7 @@ class PreferencesDialog(QtWidgets.QDialog):
                 L.addWidget(self.insertPathNode)
                 L.addWidget(self.fullFileTitle)
                 L.addWidget(self.tabsDraggable)
+                L.addRow('Sidebar side:', self.sidebarSide)
                 self.setLayout(L)
 
                 # Set the buttons
@@ -2088,6 +2097,11 @@ class PreferencesDialog(QtWidgets.QDialog):
                 self.insertPathNode.setChecked(globals_.InsertPathNode)
                 self.fullFileTitle.setChecked(globals_.UseFullFilepath)
                 self.tabsDraggable.setChecked(bool(setting('TabsDraggable', False)))
+
+                side = str(setting('SidebarSide', 'left') or 'left').lower()
+                index = self.sidebarSide.findData('right' if side == 'right' else 'left')
+                if index >= 0:
+                    self.sidebarSide.setCurrentIndex(index)
 
             def ClearRecent(self):
                 """
