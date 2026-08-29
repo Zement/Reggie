@@ -620,6 +620,18 @@ class SessionManager:
         if binder is not None and session is not None:
             binder(session.undo_stack)
 
+        # ...and so does what is on screen. Here rather than only in
+        # ReggieWindow.ActivateSession because activation happens through this
+        # method from several paths that never reach the window's: opening a
+        # file (boot, Open, New) goes open_level -> open() -> activate(), and
+        # left the fallback canvas on display while self.scene already resolved
+        # to the new session's - the level was loaded and invisible, in a view
+        # that was never laid out. Making the swap part of what activation
+        # *means* is what stops the next caller forgetting it.
+        shower = getattr(window, 'ShowSessionCanvas', None)
+        if shower is not None and session is not None:
+            shower(session)
+
         return previous
 
     def close(self, session):
