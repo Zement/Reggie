@@ -1426,6 +1426,11 @@ class SpriteList(QtWidgets.QWidget):
         headers = [globals_.trans.string('Sprites', 21), globals_.trans.string('Sprites', 22)] + list(globals_.trans.stringList('Sprites', 23)[1:])
         self.table.setHorizontalHeaderLabels(headers)
         self.table.verticalHeader().setVisible(False) # hide row numbers
+
+        # A table claims Tab for "next cell", so it never reaches the focus
+        # chain and Tab behaves like an arrow key. The rows are navigated with
+        # the arrow keys here, so hand Tab back to the focus chain.
+        self.table.setTabKeyNavigation(False)
         self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
         self.table.setSortingEnabled(True)
         self.table.setMouseTracking(True) # for 'entered' signal

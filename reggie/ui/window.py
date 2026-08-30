@@ -111,6 +111,7 @@ UNDO_SECTION_DEFAULT_HEIGHT = Percent(15)
 UNDO_SECTION_MAX_HEIGHT = Percent(75)
 
 from reggie.ui import tooltabs
+from reggie.ui import focusgroups
 from reggie.ui.tooltabs import ToolTabManager
 
 #: Version marker for saveState/restoreState (Block D-c).
@@ -356,6 +357,12 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 qpt.available = False
         else:
             print(f"[INIT2] QPT not available (available={qpt.available}, initialized={qpt.initialized}, payload={qpt.payload is not None})")
+
+        # Keyboard focus groups (D-c.6). Installed here because it registers the
+        # sidebar and the toolbar, so both have to exist first.
+        print("[INIT2] Installing focus groups...")
+        focusgroups.install(self)
+        print("[INIT2] ✓ Focus groups installed")
 
         # now get stuff ready
         loaded = False

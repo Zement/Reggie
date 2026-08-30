@@ -310,6 +310,56 @@ class ClipboardController:
 
         return added
 
+    # ReggieClip type codes whose items carry an id that must be unique within
+    # an area. Locations are absent on purpose: duplicate location ids are
+    # legal in NSMBW.
+    _ID_BEARING_CLIP_TYPES = ('2', '4')  # entrance, path
+
+    @classmethod
+    def _clipHasIDdItems(cls, clip):
+        """
+        Whether a split clip contains any entrance or path.
+
+        Cheap enough to run on every paste: it stops at the first match, and a
+        clip of pure objects - by far the common case - never reaches the
+        dialog at all.
+        """
+        for item in clip:
+            if item.split(':', 1)[0] in cls._ID_BEARING_CLIP_TYPES:
+                return True
+        return False
+
+    def _askAboutIDs(self):
+        """
+        Asks whether to renumber pasted entrances and paths.
+
+        Returns True to renumber, False to keep the original ids, or None if
+        the user cancelled the paste entirely.
+        """
+        box = QtWidgets.QMessageBox(self.win)
+        box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+        box.setWindowTitle('Paste Entrances and Paths')
+        box.setText('This clipboard contains entrances and/or paths.')
+        box.setInformativeText(
+            'Two entrances or paths sharing an ID can crash the level in-game, '
+            'so pasted items are normally given the first free ID.\n\n'
+            'Keeping the original IDs is still useful when moving items '
+            'between areas, or when the duplicates are only temporary.')
+
+        fresh = box.addButton('Use &Free IDs', QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+        keep = box.addButton('&Keep Original IDs', QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(fresh)
+
+        box.exec()
+        clicked = box.clickedButton()
+
+        if clicked is fresh:
+            return True
+        if clicked is keep:
+            return False
+        return None
+
     def getEncodedObjects(self, encoded):
         """
         Create the objects from a ReggieClip
@@ -340,6 +390,19 @@ class ClipboardController:
             return layers, sprites, entrances, locations, paths, path_nodes
 
         clip = encoded[11:-2].split('|')
+
+        # Ask before renumbering, if there is anything to renumber (D-c.6).
+        #
+        # Not conditioned on the clip coming from another area: a clip carries
+        # no origin (it travels through the system clipboard, so it can arrive
+        # from another instance entirely), and Zement's point stands anyway -
+        # keeping the original ids is sometimes what the user wants within one
+        # area too, so the choice should be offered whenever it is meaningful.
+        if increment_ids and self._clipHasIDdItems(clip):
+            choice = self._askAboutIDs()
+            if choice is None:
+                return layers, sprites, entrances, locations, paths, path_nodes
+            increment_ids = choice
 
         self.win.spriteList.prepareBatchAdd()
         for item in clip:
