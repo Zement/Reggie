@@ -100,6 +100,13 @@ from reggie.ui.menus import MenuBuilder
 from reggie.ui.docks import DockBuilder
 from reggie.ui.level_io import LevelIO
 from reggie.ui.tabs import MasterTabWidget
+
+#: The undo history section's starting and maximum heights, in pixels (Zement,
+#: 2026-08-30). Named rather than inline because they are the first concrete
+#: values of a scheme the next panels will each get their own numbers for.
+UNDO_SECTION_DEFAULT_HEIGHT = 400
+UNDO_SECTION_MAX_HEIGHT = 2000
+
 from reggie.ui import tooltabs
 from reggie.ui.tooltabs import ToolTabManager
 
@@ -1327,7 +1334,12 @@ class ReggieWindow(QtWidgets.QMainWindow):
             # from the header has to leave the menu tick and this window's
             # references in the same state the menu entry would, or the two
             # disagree about whether the section is up.
-            on_close=self.HandleShowUndoHistory)
+            on_close=self.HandleShowUndoHistory,
+            # Zement's numbers (2026-08-30). The default is a starting height
+            # the user can drag away from, not a rule; the maximum stops a long
+            # history from taking the whole sidebar.
+            default_height=UNDO_SECTION_DEFAULT_HEIGHT,
+            max_height=UNDO_SECTION_MAX_HEIGHT)
 
         self._SyncUndoHistoryAction(True)
 

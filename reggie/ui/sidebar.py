@@ -86,38 +86,46 @@ def _expandVertically(widget, depth=0):
             _expandVertically(child, depth + 1)
 
 
-class SectionHost(QtWidgets.QWidget):
-    """One collapsible section in slice 2 (Block D-c, phase D-c.6).
+#: A panel with no ceiling: as tall as the layout will let it be.
+UNLIMITED = None
 
-    Slice 3's ``PanelHost`` is a title over a widget, and it imitates the
-    QDockWidget API because twenty call sites still speak it. This is not that:
-    slice 2's sections are new, nothing calls a dock API on them, and what they
-    do need is a header the user can click to fold the section away - the VS
-    Code Explorer shape Zement asked for.
 
-    Collapsing hides the body and drops this widget to its header height, so a
-    folded section costs one row rather than a share of the splitter. The
-    splitter is told to leave it alone at that height, which is why ``sections``
-    below re-applies stretch after every fold.
+class _CollapsibleHost(QtWidgets.QWidget):
+    """A title bar the user can click to fold, over one hosted widget.
+
+    Shared by both kinds of host in the sidebar. Slice 2's sections and slice
+    3's panels arrived from different directions - one is new, one imitates a
+    QDockWidget for twenty existing call sites - but the header, the fold and
+    the height limits are the same job, and Zement asked for the same treatment
+    on both (2026-08-30). Keeping one implementation is what stops them drifting
+    into two slightly different headers.
+
+    Collapsing hides the body and pins this widget to its header height, so a
+    folded host costs one row rather than a share of its splitter. Both
+    containers re-apply their stretch after a fold, because a collapsed child
+    that kept its stretch would leave a gap under its own title.
     """
 
     toggled = QtCore.pyqtSignal(bool)
 
-    #: Emitted when the section's own close button is pressed. The owner - not
-    #: this widget - decides what closing means, since the widget inside usually
-    #: belongs to something else.
+    #: Emitted when the header's close button is pressed. The *owner* decides
+    #: what closing means, since the widget inside usually belongs to something
+    #: else - so this only reports the click.
     closeRequested = QtCore.pyqtSignal()
 
     #: Shown at the left of the header. Text rather than icons so the header
     #: needs no theme lookup and reads the same in both colour schemes.
     _ARROWS = ('▸', '▾')   # right-pointing, down-pointing
 
-    def __init__(self, title, widget, parent=None, closable=True):
+    def __init__(self, title, widget, parent=None, closable=False,
+                 default_height=UNLIMITED, max_height=UNLIMITED):
         super().__init__(parent)
 
-        self.sectionTitle = title
-        self.sectionWidget = widget
+        self.hostTitle = title
+        self.hostWidget = widget
         self._expanded = True
+        self._maxHeight = max_height
+        self._defaultHeight = default_height
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -163,13 +171,62 @@ class SectionHost(QtWidgets.QWidget):
         layout.addWidget(self.headerRow)
         layout.addWidget(widget)
 
+        # The panel widget arrives hidden in some cases (the old docks set
+        # setVisible(False) on the *dock*, leaving the widget itself shown).
+        # Inside a host, the host is what gets hidden, so the widget must be
+        # visible or the host would show an empty box.
         widget.setVisible(True)
 
+        self._applyMaxHeight()
+
+    # -- title -----------------------------------------------------------
+
     def setTitle(self, title):
-        """Rename the section, keeping the fold arrow in step."""
-        self.sectionTitle = title
+        """Rename the host, keeping the fold arrow in step."""
+        self.hostTitle = title
         self.header.setText('%s  %s' % (self._ARROWS[int(self._expanded)],
                                         title))
+
+    # -- height limits ---------------------------------------------------
+
+    @property
+    def maxHeight(self):
+        return self._maxHeight
+
+    @property
+    def defaultHeight(self):
+        return self._defaultHeight
+
+    def setMaxHeight(self, height):
+        """Cap how tall this host may grow. ``UNLIMITED`` removes the cap."""
+        self._maxHeight = height
+        self._applyMaxHeight()
+
+    def _applyMaxHeight(self):
+        """Apply the ceiling, unless folding has one of its own in force.
+
+        Folding sets a much smaller maximum, so this must not overwrite it -
+        which is why unfolding calls back here rather than clearing the maximum
+        itself. One place decides the height, in both directions.
+        """
+        if not self._expanded:
+            self.setMaximumHeight(self.headerHeight())
+        elif self._maxHeight is UNLIMITED:
+            self.setMaximumHeight(QtWidgets.QWIDGETSIZE_MAX)
+        else:
+            self.setMaximumHeight(int(self._maxHeight))
+
+    def sizeHint(self):
+        """Ask for the default height, when one was given.
+
+        This is what a splitter divides its space by, so a default height is
+        expressed as a size hint rather than as a fixed height - it is a
+        starting point the user can then drag away from, not a rule.
+        """
+        hint = super().sizeHint()
+        if self._expanded and self._defaultHeight is not UNLIMITED:
+            hint.setHeight(int(self._defaultHeight))
+        return hint
 
     # -- folding ---------------------------------------------------------
 
@@ -185,27 +242,46 @@ class SectionHost(QtWidgets.QWidget):
             return
 
         self._expanded = expanded
-        self.sectionWidget.setVisible(expanded)
+        self.hostWidget.setVisible(expanded)
         self.header.setChecked(expanded)
         self.header.setText('%s  %s' % (self._ARROWS[int(expanded)],
-                                        self.sectionTitle))
+                                        self.hostTitle))
 
-        if expanded:
-            self.setMaximumHeight(QtWidgets.QWIDGETSIZE_MAX)
-        else:
-            # Pinned to the header, or the splitter would keep the section's
-            # old share of the column and show a tall empty box under the title.
-            self.setMaximumHeight(self.headerHeight())
-
+        self._applyMaxHeight()
         self.toggled.emit(expanded)
 
     def headerHeight(self):
-        """How tall this section is when folded - the header row alone."""
+        """How tall this host is when folded - the header row alone."""
         return self.headerRow.sizeHint().height()
 
 
-class PanelHost(QtWidgets.QWidget):
-    """Holds one panel widget and answers the QDockWidget API used on it.
+class SectionHost(_CollapsibleHost):
+    """One collapsible section in slice 2 (Block D-c, phase D-c.6).
+
+    Closable by default: a section is something the user asked to see - the undo
+    history, D-d's collab chat - so it needs a way back out that is not the menu
+    it came from.
+    """
+
+    def __init__(self, title, widget, parent=None, closable=True,
+                 default_height=UNLIMITED, max_height=UNLIMITED):
+        super().__init__(title, widget, parent, closable=closable,
+                         default_height=default_height, max_height=max_height)
+
+    # Kept as aliases: the sections were written against these names before the
+    # base class existed, and renaming call sites to prove a refactor happened
+    # is the kind of churn that hides real changes in a diff.
+    @property
+    def sectionTitle(self):
+        return self.hostTitle
+
+    @property
+    def sectionWidget(self):
+        return self.hostWidget
+
+
+class PanelHost(_CollapsibleHost):
+    """Holds one slice-3 panel and answers the QDockWidget API used on it.
 
     Only the three members the editor actually calls on these docks:
     ``setVisible``, ``isVisible`` and ``isFloating``. Deliberately not a general
@@ -216,32 +292,33 @@ class PanelHost(QtWidgets.QWidget):
     ``isFloating`` answers False forever: the point of the sub-block is that
     these panels are docked, and the one caller (spriteeditor.py, minimising a
     floating editor's height) is asking exactly that question.
+
+    **Collapsing is not hiding**, and the distinction matters here more than in
+    slice 2. Twenty call sites show and hide these panels by selection - pick a
+    sprite, the sprite editor appears - and folding must not disturb any of
+    them: a folded panel is still ``isVisible()``, because the editor's question
+    is "does this panel apply to what is selected", not "how tall is it".
+
+    No close button: these are not panels the user opened, so there is nothing
+    coherent for an X to do (Zement, 2026-08-30).
     """
 
     visibilityChanged = QtCore.pyqtSignal(bool)
 
-    def __init__(self, title, widget, parent=None):
-        super().__init__(parent)
-
-        self.panelTitle = title
-        self.panelWidget = widget
-
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
-
-        self.titleLabel = QtWidgets.QLabel(title)
-        self.titleLabel.setStyleSheet('font-weight: bold;')
-        layout.addWidget(self.titleLabel)
-        layout.addWidget(widget)
-
-        # The panel widget arrives hidden in some cases (the docks set
-        # setVisible(False) on the *dock*, leaving the widget itself shown).
-        # Inside a host, the host is what gets hidden, so the widget must be
-        # visible or the host would show an empty box.
-        widget.setVisible(True)
+    def __init__(self, title, widget, parent=None,
+                 default_height=UNLIMITED, max_height=UNLIMITED):
+        super().__init__(title, widget, parent, closable=False,
+                         default_height=default_height, max_height=max_height)
 
         super().setVisible(False)
+
+    @property
+    def panelTitle(self):
+        return self.hostTitle
+
+    @property
+    def panelWidget(self):
+        return self.hostWidget
 
     def setVisible(self, visible):
         changed = bool(visible) != self.isVisible()
@@ -331,9 +408,16 @@ class Sidebar(QtWidgets.QWidget):
 
         # slices 2 and 3 share a column, split vertically so the user decides
         # how much of it the panels get.
+        #
+        # **Slice 3 goes on top** (Zement, 2026-08-30). The palette and the item
+        # property editors are the most frequently used things in the sidebar,
+        # and with slice 2 above them every section D-d adds would push them
+        # further down - out of sight, or squeezed to nothing at the bottom.
+        # Putting them first means slice 2 grows downward into space slice 3 is
+        # not using, rather than displacing it.
         self.column = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical, self)
-        self.column.addWidget(self.pages)
         self.column.addWidget(self.panelScroll)
+        self.column.addWidget(self.pages)
         self.column.setStretchFactor(0, 1)
         self.column.setStretchFactor(1, 1)
 
@@ -427,7 +511,8 @@ class Sidebar(QtWidgets.QWidget):
             self.pages.setCurrentWidget(self._railPages[row])
 
     def addSection(self, title, widget, stretch=1, closable=True,
-                   on_close=None):
+                   on_close=None, default_height=UNLIMITED,
+                   max_height=UNLIMITED):
         """Add a collapsible section to slice 2. Returns its ``SectionHost``.
 
         Sections stack vertically in a splitter, so several are visible at once
@@ -441,7 +526,9 @@ class Sidebar(QtWidgets.QWidget):
         and D-d's collab section will pass one so closing the chat does not end
         the session.
         """
-        host = SectionHost(title, widget, self.sections, closable=closable)
+        host = SectionHost(title, widget, self.sections, closable=closable,
+                           default_height=default_height,
+                           max_height=max_height)
 
         if on_close is not None:
             host.closeRequested.connect(on_close)
@@ -530,7 +617,8 @@ class Sidebar(QtWidgets.QWidget):
 
     # -- slice 3 ---------------------------------------------------------
 
-    def addPanel(self, title, widget, stretch=0):
+    def addPanel(self, title, widget, stretch=0,
+                 default_height=UNLIMITED, max_height=UNLIMITED):
         """Put a widget in slice 3 and return the host standing in for its dock.
 
         ``stretch`` gives a panel the leftover vertical space. The palette wants
@@ -540,7 +628,12 @@ class Sidebar(QtWidgets.QWidget):
         space below them is simply dead, which is what the first D-c.3 build
         looked like.
         """
-        host = PanelHost(title, widget, self.panelArea)
+        host = PanelHost(title, widget, self.panelArea,
+                         default_height=default_height, max_height=max_height)
+
+        # Folding a panel changes how much room the ones below it get, so the
+        # layout has to be told - otherwise a folded panel's share stays blank.
+        host.toggled.connect(lambda _on: self._applyPanelStretch())
 
         # Before the trailing stretch, so the panels stay top-aligned and any
         # space no panel claims collects at the bottom rather than between them.
@@ -569,6 +662,21 @@ class Sidebar(QtWidgets.QWidget):
         for host, stretch in zip(self._panels, self._panelStretches):
             if stretch:
                 _expandVertically(host.panelWidget)
+
+    def _applyPanelStretch(self):
+        """Give the stretch to the expanded panels only.
+
+        Slice 3 is a box layout rather than a splitter, so folding is simpler
+        here than in slice 2: a folded panel is already capped to its header, and
+        this only has to stop it claiming stretch it can no longer use. Without
+        it the palette would fold and leave its share of the column blank rather
+        than passing it to the panels below.
+        """
+        for host, stretch in zip(self._panels, self._panelStretches):
+            index = self._panelLayout.indexOf(host)
+            if index != -1:
+                self._panelLayout.setStretch(
+                    index, stretch if host.isExpanded() else 0)
 
     def setPanelsEnabled(self, enabled):
         """Show or hide slice 3 as a whole.
