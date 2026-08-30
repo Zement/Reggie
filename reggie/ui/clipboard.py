@@ -322,10 +322,16 @@ class ClipboardController:
 
         return added
 
-    # ReggieClip type codes whose items carry an id that must be unique within
-    # an area. Locations are absent on purpose: duplicate location ids are
-    # legal in NSMBW.
-    _ID_BEARING_CLIP_TYPES = ('2', '4')  # entrance, path
+    # ReggieClip type codes whose items carry an id that should be unique
+    # within an area: entrance, location, path.
+    #
+    # Locations were left out at first because duplicate location ids are legal
+    # in NSMBW. They are in now (Zement, 2026-08-31): legal is not the same as
+    # wanted, and the ids Nintendo actually uses are unique. The one deliberate
+    # exception, id 0, is handled at the decode site rather than here - a clip
+    # of nothing but id-0 locations still offers the choice, and choosing
+    # "free IDs" simply leaves them alone.
+    _ID_BEARING_CLIP_TYPES = ('2', '3', '4')  # entrance, location, path
 
     @classmethod
     def _clipHasIDdItems(cls, clip):
@@ -350,8 +356,8 @@ class ClipboardController:
         """
         box = QtWidgets.QMessageBox(self.win)
         box.setIcon(QtWidgets.QMessageBox.Icon.Question)
-        box.setWindowTitle('Paste Entrances and Paths')
-        box.setText('This clipboard contains entrances and/or paths.')
+        box.setWindowTitle('Paste Items With IDs')
+        box.setText('This clipboard contains entrances, locations and/or paths.')
         box.setInformativeText(
             'Two entrances or paths sharing an ID can crash the level in-game, '
             'so pasted items are normally given the first free ID.\n\n'
@@ -384,13 +390,9 @@ class ClipboardController:
         paths = []
         path_nodes = []
 
-        # Whether a pasted entrance or path gets a fresh ID (D-c.6). Read once
-        # per paste rather than per item, so a clip cannot be half-renumbered if
-        # the setting changes underneath a long decode.
-        #
-        # Locations are deliberately left alone: duplicate location IDs are
-        # legal in NSMBW, so renumbering them would change the level's meaning
-        # to fix a problem it does not have.
+        # Whether a pasted entrance, location or path gets a fresh ID (D-c.6).
+        # Read once per paste rather than per item, so a clip cannot be
+        # half-renumbered if the setting changes underneath a long decode.
         increment_ids = bool(setting('IncrementPastedIDs', True))
 
         # Original path id -> the id it was given here. Empty when not
@@ -541,7 +543,20 @@ class ClipboardController:
                     width = int(split[4])
                     height = int(split[5])
 
-                    newitem = self.win.CreateLocation(objx, objy, width, height, locID)
+                    # Locations join the free-ID rule (Zement, 2026-08-31).
+                    # Upstream Reggie could not copy them at all, so this only
+                    # became reachable with F10.
+                    #
+                    # ID 0 is the exception and is kept as-is: it is legal and
+                    # deliberately used, with several ID-0 locations at once as
+                    # a special case. Renumbering one to 1 would break that on
+                    # purpose, so only ids from 1 upward are treated as
+                    # "should be unique".
+                    if increment_ids and locID != 0:
+                        newitem = self.win.CreateLocation(objx, objy, width, height)
+                    else:
+                        newitem = self.win.CreateLocation(objx, objy, width, height, locID)
+
                     if newitem is None: continue
                     locations.append(newitem)
 
