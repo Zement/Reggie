@@ -94,6 +94,12 @@ UNLIMITED = None
 RAIL_WIDTHS = (32, 48, 64)
 DEFAULT_RAIL_WIDTH = 48
 
+#: How much of the window a restored sidebar must leave for the canvas. A floor
+#: for the canvas rather than a ceiling for the sidebar: the user is allowed a
+#: very wide sidebar if that is what they dragged, and only needs protecting
+#: from a saved width that would leave no level visible at all.
+MIN_CANVAS_WIDTH = 320
+
 
 def rail_width():
     """The configured slice-1 width, clamped to a value we offer."""
@@ -906,8 +912,31 @@ class Sidebar(QtWidgets.QWidget):
 
         window = self.win
         splitter = getattr(window, 'centralSplitter', None)
-        if splitter is not None and splitter.indexOf(self) != -1 and self.width() > 0:
-            setSetting('SidebarWidth', int(self.width()))
+        if splitter is None or splitter.indexOf(self) == -1 or self.width() <= 0:
+            return
+
+        width = int(self.width())
+
+        # Do not overwrite a wider saved width with one the restore clamped.
+        # This is the second half of the ratchet fix: without it, one launch in
+        # a smaller window permanently shrinks what the user had set, and every
+        # launch after that shrinks it again.
+        previous = setting('SidebarWidth', None)
+        try:
+            previous = int(previous) if previous is not None else None
+        except (TypeError, ValueError):
+            previous = None
+
+        if previous is not None and previous > width:
+            # Only keep the larger value if this session never actually gave the
+            # user that much room - i.e. the difference is the clamp's doing,
+            # not the user dragging the sidebar narrower.
+            canvas_floor = min(MIN_CANVAS_WIDTH, splitter.width() // 2)
+            clamped_to = max(0, splitter.width() - canvas_floor)
+            if width >= clamped_to:
+                return
+
+        setSetting('SidebarWidth', width)
 
     def _restoreWidth(self, retry=True):
         """Put the sidebar back to its saved width. True if it happened.
@@ -943,10 +972,19 @@ class Sidebar(QtWidgets.QWidget):
                     0, lambda: self._restoreWidth(retry=False))
             return False
 
-        # Never more than half the window, whatever was saved: the canvas is
-        # what the editor is for, and a restored sidebar that swallows it would
-        # be a layout the user cannot easily undo.
-        width = min(width, total // 2)
+        # Leave the canvas a usable strip, but no more than that. An earlier
+        # version capped at half the window and produced a ratchet (Zement,
+        # 2026-08-30): the clamp ran while the window was still at an
+        # intermediate size, and closeEvent then saved the clamped number - so a
+        # 1920px window restored a sidebar at 640 and shrank it again on every
+        # launch. Two things fix it, and both are needed:
+        #
+        #   - clamp against a *minimum for the canvas* rather than a share of
+        #     the window, so an intermediate width costs nothing, and
+        #   - never save a width the clamp produced (see saveLayout).
+        canvas_floor = min(MIN_CANVAS_WIDTH, total // 2)
+        width = min(width, max(0, total - canvas_floor))
+
         other = total - width
         splitter.setSizes([width, other] if index == 0 else [other, width])
         return True
