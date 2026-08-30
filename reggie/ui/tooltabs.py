@@ -1,10 +1,18 @@
 """Dialogs-as-tabs - the tool tabs in the master container (Block D-c, phase D-c.5).
 
 D-c.2 put a tab per open session in the middle of the window. This adds the
-other kind of tab the brief asks for: the four dialogs the user *inhabits*
-rather than *answers* - Preferences, the Patch Manager, the undo history, and
-the collaboration status window - become pages beside the canvases instead of
-windows on top of them.
+other kind of tab the brief asks for: the dialogs the user *inhabits* rather
+than *answers* become pages beside the canvases instead of windows on top of
+them.
+
+Four were converted here - Preferences, the Patch Manager, the undo history and
+the collaboration status window. **D-c.6 moved the undo history on again**, out
+of a tab and into a sidebar section, and the collaboration window follows it in
+D-d. The rule that sorted them is not the same as the rule that places them: a
+dialog you inhabit stops being modal, and *then* how wide it is decides whether
+it wants a tab or a sidebar column. Preferences and the Patch Manager are wide,
+multi-column layouts and stay tabs; the undo list and a chat log are narrow and
+are better beside the canvas than covering it.
 
 The survey counted 24 modal dialogs. Only four are here, and the rule that
 picked them (§3.4 of the plan) is worth restating because it is what keeps this
@@ -51,8 +59,14 @@ from PyQt6 import QtCore, QtWidgets
 #: user asking for it a second time means "show me the one I opened".
 PREFERENCES = 'preferences'
 PATCH_MANAGER = 'patchmanager'
-UNDO_HISTORY = 'undohistory'
 COLLABORATE = 'collaborate'
+
+#: The undo history was a tool tab in D-c.5 and moved to a sidebar section in
+#: D-c.6 - a full-width tab made you leave the level to reach a thing you use
+#: *while* looking at the level. The key is kept so a saved layout or a stale
+#: call naming it resolves to something rather than raising, and so the move is
+#: visible here rather than looking like the feature was dropped.
+UNDO_HISTORY = 'undohistory'
 
 
 class ToolTabHost(QtWidgets.QWidget):

@@ -583,17 +583,23 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.HandleUndoTextChanged(stack.undoText())
         self.HandleRedoTextChanged(stack.redoText())
 
-        # The undo history page, if it is open, shows the same stack the menu
+        # The undo history section, if it is open, shows the same stack the menu
         # items do - so it moves here rather than being wired once at creation.
-        # A QUndoView bound to a dead session's stack is both wrong and a
-        # crash waiting to happen, since the stack goes when the session does.
-        # getattr: the manager can call this during the window's constructor,
-        # before toolTabs exists.
-        manager = getattr(self, 'toolTabs', None)
-        page = manager.dialog(tooltabs.UNDO_HISTORY) if manager is not None else None
-        view = getattr(page, 'undoView', None)
+        # A QUndoView bound to a dead session's stack is both wrong and a crash
+        # waiting to happen, since the stack goes when the session does.
+        #
+        # getattr throughout: the manager can call this during the window's
+        # constructor, before the sidebar or these attributes exist.
+        view = getattr(self, 'undoHistoryView', None)
         if view is not None:
             view.setStack(stack)
+
+            # And retitle it, so the header names the area whose history this
+            # now is. Without it the section would quietly show a different
+            # level's steps under the old name.
+            section = getattr(self, 'undoHistorySection', None)
+            if section is not None:
+                section.setTitle(self.UndoHistoryTitle())
 
     def ActivateSession(self, session):
         """Show an already-open session's area, without touching the disk.
@@ -1277,40 +1283,83 @@ class ReggieWindow(QtWidgets.QMainWindow):
         else:
             self.actions['redo'].setText(self._redoBaseText)
 
-    def HandleShowUndoHistory(self):
+    def HandleShowUndoHistory(self, checked=None):
         """
-        Shows the undo history as a tool tab (D-c.5)
+        Toggles the undo history section in sidebar slice 2 (D-c.6)
 
-        The clearest case of the four for being a tab rather than a dialog: it
-        is a live view of the stack you are pushing to, and as a modal dialog
-        you could not edit while watching it.
+        Was a tool tab in D-c.5, and briefly a modal dialog before that. It is
+        better beside the canvas than covering it: undoing is something you do
+        *while* looking at what you are undoing, and a full-width tab made you
+        leave the level to reach it (Zement, 2026-08-30).
+
+        A toggle rather than an open, because a section in the sidebar has no
+        close button of its own - the menu entry is how it comes and goes.
+
+        ``checked`` arrives from the checkable QAction. Ignored in favour of
+        what is actually on screen: the two agree in normal use, and when they
+        disagree - the section removed by something other than the menu - the
+        sidebar is right and the action is stale.
         """
-        self.toolTabs.openTool(tooltabs.UNDO_HISTORY,
-                               self._buildUndoHistoryPage,
-                               globals_.trans.string('Undo', 2))
+        if self.sidebar is None:
+            return None
 
-    def _buildUndoHistoryPage(self):
-        """The undo history page, for the tool-tab manager to place."""
-        page = QtWidgets.QDialog()
-        page.setWindowTitle(globals_.trans.string('Undo', 2))
+        existing = self.sidebar.sectionFor(getattr(self, 'undoHistoryView', None))
+        if existing is not None:
+            self.sidebar.removeSection(existing)
+            self.undoHistoryView = None
+            self.undoHistorySection = None
+            self._SyncUndoHistoryAction(False)
+            return None
+
+        view = QtWidgets.QUndoView()
+        view.setEmptyLabel(globals_.trans.string('Undo', 3))
 
         # Bound to the *stack*, which since D-b belongs to a session - so this
         # follows BindUndoStack rather than being wired once here. Without that
-        # the page would show whichever level was open when it was opened, and
-        # go quiet after the first area switch.
-        view = QtWidgets.QUndoView(self.undoStack, page)
-        view.setEmptyLabel(globals_.trans.string('Undo', 3))
-        page.undoView = view
+        # it would show whichever level was open when it was opened, and go
+        # quiet after the first area switch.
+        view.setStack(self.undoStack)
 
-        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(page.reject)
-        buttons.accepted.connect(page.accept)
+        self.undoHistoryView = view
+        self.undoHistorySection = self.sidebar.addSection(
+            self.UndoHistoryTitle(), view)
 
-        layout = QtWidgets.QVBoxLayout(page)
-        layout.addWidget(view)
-        layout.addWidget(buttons)
+        self._SyncUndoHistoryAction(True)
 
-        return page
+        return self.undoHistorySection
+
+    def _SyncUndoHistoryAction(self, shown):
+        """Keep the menu's tick in step with whether the section is up."""
+        act = self.actions.get('undohistory')
+        if act is None or not act.isCheckable():
+            return
+
+        # Blocked, or setChecked would re-fire triggered() on some styles and
+        # toggle the section straight back off.
+        blocked = act.blockSignals(True)
+        try:
+            act.setChecked(bool(shown))
+        finally:
+            act.blockSignals(blocked)
+
+    def UndoHistoryTitle(self):
+        """The undo section's header: which level and area it is following.
+
+        Asked for by name (Zement, 2026-08-30). A history that silently follows
+        the active area needs to say which one it is showing, or a step list
+        that changed under you looks like a bug rather than a context switch.
+        """
+        base = globals_.trans.string('Undo', 2)
+
+        session = self._activeSession()
+        if session is None:
+            return base
+
+        name = os.path.splitext(os.path.basename(session.file_path or ''))[0]
+        if not name:
+            name = globals_.trans.string('WindowTitle', 0)
+
+        return '%s - %s, Area %d' % (base, name, session.area_num)
 
     def _maySaveInSession(self):
         """

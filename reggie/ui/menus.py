@@ -108,10 +108,13 @@ class MenuBuilder:
             GetKeybind('metainfo'),
         )
 
+        # Checkable since D-c.6: the undo history is a sidebar section rather
+        # than a window, so the entry is a toggle and has to report whether the
+        # section is up - a section has no close button of its own to say so.
         self.CreateAction(
             'undohistory', self.win.HandleShowUndoHistory, GetIcon('undo'),
             globals_.trans.stringOneLine('Undo', 0), globals_.trans.stringOneLine('Undo', 1),
-            GetKeybind('undohistory'),
+            GetKeybind('undohistory'), True,
         )
 
         self.CreateAction(

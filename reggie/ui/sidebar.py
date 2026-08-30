@@ -86,6 +86,91 @@ def _expandVertically(widget, depth=0):
             _expandVertically(child, depth + 1)
 
 
+class SectionHost(QtWidgets.QWidget):
+    """One collapsible section in slice 2 (Block D-c, phase D-c.6).
+
+    Slice 3's ``PanelHost`` is a title over a widget, and it imitates the
+    QDockWidget API because twenty call sites still speak it. This is not that:
+    slice 2's sections are new, nothing calls a dock API on them, and what they
+    do need is a header the user can click to fold the section away - the VS
+    Code Explorer shape Zement asked for.
+
+    Collapsing hides the body and drops this widget to its header height, so a
+    folded section costs one row rather than a share of the splitter. The
+    splitter is told to leave it alone at that height, which is why ``sections``
+    below re-applies stretch after every fold.
+    """
+
+    toggled = QtCore.pyqtSignal(bool)
+
+    #: Shown at the left of the header. Text rather than icons so the header
+    #: needs no theme lookup and reads the same in both colour schemes.
+    _ARROWS = ('▸', '▾')   # right-pointing, down-pointing
+
+    def __init__(self, title, widget, parent=None):
+        super().__init__(parent)
+
+        self.sectionTitle = title
+        self.sectionWidget = widget
+        self._expanded = True
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.header = QtWidgets.QToolButton(self)
+        self.header.setText('%s  %s' % (self._ARROWS[1], title))
+        self.header.setCheckable(True)
+        self.header.setChecked(True)
+        self.header.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.header.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                  QtWidgets.QSizePolicy.Policy.Fixed)
+        self.header.setStyleSheet(
+            'QToolButton { border: none; font-weight: bold; text-align: left;'
+            ' padding: 3px 4px; }')
+        self.header.toggled.connect(self.setExpanded)
+
+        layout.addWidget(self.header)
+        layout.addWidget(widget)
+
+        widget.setVisible(True)
+
+    def setTitle(self, title):
+        """Rename the section, keeping the fold arrow in step."""
+        self.sectionTitle = title
+        self.header.setText('%s  %s' % (self._ARROWS[int(self._expanded)],
+                                        title))
+
+    # -- folding ---------------------------------------------------------
+
+    def isExpanded(self):
+        return self._expanded
+
+    def setExpanded(self, expanded):
+        expanded = bool(expanded)
+        if expanded == self._expanded:
+            # Still re-sync the button: this is also the toggled() handler, and
+            # a programmatic setExpanded must not fight the user's click.
+            self.header.setChecked(expanded)
+            return
+
+        self._expanded = expanded
+        self.sectionWidget.setVisible(expanded)
+        self.header.setChecked(expanded)
+        self.header.setText('%s  %s' % (self._ARROWS[int(expanded)],
+                                        self.sectionTitle))
+
+        if expanded:
+            self.setMaximumHeight(QtWidgets.QWIDGETSIZE_MAX)
+        else:
+            # Pinned to the header, or the splitter would keep the section's
+            # old share of the column and show a tall empty box under the title.
+            self.setMaximumHeight(self.header.sizeHint().height())
+
+        self.toggled.emit(expanded)
+
+
 class PanelHost(QtWidgets.QWidget):
     """Holds one panel widget and answers the QDockWidget API used on it.
 
@@ -174,6 +259,26 @@ class Sidebar(QtWidgets.QWidget):
         self.pages.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                  QtWidgets.QSizePolicy.Policy.Preferred)
 
+        # Slice 2's default page is a splitter of collapsible sections rather
+        # than one widget per rail entry (Zement, 2026-08-30). The reason is
+        # what the content turns out to be: the undo history, the collab chat
+        # and the directory listing are all things a user wants *at the same
+        # time*, sized to taste - which is the VS Code Explorer shape, not a
+        # stack where reading one hides the others.
+        #
+        # The stack stays underneath, because D-d may still want a genuinely
+        # separate rail page for something that owns the whole slice. Sections
+        # are simply what its first page holds.
+        self.sections = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self.sections.setChildrenCollapsible(False)
+        self._sections = []
+        self.pages.addWidget(self.sections)
+
+        # Rail row -> page widget. The sections page above is deliberately not
+        # in it: it is what slice 2 shows by default, not something the rail
+        # selects.
+        self._railPages = []
+
         # slice 3 - the palette and the property panels, stacked vertically and
         # scrollable: four property editors plus the palette is more than fits
         # in most windows, and a panel that cannot be reached is worse than one
@@ -192,14 +297,19 @@ class Sidebar(QtWidgets.QWidget):
             QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         # slices 2 and 3 share a column, split vertically so the user decides
-        # how much of it the panels get. Slice 3 takes the space: it is the one
-        # with content today, and until D-d fills slice 2 anything given to
-        # slice 2 is space taken from the palette for nothing.
+        # how much of it the panels get.
         self.column = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical, self)
         self.column.addWidget(self.pages)
         self.column.addWidget(self.panelScroll)
-        self.column.setStretchFactor(0, 0)
+        self.column.setStretchFactor(0, 1)
         self.column.setStretchFactor(1, 1)
+
+        # Slice 2 held nothing until D-c.6, and giving space to an empty widget
+        # was what squeezed the palette into a third of the sidebar. Now that it
+        # has sections, it hides itself while it has none instead - the same
+        # protection, expressed as "empty means absent" rather than as a stretch
+        # factor that would have to be undone the moment content arrived.
+        self.pages.setVisible(False)
 
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal, self)
         self.splitter.setChildrenCollapsible(False)
@@ -267,14 +377,82 @@ class Sidebar(QtWidgets.QWidget):
 
         self.pages.addWidget(widget)
 
+        # Recorded rather than derived from the index. Since D-c.6 the stack
+        # also holds the sections page, which has no rail entry of its own, so
+        # "rail row N is page N" stopped being true - and a mapping that is
+        # nearly right is how a rail ends up selecting the wrong page as D-d
+        # adds entries.
+        self._railPages.append(widget)
+
         if self.rail.currentRow() < 0:
             self.rail.setCurrentRow(0)
 
         return item
 
     def _handleRailChanged(self, row):
-        if 0 <= row < self.pages.count():
-            self.pages.setCurrentIndex(row)
+        if 0 <= row < len(self._railPages):
+            self.pages.setCurrentWidget(self._railPages[row])
+
+    def addSection(self, title, widget, stretch=1):
+        """Add a collapsible section to slice 2. Returns its ``SectionHost``.
+
+        Sections stack vertically in a splitter, so several are visible at once
+        and the user decides how the column is divided. ``stretch`` is the share
+        of leftover space this one claims - a list-like section wants it, a
+        fixed-height form does not.
+        """
+        host = SectionHost(title, widget, self.sections)
+        self.sections.addWidget(host)
+        self._sections.append((host, stretch))
+
+        host.toggled.connect(lambda _on: self._applySectionStretch())
+        self._applySectionStretch()
+
+        self.pages.setVisible(True)
+
+        return host
+
+    def sectionFor(self, widget):
+        """The section holding ``widget``, or None."""
+        for host, _stretch in self._sections:
+            if host.sectionWidget is widget:
+                return host
+        return None
+
+    def removeSection(self, host):
+        """Take a section out of slice 2, leaving its widget alive.
+
+        The widget is unparented rather than deleted: a section's contents
+        usually belong to something else - the collab window belongs to its
+        controller - and this method's job is to stop showing it, not to end it.
+        """
+        for index, (candidate, _stretch) in enumerate(self._sections):
+            if candidate is not host:
+                continue
+
+            widget = host.sectionWidget
+            widget.setParent(None)
+
+            self._sections.pop(index)
+            host.setParent(None)
+            host.deleteLater()
+
+            self._applySectionStretch()
+            self.pages.setVisible(bool(self._sections))
+            return widget
+
+        return None
+
+    def _applySectionStretch(self):
+        """Give the space to the expanded sections only.
+
+        Re-applied after every fold rather than set once: a collapsed section
+        that kept its stretch would hold on to a share of the column and leave a
+        gap under its header, which is the thing folding is meant to remove.
+        """
+        for index, (host, stretch) in enumerate(self._sections):
+            self.sections.setStretchFactor(
+                index, stretch if host.isExpanded() else 0)
 
     # -- slice 3 ---------------------------------------------------------
 
