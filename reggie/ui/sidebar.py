@@ -897,12 +897,59 @@ class Sidebar(QtWidgets.QWidget):
         Stored as plain lists rather than Qt's opaque ``saveState`` blobs, so a
         settings file stays readable and a bad value can be corrected by hand.
         """
-        setSetting('SidebarColumnSizes', [int(n) for n in self.column.sizes()])
+        # Only when slice 2 actually has a height. With no sections open it is
+        # hidden and reports zero, and saving that would overwrite a division
+        # the user set in an earlier session with a number that means nothing.
+        sizes = [int(n) for n in self.column.sizes()]
+        if all(n > 0 for n in sizes):
+            setSetting('SidebarColumnSizes', sizes)
 
         window = self.win
         splitter = getattr(window, 'centralSplitter', None)
         if splitter is not None and splitter.indexOf(self) != -1 and self.width() > 0:
             setSetting('SidebarWidth', int(self.width()))
+
+    def _restoreWidth(self, retry=True):
+        """Put the sidebar back to its saved width. True if it happened.
+
+        Split out from ``restoreLayout`` so the retry below can re-run *only*
+        this: the column restore has already happened by then, and repeating it
+        would undo it.
+        """
+        width = setting('SidebarWidth', None)
+        splitter = getattr(self.win, 'centralSplitter', None)
+
+        if width is None or splitter is None:
+            return False
+
+        try:
+            width = int(width)
+        except (TypeError, ValueError):
+            return False
+
+        index = splitter.indexOf(self)
+        if width <= 0 or index == -1:
+            return False
+
+        total = splitter.width()
+        if total <= 0:
+            # Not laid out yet. One retry on the next turn of the event loop,
+            # not a loop: if it still has no width then, something else is
+            # wrong and quietly spinning would hide it. Silently dropping the
+            # saved width is how it came back at the default (Zement,
+            # 2026-08-30).
+            if retry:
+                QtCore.QTimer.singleShot(
+                    0, lambda: self._restoreWidth(retry=False))
+            return False
+
+        # Never more than half the window, whatever was saved: the canvas is
+        # what the editor is for, and a restored sidebar that swallows it would
+        # be a layout the user cannot easily undo.
+        width = min(width, total // 2)
+        other = total - width
+        splitter.setSizes([width, other] if index == 0 else [other, width])
+        return True
 
     def restoreLayout(self):
         """Put back what ``saveLayout`` wrote. Silent when there is nothing.
@@ -918,6 +965,14 @@ class Sidebar(QtWidgets.QWidget):
             except (TypeError, ValueError):
                 sizes = None
 
+            # A zero for slice 2 is what gets saved when it holds no sections -
+            # it is hidden then, and a hidden widget has no height. Restoring it
+            # would be harmless but pointless, and treating it as "the user
+            # chose this" would stop _resizeColumn ever sizing the first section
+            # that arrives. So a zero means "nothing to restore".
+            if sizes and 0 in sizes:
+                sizes = None
+
             if sizes and len(sizes) == self.column.count() and sum(sizes) > 0:
                 blocked = self.column.blockSignals(True)
                 try:
@@ -931,32 +986,7 @@ class Sidebar(QtWidgets.QWidget):
                 # method exists to bring back.
                 self._columnDragged = True
 
-        width = setting('SidebarWidth', None)
-        if width is None:
-            return
-
-        try:
-            width = int(width)
-        except (TypeError, ValueError):
-            return
-
-        window = self.win
-        splitter = getattr(window, 'centralSplitter', None)
-        if splitter is None or splitter.indexOf(self) == -1:
-            return
-
-        total = splitter.width()
-        if total <= 0 or width <= 0:
-            return
-
-        # Never more than half the window, whatever was saved: the canvas is
-        # what the editor is for, and a restored sidebar that swallows it would
-        # be a layout the user cannot easily undo.
-        width = min(width, total // 2)
-
-        index = splitter.indexOf(self)
-        other = total - width
-        splitter.setSizes([width, other] if index == 0 else [other, width])
+        self._restoreWidth()
 
     def _applyPanelStretch(self):
         """Give the stretch to the expanded panels only.

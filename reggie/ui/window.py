@@ -2697,6 +2697,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
         and restoring against a zero width would clamp every saved size to
         nothing. Done once - a later show (un-minimising) must not undo a
         division the user has since dragged.
+
+        **Deferred by a zero-length timer**, not run inline. The splitter still
+        has no useful width *during* the first showEvent - measured: the saved
+        width was silently dropped and the sidebar came back at its default,
+        which is exactly what Zement reported (2026-08-30). Posting it to the
+        event loop puts it after the first layout pass, which is the earliest
+        moment the arithmetic means anything.
         """
         super().showEvent(event)
 
@@ -2706,7 +2713,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self._sidebarLayoutRestored = True
 
         if self.sidebar is not None:
-            self.sidebar.restoreLayout()
+            QtCore.QTimer.singleShot(0, self.sidebar.restoreLayout)
 
     def closeEvent(self, event):
         """
