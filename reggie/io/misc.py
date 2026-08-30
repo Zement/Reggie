@@ -2503,8 +2503,19 @@ class PreferencesDialog(QtWidgets.QDialog):
                 self.overviewTranslucent.toggled.connect(
                     self.overviewOpacity.setEnabled)
 
+                self.incrementPastedIDs = QtWidgets.QCheckBox(
+                    'Give pasted entrances and paths a new ID')
+                self.incrementPastedIDs.setToolTip(
+                    'On: a pasted entrance or path takes the first free ID.\n'
+                    'Two of either sharing an ID can crash the level in-game.\n\n'
+                    'Off: pasted items keep the ID they were copied with,\n'
+                    'which is what you want when pasting into another area\n'
+                    'or level. Location IDs are never changed - duplicates\n'
+                    'are legal for those.')
+
                 shellForm = QtWidgets.QFormLayout()
                 shellForm.addRow(self.tabsDraggable)
+                shellForm.addRow(self.incrementPastedIDs)
                 shellForm.addRow('Sidebar side:', self.sidebarSide)
                 shellForm.addRow('Sidebar icon width:', self.railWidth)
                 shellForm.addRow('Level overview corner:', self.overviewCorner)
@@ -2613,6 +2624,8 @@ class PreferencesDialog(QtWidgets.QDialog):
                                                configured_height_pct)
 
                 self.tabsDraggable.setChecked(bool(setting('TabsDraggable', False)))
+                self.incrementPastedIDs.setChecked(
+                    bool(setting('IncrementPastedIDs', True)))
 
                 side = str(setting('SidebarSide', 'left') or 'left').lower()
                 index = self.sidebarSide.findData(

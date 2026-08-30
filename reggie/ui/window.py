@@ -2099,6 +2099,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
         setSetting('TabsDraggable', shell.tabsDraggable.isChecked())
         self.tabs.applySettings()
 
+        # Read fresh on every paste, so there is nothing to apply beyond the
+        # write itself.
+        setSetting('IncrementPastedIDs', shell.incrementPastedIDs.isChecked())
+
         setSetting('SidebarSide', shell.sidebarSide.currentData())
         self.PlaceSidebar()
 
