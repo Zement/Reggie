@@ -1322,7 +1322,12 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         self.undoHistoryView = view
         self.undoHistorySection = self.sidebar.addSection(
-            self.UndoHistoryTitle(), view)
+            self.UndoHistoryTitle(), view,
+            # Its own handler rather than the sidebar's default removal: closing
+            # from the header has to leave the menu tick and this window's
+            # references in the same state the menu entry would, or the two
+            # disagree about whether the section is up.
+            on_close=self.HandleShowUndoHistory)
 
         self._SyncUndoHistoryAction(True)
 

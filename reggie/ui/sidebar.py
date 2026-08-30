@@ -103,11 +103,16 @@ class SectionHost(QtWidgets.QWidget):
 
     toggled = QtCore.pyqtSignal(bool)
 
+    #: Emitted when the section's own close button is pressed. The owner - not
+    #: this widget - decides what closing means, since the widget inside usually
+    #: belongs to something else.
+    closeRequested = QtCore.pyqtSignal()
+
     #: Shown at the left of the header. Text rather than icons so the header
     #: needs no theme lookup and reads the same in both colour schemes.
     _ARROWS = ('▸', '▾')   # right-pointing, down-pointing
 
-    def __init__(self, title, widget, parent=None):
+    def __init__(self, title, widget, parent=None, closable=True):
         super().__init__(parent)
 
         self.sectionTitle = title
@@ -118,20 +123,44 @@ class SectionHost(QtWidgets.QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.header = QtWidgets.QToolButton(self)
+        # The header is its own row: the fold button stretches across it and the
+        # close button sits at the far end. A single widget would have to choose
+        # between "click anywhere to fold" and "there is an X", and the first is
+        # worth more than the pixels the second costs.
+        self.headerRow = QtWidgets.QWidget(self)
+        headerLayout = QtWidgets.QHBoxLayout(self.headerRow)
+        headerLayout.setContentsMargins(0, 0, 0, 0)
+        headerLayout.setSpacing(0)
+
+        # A QPushButton, not a QToolButton. QToolButton centres its content and
+        # ignores text-align on several styles, which is what made the header
+        # read wrong - and worst when collapsed, with a centred title floating
+        # over nothing (Zement, 2026-08-30). QPushButton honours text-align on
+        # Fusion and on Windows, and `text-align: left` is the whole fix.
+        self.header = QtWidgets.QPushButton(self.headerRow)
         self.header.setText('%s  %s' % (self._ARROWS[1], title))
         self.header.setCheckable(True)
         self.header.setChecked(True)
-        self.header.setToolButtonStyle(
-            QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.header.setFlat(True)
         self.header.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
                                   QtWidgets.QSizePolicy.Policy.Fixed)
         self.header.setStyleSheet(
-            'QToolButton { border: none; font-weight: bold; text-align: left;'
+            'QPushButton { border: none; font-weight: bold; text-align: left;'
             ' padding: 3px 4px; }')
         self.header.toggled.connect(self.setExpanded)
+        headerLayout.addWidget(self.header, 1)
 
-        layout.addWidget(self.header)
+        self.closeButton = QtWidgets.QToolButton(self.headerRow)
+        self.closeButton.setText('✕')
+        self.closeButton.setAutoRaise(True)
+        self.closeButton.setToolTip('Close')
+        self.closeButton.setStyleSheet(
+            'QToolButton { border: none; padding: 3px 6px; }')
+        self.closeButton.clicked.connect(self.closeRequested.emit)
+        self.closeButton.setVisible(bool(closable))
+        headerLayout.addWidget(self.closeButton, 0)
+
+        layout.addWidget(self.headerRow)
         layout.addWidget(widget)
 
         widget.setVisible(True)
@@ -166,9 +195,13 @@ class SectionHost(QtWidgets.QWidget):
         else:
             # Pinned to the header, or the splitter would keep the section's
             # old share of the column and show a tall empty box under the title.
-            self.setMaximumHeight(self.header.sizeHint().height())
+            self.setMaximumHeight(self.headerHeight())
 
         self.toggled.emit(expanded)
+
+    def headerHeight(self):
+        """How tall this section is when folded - the header row alone."""
+        return self.headerRow.sizeHint().height()
 
 
 class PanelHost(QtWidgets.QWidget):
@@ -393,15 +426,27 @@ class Sidebar(QtWidgets.QWidget):
         if 0 <= row < len(self._railPages):
             self.pages.setCurrentWidget(self._railPages[row])
 
-    def addSection(self, title, widget, stretch=1):
+    def addSection(self, title, widget, stretch=1, closable=True,
+                   on_close=None):
         """Add a collapsible section to slice 2. Returns its ``SectionHost``.
 
         Sections stack vertically in a splitter, so several are visible at once
         and the user decides how the column is divided. ``stretch`` is the share
         of leftover space this one claims - a list-like section wants it, a
         fixed-height form does not.
+
+        ``on_close`` is called when the header's X is pressed. Without one the X
+        simply removes the section, which is right for a view the sidebar owns;
+        the undo history passes its own handler so the menu tick stays in step,
+        and D-d's collab section will pass one so closing the chat does not end
+        the session.
         """
-        host = SectionHost(title, widget, self.sections)
+        host = SectionHost(title, widget, self.sections, closable=closable)
+
+        if on_close is not None:
+            host.closeRequested.connect(on_close)
+        else:
+            host.closeRequested.connect(lambda: self.removeSection(host))
         self.sections.addWidget(host)
         self._sections.append((host, stretch))
 
@@ -453,6 +498,35 @@ class Sidebar(QtWidgets.QWidget):
         for index, (host, stretch) in enumerate(self._sections):
             self.sections.setStretchFactor(
                 index, stretch if host.isExpanded() else 0)
+
+        self._capSliceTwo()
+
+    def _capSliceTwo(self):
+        """Shrink slice 2 to its headers when every section in it is folded.
+
+        Capping each *section* is not enough, and this is the bug Zement found
+        (2026-08-30): the sections live inside `pages`, which is one half of the
+        `column` splitter, and that splitter keeps slice 2's share of the height
+        however small the sections inside it become. So the palette below never
+        saw the space folding was supposed to release.
+
+        The cap has to be lifted again the moment anything unfolds, which is why
+        this runs from `_applySectionStretch` - the one place every fold, unfold,
+        add and remove already passes through.
+        """
+        if not self._sections:
+            self.pages.setMaximumHeight(QtWidgets.QWIDGETSIZE_MAX)
+            return
+
+        if any(host.isExpanded() for host, _stretch in self._sections):
+            self.pages.setMaximumHeight(QtWidgets.QWIDGETSIZE_MAX)
+            return
+
+        # Every section folded: slice 2 is worth exactly its stack of headers,
+        # plus the splitter handles between them.
+        headers = sum(host.headerHeight() for host, _stretch in self._sections)
+        handles = self.sections.handleWidth() * max(0, len(self._sections) - 1)
+        self.pages.setMaximumHeight(headers + handles)
 
     # -- slice 3 ---------------------------------------------------------
 
