@@ -32,7 +32,7 @@ thing answer differently rather than editing the many.
 from PyQt6 import QtCore, QtWidgets
 
 from reggie.core import globals_
-from reggie.core.dirty import setting
+from reggie.core.dirty import setSetting, setting
 
 
 #: Settings value for the sidebar living on the left / right of the window.
@@ -88,6 +88,42 @@ def _expandVertically(widget, depth=0):
 
 #: A panel with no ceiling: as tall as the layout will let it be.
 UNLIMITED = None
+
+#: Rail button widths offered in Preferences (Zement, 2026-08-30). A stub - the
+#: values are expected to change once there are real icons to size against.
+RAIL_WIDTHS = (32, 48, 64)
+DEFAULT_RAIL_WIDTH = 48
+
+
+def rail_width():
+    """The configured slice-1 width, clamped to a value we offer."""
+    value = setting('RailWidth', DEFAULT_RAIL_WIDTH)
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_RAIL_WIDTH
+
+    return value if value in RAIL_WIDTHS else DEFAULT_RAIL_WIDTH
+
+
+class Percent(float):
+    """A height expressed as a percentage of the sidebar, not in pixels.
+
+    Zement, 2026-08-30: 400px looked right on the machine it was chosen on and
+    took 40% of a shorter sidebar. A panel's sensible height is a fraction of the
+    space available, not a count of pixels - the same reasoning that put the
+    level overview's size behind a percentage in D-c.4.
+
+    A float subclass rather than a separate parameter, so a host takes
+    ``Percent(15)`` or ``200`` in the same argument and the reader can see which
+    is meant at the call site. Values above 100 are allowed and mean "taller than
+    the sidebar" - the panel then scrolls, which is a legitimate thing to ask
+    for.
+    """
+
+    def resolve(self, available):
+        """Pixels, given the height this panel could occupy."""
+        return int(round(available * float(self) / 100.0))
 
 
 class _CollapsibleHost(QtWidgets.QWidget):
@@ -202,6 +238,37 @@ class _CollapsibleHost(QtWidgets.QWidget):
         self._maxHeight = height
         self._applyMaxHeight()
 
+    def availableHeight(self):
+        """The height a percentage is a percentage *of*: the sidebar's.
+
+        Walks up to the sidebar rather than reading the immediate parent, which
+        is the sections splitter and already shrinks as sections are added - a
+        percentage of that would shift every time a neighbour appeared.
+        """
+        widget = self.parentWidget()
+        while widget is not None:
+            if isinstance(widget, Sidebar):
+                return widget.height()
+            widget = widget.parentWidget()
+
+        return 0
+
+    def _resolveHeight(self, value):
+        """A configured height in pixels, or None if there is none to apply."""
+        if value is UNLIMITED:
+            return None
+
+        if isinstance(value, Percent):
+            available = self.availableHeight()
+            if available <= 0:
+                # No sidebar to be a percentage of yet. Answering None leaves
+                # the limit unset until there is, rather than freezing a height
+                # derived from a zero-sized window.
+                return None
+            return value.resolve(available)
+
+        return int(value)
+
     def _applyMaxHeight(self):
         """Apply the ceiling, unless folding has one of its own in force.
 
@@ -211,10 +278,11 @@ class _CollapsibleHost(QtWidgets.QWidget):
         """
         if not self._expanded:
             self.setMaximumHeight(self.headerHeight())
-        elif self._maxHeight is UNLIMITED:
-            self.setMaximumHeight(QtWidgets.QWIDGETSIZE_MAX)
-        else:
-            self.setMaximumHeight(int(self._maxHeight))
+            return
+
+        resolved = self._resolveHeight(self._maxHeight)
+        self.setMaximumHeight(
+            QtWidgets.QWIDGETSIZE_MAX if resolved is None else resolved)
 
     def sizeHint(self):
         """Ask for the default height, when one was given.
@@ -224,9 +292,23 @@ class _CollapsibleHost(QtWidgets.QWidget):
         starting point the user can then drag away from, not a rule.
         """
         hint = super().sizeHint()
-        if self._expanded and self._defaultHeight is not UNLIMITED:
-            hint.setHeight(int(self._defaultHeight))
+
+        if self._expanded:
+            resolved = self._resolveHeight(self._defaultHeight)
+            if resolved is not None:
+                hint.setHeight(resolved)
+
         return hint
+
+    def refreshHeights(self):
+        """Re-resolve percentage heights. Called when the sidebar is resized."""
+        if isinstance(self._maxHeight, Percent):
+            self._applyMaxHeight()
+
+        if isinstance(self._defaultHeight, Percent):
+            # A size hint is only consulted when the layout asks, so this only
+            # has to invalidate it rather than push a number anywhere.
+            self.updateGeometry()
 
     # -- folding ---------------------------------------------------------
 
@@ -355,7 +437,7 @@ class Sidebar(QtWidgets.QWidget):
         self.rail.setFlow(QtWidgets.QListView.Flow.TopToBottom)
         self.rail.setWrapping(False)
         self.rail.setIconSize(QtCore.QSize(24, 24))
-        self.rail.setFixedWidth(44)
+        self.rail.setFixedWidth(rail_width())
         self.rail.setHorizontalScrollBarPolicy(
             QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.rail.currentRowChanged.connect(self._handleRailChanged)
@@ -432,6 +514,12 @@ class Sidebar(QtWidgets.QWidget):
         # it asks for.
         self.column.setStretchFactor(0, 1)
         self.column.setStretchFactor(1, 0)
+
+        # Whether the user has dragged the column divider. Once they have, their
+        # division is the one that stands: _resizeColumn stops recomputing, and
+        # a restored saved split counts as dragged for the same reason.
+        self._columnDragged = False
+        self.column.splitterMoved.connect(self._handleColumnDragged)
 
         # Slice 2 held nothing until D-c.6, and giving space to an empty widget
         # was what squeezed the palette into a third of the sidebar. Now that it
@@ -635,6 +723,10 @@ class Sidebar(QtWidgets.QWidget):
         handles = self.sections.handleWidth() * max(0, len(self._sections) - 1)
         self.pages.setMaximumHeight(headers + handles)
 
+    def _handleColumnDragged(self, _pos, _index):
+        """The user moved the column divider - stop recomputing it."""
+        self._columnDragged = True
+
     def wantedSliceTwoHeight(self):
         """How tall slice 2 asks to be: the sum of what its sections want.
 
@@ -666,23 +758,44 @@ class Sidebar(QtWidgets.QWidget):
             stretch 1/0, hint 400   -> [596, 400]  <- what is wanted
             stretch 1/0, no hint    -> [786, 210]
 
-        So this does not re-derive what the splitter already gets right. Its one
-        job is the ceiling: a stack of sections with generous defaults must not
-        be able to push the palette out of the way, and no amount of stretch
-        expresses "up to half".
+        Those get the *first* layout right. What they cannot do is re-divide
+        afterwards: a QSplitter consults a child's size hint once, and
+        ``updateGeometry()`` does not make it look again - measured, after a
+        round of assuming otherwise. Percentage heights change on every sidebar
+        resize, so the division has to be recomputed explicitly, which is what
+        this does.
         """
+        if self._columnDragged:
+            # The user has set this division by hand. Their number beats a
+            # computed one - the point of the percentages is a sensible
+            # *starting* height, not a height that keeps reasserting itself.
+            return
+
         total = self.column.height()
         if total <= 0:
             # Not laid out yet; showEvent runs this again once it is.
             return
 
-        wanted = self.wantedSliceTwoHeight()
-        if wanted <= total // 2:
-            # Within the ceiling - leave the splitter's own arithmetic alone,
-            # including any size the user has dragged it to.
-            return
+        # Never more than half, however much slice 2 asks for: the palette is
+        # what the user works in, and a stack of sections with generous defaults
+        # must not be able to push it aside.
+        wanted = min(self.wantedSliceTwoHeight(), total // 2)
 
-        self.column.setSizes([total - total // 2, total // 2])
+        # Blocked: setSizes emits splitterMoved, which is the signal that marks
+        # the column as user-dragged. Without this, the first computed division
+        # marks itself as the user's own and every later one is refused - which
+        # left the section frozen at whatever height it first got.
+        # setSizes cannot go below a child's minimum size, and slice 3's panels
+        # add up to a large one - so without this the splitter silently keeps
+        # slice 2 far taller than asked. Lifting the *scroll area's* minimum is
+        # safe and is what it is for: the panels inside it scroll.
+        self.panelScroll.setMinimumHeight(0)
+
+        blocked = self.column.blockSignals(True)
+        try:
+            self.column.setSizes([total - wanted, wanted])
+        finally:
+            self.column.blockSignals(blocked)
 
     # -- slice 3 ---------------------------------------------------------
 
@@ -738,7 +851,112 @@ class Sidebar(QtWidgets.QWidget):
         # The column has no height until the sidebar is shown, so a section
         # added during the window's construction could not be sized then. This
         # is the first moment the arithmetic means anything.
+        self.refreshHeights()
         self._resizeColumn()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+
+        # Percentage heights are percentages *of this widget*, so they mean
+        # something different after every resize.
+        self.refreshHeights()
+
+    def refreshHeights(self):
+        """Re-resolve every host's percentage heights against the new size."""
+        for host, _stretch in self._sections:
+            host.refreshHeights()
+
+        for host in self._panels:
+            host.refreshHeights()
+
+        # And re-divide, because the splitter will not do it on its own: it
+        # reads a size hint once and never looks again.
+        self._resizeColumn()
+
+    def applyRailWidth(self):
+        """Re-read the rail width setting, for the settings dialog to call."""
+        self.rail.setFixedWidth(rail_width())
+
+    # -- remembering the layout ------------------------------------------
+
+    def saveLayout(self):
+        """Write the sidebar's own splitter positions to settings.
+
+        ``QMainWindow.saveState`` covers docks and toolbars, and the sidebar is
+        deliberately neither - so its splitters have to be saved by hand or
+        every launch starts from the default division. Zement's complaint about
+        earlier Reggie versions was exactly this: resizing the same panels at
+        every start.
+
+        Two numbers, both of which the user sets by dragging:
+
+        - the **sidebar's width** - the split between the sidebar and the canvas
+        - the **column split** - how the sidebar's height divides between the
+          sections (slice 2) and the panels (slice 3)
+
+        Stored as plain lists rather than Qt's opaque ``saveState`` blobs, so a
+        settings file stays readable and a bad value can be corrected by hand.
+        """
+        setSetting('SidebarColumnSizes', [int(n) for n in self.column.sizes()])
+
+        window = self.win
+        splitter = getattr(window, 'centralSplitter', None)
+        if splitter is not None and splitter.indexOf(self) != -1 and self.width() > 0:
+            setSetting('SidebarWidth', int(self.width()))
+
+    def restoreLayout(self):
+        """Put back what ``saveLayout`` wrote. Silent when there is nothing.
+
+        Every value is re-checked against the current window rather than
+        trusted: a sidebar sized on a 4K screen must not be restored onto a
+        laptop as a sidebar wider than the window.
+        """
+        sizes = setting('SidebarColumnSizes', None)
+        if sizes:
+            try:
+                sizes = [int(n) for n in sizes]
+            except (TypeError, ValueError):
+                sizes = None
+
+            if sizes and len(sizes) == self.column.count() and sum(sizes) > 0:
+                blocked = self.column.blockSignals(True)
+                try:
+                    self.column.setSizes(sizes)
+                finally:
+                    self.column.blockSignals(blocked)
+
+                # Set here rather than left to splitterMoved, which is blocked
+                # above: a restored split is the user's own division from last
+                # time, so recomputing over it would throw away the thing this
+                # method exists to bring back.
+                self._columnDragged = True
+
+        width = setting('SidebarWidth', None)
+        if width is None:
+            return
+
+        try:
+            width = int(width)
+        except (TypeError, ValueError):
+            return
+
+        window = self.win
+        splitter = getattr(window, 'centralSplitter', None)
+        if splitter is None or splitter.indexOf(self) == -1:
+            return
+
+        total = splitter.width()
+        if total <= 0 or width <= 0:
+            return
+
+        # Never more than half the window, whatever was saved: the canvas is
+        # what the editor is for, and a restored sidebar that swallows it would
+        # be a layout the user cannot easily undo.
+        width = min(width, total // 2)
+
+        index = splitter.indexOf(self)
+        other = total - width
+        splitter.setSizes([width, other] if index == 0 else [other, width])
 
     def _applyPanelStretch(self):
         """Give the stretch to the expanded panels only.

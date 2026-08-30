@@ -2444,6 +2444,20 @@ class PreferencesDialog(QtWidgets.QDialog):
                     'Which side of the window the sidebar is docked to.\n'
                     'The icon rail stays on the outside either way.')
 
+                # A stub, deliberately (Zement, 2026-08-30): the values will be
+                # revisited once there are real icons to size against, which is
+                # why this offers three fixed widths rather than a free number.
+                from reggie.ui.sidebar import RAIL_WIDTHS
+
+                self.railWidth = QtWidgets.QComboBox()
+                for width in RAIL_WIDTHS:
+                    self.railWidth.addItem('%d px' % width, width)
+                self.railWidth.setToolTip(
+                    'How wide the sidebar\'s icon rail is.\n'
+                    'The sidebar\'s own width, and how it divides between\n'
+                    'sections and panels, are remembered from where you drag\n'
+                    'them rather than set here.')
+
                 # Height is a percentage of the canvas rather than pixels: the
                 # overview is a scaled picture of the whole level, so what
                 # matters is how much of the window it takes, and a pixel height
@@ -2492,6 +2506,7 @@ class PreferencesDialog(QtWidgets.QDialog):
                 shellForm = QtWidgets.QFormLayout()
                 shellForm.addRow(self.tabsDraggable)
                 shellForm.addRow('Sidebar side:', self.sidebarSide)
+                shellForm.addRow('Sidebar icon width:', self.railWidth)
                 shellForm.addRow('Level overview corner:', self.overviewCorner)
                 shellForm.addRow('Level overview height:', self.overviewHeight)
                 shellForm.addRow(self.overviewTranslucent)
@@ -2604,6 +2619,12 @@ class PreferencesDialog(QtWidgets.QDialog):
                     'right' if side == 'right' else 'left')
                 if index >= 0:
                     self.sidebarSide.setCurrentIndex(index)
+
+                from reggie.ui.sidebar import rail_width
+
+                index = self.railWidth.findData(rail_width())
+                if index >= 0:
+                    self.railWidth.setCurrentIndex(index)
 
                 index = self.overviewCorner.findData(configured_corner())
                 if index >= 0:

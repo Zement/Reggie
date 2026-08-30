@@ -100,12 +100,15 @@ from reggie.ui.menus import MenuBuilder
 from reggie.ui.docks import DockBuilder
 from reggie.ui.level_io import LevelIO
 from reggie.ui.tabs import MasterTabWidget
+from reggie.ui.sidebar import Percent
 
-#: The undo history section's starting and maximum heights, in pixels (Zement,
-#: 2026-08-30). Named rather than inline because they are the first concrete
-#: values of a scheme the next panels will each get their own numbers for.
-UNDO_SECTION_DEFAULT_HEIGHT = 400
-UNDO_SECTION_MAX_HEIGHT = 2000
+#: The undo history section's starting and maximum heights, as percentages of
+#: the sidebar (Zement, 2026-08-30). Relative rather than absolute because 400px
+#: was chosen on one machine and came out at 40% of a shorter sidebar - the same
+#: reasoning that put the level overview's size behind a percentage in D-c.4.
+#: Over 100 is allowed and means "taller than the sidebar", which scrolls.
+UNDO_SECTION_DEFAULT_HEIGHT = Percent(15)
+UNDO_SECTION_MAX_HEIGHT = Percent(75)
 
 from reggie.ui import tooltabs
 from reggie.ui.tooltabs import ToolTabManager
@@ -2099,6 +2102,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
         setSetting('SidebarSide', shell.sidebarSide.currentData())
         self.PlaceSidebar()
 
+        setSetting('RailWidth', shell.railWidth.currentData())
+        if self.sidebar is not None:
+            self.sidebar.applyRailWidth()
+
         setSetting('OverviewCorner', shell.overviewCorner.currentData())
         setSetting('OverviewHeightPct', shell.overviewHeight.value())
         setSetting('OverviewTranslucent', shell.overviewTranslucent.isChecked())
@@ -2681,6 +2688,26 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         globals_.Area.Metadata.setBinData('InLevelComments_A%d' % globals_.Area.areanum, b)
 
+    def showEvent(self, event):
+        """
+        Handler for the main window being shown (D-c.6)
+
+        The sidebar's saved splitter positions are restored here rather than in
+        the constructor: a splitter has no width until the window is laid out,
+        and restoring against a zero width would clamp every saved size to
+        nothing. Done once - a later show (un-minimising) must not undo a
+        division the user has since dragged.
+        """
+        super().showEvent(event)
+
+        if getattr(self, '_sidebarLayoutRestored', False):
+            return
+
+        self._sidebarLayoutRestored = True
+
+        if self.sidebar is not None:
+            self.sidebar.restoreLayout()
+
     def closeEvent(self, event):
         """
         Handler for the main window close event
@@ -2700,6 +2727,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # geometry: determines the main window position
         setSetting('MainWindowState', self.saveState(LAYOUT_VERSION))
         setSetting('MainWindowGeometry', self.saveGeometry())
+
+        # The sidebar is deliberately not a dock, so saveState does not cover
+        # it and its splitters have to be saved by hand (D-c.6).
+        if self.sidebar is not None:
+            self.sidebar.saveLayout()
 
         if hasattr(self, 'HelpBoxInstance'):
             self.HelpBoxInstance.close()

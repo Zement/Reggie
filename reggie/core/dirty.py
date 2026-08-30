@@ -27,8 +27,11 @@ SETTING_GROUPS = {
                     'PaddingLength', 'PlaceObjectsAtFullSize', 'InsertPathNode', 'Theme',
                     'UIScale', 'FontScale', 'TabsDraggable', 'SidebarSide',
                     'OverviewCorner', 'OverviewHeightPct', 'OverviewWidthPct',
-                    'OverviewTranslucent', 'OverviewOpacityPct'],
-    # Geometry settings are NOT in a group - they stay at root level for Qt
+                    'OverviewTranslucent', 'OverviewOpacityPct', 'RailWidth'],
+    # Geometry settings are NOT in a group - they stay at root level for Qt.
+    # SidebarWidth and SidebarColumnSizes (D-c.6) belong here too: they are
+    # remembered layout, not preferences, and there is nothing in the settings
+    # dialog that sets them - the user sets them by dragging.
 }
 
 def _get_group_for_setting(name):
@@ -197,6 +200,7 @@ def ensureSettingsVisible():
         ('TabsDraggable', False), ('SidebarSide', 'left'),
         ('OverviewCorner', 'bottomright'), ('OverviewHeightPct', 15.0),
         ('OverviewTranslucent', True), ('OverviewOpacityPct', 20.0),
+        ('RailWidth', 48),
     ]
     
     # Write each setting if it doesn't exist
