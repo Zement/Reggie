@@ -1021,13 +1021,21 @@ class SpriteEditorWidget(QtWidgets.QWidget):
             self.checkReq(data, first)
 
             value = self.retrieve(data)
-            i = self.bitnum
 
-            # run at most self.bitnum times
-            while value != 0 and i != 0:
-                self.widgets[i].setChecked(value & 1)
+            # Bit numbering is left-to-right big-endian (see retrieve), so
+            # widgets[0] is the MOST significant bit and widgets[bitnum - 1] the
+            # least. Walking backwards from the last index peels the value off
+            # low bit first and lands each one in the right box.
+            #
+            # This used to start at `self.bitnum`, one past the end - so the very
+            # first assignment raised IndexError on any sprite with a bitfield.
+            # It also stopped as soon as the remaining value hit zero, which left
+            # the higher-numbered boxes showing whatever the last sprite had:
+            # clearing a bit could not be displayed. Both fixed by walking every
+            # box unconditionally.
+            for i in range(self.bitnum - 1, -1, -1):
+                self.widgets[i].setChecked(bool(value & 1))
                 value >>= 1
-                i -= 1
 
         def assign(self, data):
             """
@@ -1035,9 +1043,18 @@ class SpriteEditorWidget(QtWidgets.QWidget):
             """
             value = 0
 
-            # construct bitmask
-            for i in self.bitnum:
-                value = (value | self.widgets[i].isChecked()) << 1
+            # Most significant bit first, matching update() and retrieve()'s
+            # left-to-right numbering: shift what is already there up, then put
+            # this box in the low bit.
+            #
+            # Three bugs lived in these four lines. `for i in self.bitnum`
+            # iterated an int and raised TypeError, so writing a bitfield never
+            # worked at all. The old body also shifted *after* OR-ing, which
+            # left an extra trailing zero and doubled every value, and it OR-ed
+            # into the low bit before shifting rather than after - so even had
+            # it run, the bits would have been off by one place.
+            for widget in self.widgets:
+                value = (value << 1) | int(widget.isChecked())
 
             return self.insertvalue(data, value)
 
@@ -1499,15 +1516,23 @@ class SpriteEditorWidget(QtWidgets.QWidget):
             for i in range(self.bitnum):
                 buttons = [QtWidgets.QRadioButton(), QtWidgets.QRadioButton()]
                 buttons[0].clicked.connect(self.HandleClicked)
-                buttons[0].setAutoExclusive(False)
                 buttons[1].clicked.connect(self.HandleClicked)
-                buttons[1].setAutoExclusive(False)
 
-                buttons[0].setChecked(True)
-
+                # The two setAutoExclusive(False) calls that used to be here were
+                # removed as dead weight, not as a fix: addButton overrides the
+                # per-button flag, so the group was exclusive either way. Stated
+                # because it looks like the culprit and is not - the real bug was
+                # in update(), below.
                 button_group = QtWidgets.QButtonGroup()
                 button_group.addButton(buttons[0], 1)
                 button_group.addButton(buttons[1], 2)
+                button_group.setExclusive(True)
+
+                buttons[0].setChecked(True)
+
+                # Parented so the group is not garbage collected when this loop
+                # moves on, which would take its ids with it.
+                button_group.setParent(self)
 
                 self.widgets.append(button_group)
 
@@ -1577,9 +1602,18 @@ class SpriteEditorWidget(QtWidgets.QWidget):
 
             value = self.retrieve(data)
 
-            # run at most self.bitnum times
+            # Check the button the bit selects, rather than setting button 2 to
+            # the bit's truth. An exclusive group refuses setChecked(False) on
+            # its only checked button - there has to be one - so clearing a bit
+            # silently did nothing and the column kept the previous sprite's
+            # state. Checking the *other* button is the operation that actually
+            # expresses "this bit is now zero".
+            #
+            # Bit numbering is left-to-right big-endian (see retrieve), so
+            # widgets[0] is the most significant bit and this walks backwards,
+            # peeling the low bit off each time.
             for i in range(self.bitnum - 1, -1, -1):
-                self.widgets[i].button(2).setChecked(value & 1)
+                self.widgets[i].button(2 if value & 1 else 1).setChecked(True)
                 value >>= 1
 
         def assign(self, data):
@@ -1590,7 +1624,20 @@ class SpriteEditorWidget(QtWidgets.QWidget):
 
             # construct bitmask
             for i in range(self.bitnum):
-                value = (value << 1) | (self.widgets[i].checkedId() - 1)
+                # checkedId() is 1 or 2 for the two rows, and -1 when nothing in
+                # the column is checked. A bare `- 1` turns that last case into
+                # -2 and hands a negative number to insertvalue, whose
+                # `value >> l` loop never walks a negative down to zero - so it
+                # corrupts the whole field rather than one bit.
+                #
+                # The group's exclusivity should make an unchecked column
+                # unreachable, and measurement says it does. Clamped anyway:
+                # this is a data-corrupting arithmetic bug one attribute away
+                # from being live, and it costs a comparison to close.
+                checked = self.widgets[i].checkedId()
+                bit = 1 if checked == 2 else 0
+
+                value = (value << 1) | bit
 
             return self.insertvalue(data, value)
 
