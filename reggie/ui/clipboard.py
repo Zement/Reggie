@@ -303,8 +303,20 @@ class ClipboardController:
         self.win.SelectionUpdateFlag = False
         self.win.ChangeSelectionHandler()
 
-        # Combine everything that was added
-        added = sprites + entrances + locations + paths + path_nodes
+        # Combine everything that was added.
+        #
+        # The Path containers are deliberately absent. A Path is a plain object,
+        # not a QGraphicsItem: it holds the nodes and the line between them, and
+        # every consumer of this list treats its members as scene items. The
+        # collaboration layer is the one that says so out loud - it refuses a
+        # Path with "item type Path cannot be synchronised" (Zement, 2026-08-31,
+        # pasting paths while hosting) - but the same assumption is in the undo
+        # stack and the selection handling.
+        #
+        # The nodes are what represents a path everywhere else in the editor:
+        # drawing one by hand tracks the node, and the sync layer recreates the
+        # container from a node's description. So the nodes carry the paste too.
+        added = sprites + entrances + locations + path_nodes
         for layer in layers:
             added += layer
 
@@ -552,7 +564,16 @@ class ClipboardController:
                         used = set(p._id for p in globals_.Area.paths)
                         used |= set(path_id_map.values())
 
-                        candidate = common.find_first_available_id(used, 256)
+                        # From 1, not 0: Nintendo's levels never use path id 0,
+                        # and hand-drawing a path already skips it (see the
+                        # getids[0] = True in misc2.py). Zement checked with
+                        # Nin0 and Ogu_99, 2026-08-31 - 0 is most likely legal,
+                        # but there is no reason to be the only thing in the
+                        # editor that produces it.
+                        #
+                        # Entrances are the opposite and do start at 0, which is
+                        # why they use the default minimum.
+                        candidate = common.find_first_available_id(used, 256, 1)
                         if candidate is not None:
                             newID = candidate
 
