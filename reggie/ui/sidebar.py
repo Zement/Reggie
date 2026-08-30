@@ -418,8 +418,20 @@ class Sidebar(QtWidgets.QWidget):
         self.column = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical, self)
         self.column.addWidget(self.panelScroll)
         self.column.addWidget(self.pages)
+
+        # **Slice 3 takes the leftover space; slice 2 takes what it asks for.**
+        # Not an even split (Zement, 2026-08-30: a single 400px undo section
+        # filled half the sidebar). The two want different things from height:
+        # the palette is a scrolling list, so more of it is directly more of
+        # what the user came for, while a section has a default height it wants
+        # and nothing useful to do with the rest.
+        #
+        # So slice 2 is sized to the sum of its sections and slice 3 absorbs the
+        # remainder. Both of Zement's rules follow from that one: an empty slice
+        # 2 asks for nothing, and each section added adds its own height to what
+        # it asks for.
         self.column.setStretchFactor(0, 1)
-        self.column.setStretchFactor(1, 1)
+        self.column.setStretchFactor(1, 0)
 
         # Slice 2 held nothing until D-c.6, and giving space to an empty widget
         # was what squeezed the palette into a third of the sidebar. Now that it
@@ -542,6 +554,13 @@ class Sidebar(QtWidgets.QWidget):
 
         self.pages.setVisible(True)
 
+        # Size the column for the new total. Deliberately here and in
+        # removeSection, but NOT on fold: folding should give its space to slice
+        # 3 and leave it there, and re-running this would take it straight back.
+        # Adding and removing change what slice 2 *is*; folding only changes how
+        # much of itself it is showing.
+        self._resizeColumn()
+
         return host
 
     def sectionFor(self, widget):
@@ -571,6 +590,7 @@ class Sidebar(QtWidgets.QWidget):
 
             self._applySectionStretch()
             self.pages.setVisible(bool(self._sections))
+            self._resizeColumn()
             return widget
 
         return None
@@ -614,6 +634,55 @@ class Sidebar(QtWidgets.QWidget):
         headers = sum(host.headerHeight() for host, _stretch in self._sections)
         handles = self.sections.handleWidth() * max(0, len(self._sections) - 1)
         self.pages.setMaximumHeight(headers + handles)
+
+    def wantedSliceTwoHeight(self):
+        """How tall slice 2 asks to be: the sum of what its sections want.
+
+        A folded section contributes its header, an expanded one its default
+        height - or its natural size hint where no default was given. This is
+        what makes Zement's two rules one rule: an empty slice 2 wants nothing,
+        and adding a section adds that section's height to what it wants.
+        """
+        if not self._sections:
+            return 0
+
+        total = 0
+        for host, _stretch in self._sections:
+            if not host.isExpanded():
+                total += host.headerHeight()
+            else:
+                total += host.sizeHint().height()
+
+        return total + self.sections.handleWidth() * max(
+            0, len(self._sections) - 1)
+
+    def _resizeColumn(self):
+        """Cap slice 2 at half the column, however much it asks for.
+
+        The *sizing* is done by the splitter itself - stretch 1/0 plus each
+        section's size hint - and measurement says so:
+
+            stretch 1/1, hint 400   -> [29, 967]   <- Zement's bug
+            stretch 1/0, hint 400   -> [596, 400]  <- what is wanted
+            stretch 1/0, no hint    -> [786, 210]
+
+        So this does not re-derive what the splitter already gets right. Its one
+        job is the ceiling: a stack of sections with generous defaults must not
+        be able to push the palette out of the way, and no amount of stretch
+        expresses "up to half".
+        """
+        total = self.column.height()
+        if total <= 0:
+            # Not laid out yet; showEvent runs this again once it is.
+            return
+
+        wanted = self.wantedSliceTwoHeight()
+        if wanted <= total // 2:
+            # Within the ceiling - leave the splitter's own arithmetic alone,
+            # including any size the user has dragged it to.
+            return
+
+        self.column.setSizes([total - total // 2, total // 2])
 
     # -- slice 3 ---------------------------------------------------------
 
@@ -662,6 +731,14 @@ class Sidebar(QtWidgets.QWidget):
         for host, stretch in zip(self._panels, self._panelStretches):
             if stretch:
                 _expandVertically(host.panelWidget)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+
+        # The column has no height until the sidebar is shown, so a section
+        # added during the window's construction could not be sized then. This
+        # is the first moment the arithmetic means anything.
+        self._resizeColumn()
 
     def _applyPanelStretch(self):
         """Give the stretch to the expanded panels only.
