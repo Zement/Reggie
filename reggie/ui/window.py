@@ -1295,9 +1295,107 @@ class ReggieWindow(QtWidgets.QMainWindow):
             # more of what the user came for - the same reasoning that gives the
             # palette its stretch in slice 3.
             stretch=1,
-            on_close=self._closeDirectoryListing)
+            on_close=self._closeDirectoryListing,
+            context=True)
 
         return self.levelTreeSection
+
+    def ShowGamePatches(self):
+        """Put the installed-patch list into sidebar slice 2 (D-d.2c).
+
+        A context-sensitive section like the directory listing. It was a rail
+        *page* until Zement's 2026-09-01 report: "Game Patches panel/tree does
+        not have a collapsible header element and close button. All panels
+        should have the same header." It had none because a page is not a
+        section - see `Sidebar.addSection`.
+        """
+        if self.sidebar is None:
+            return None
+
+        existing = self.sidebar.sectionFor(
+            getattr(self, 'patchListWidget', None))
+        if existing is not None:
+            self.sidebar.showSections()
+            return existing
+
+        from reggie.ui.patchlist import PatchListWidget
+
+        self.patchListWidget = PatchListWidget(self)
+        self.patchListSection = self.sidebar.addSection(
+            globals_.trans.string('MenuItems', 142),
+            self.patchListWidget,
+            stretch=1,
+            on_close=self._closeGamePatches,
+            context=True)
+
+        # The list is built fresh each time this section is opened, so a
+        # collaboration restriction applied to the previous one went with it. A
+        # client that closed and re-opened the section would otherwise get a
+        # patch list it could use - and switching patch as a client pulls the
+        # tilesets out from under the session.
+        collab = getattr(self, '_collab', None)
+        if collab is not None:
+            try:
+                collab.applyEditingPermissions()
+            except Exception:
+                pass
+
+        return self.patchListSection
+
+    def _closeGamePatches(self):
+        """Take the patch list out of slice 2 and forget it."""
+        if self.sidebar is None:
+            return
+
+        existing = self.sidebar.sectionFor(
+            getattr(self, 'patchListWidget', None))
+        if existing is not None:
+            self.sidebar.removeSection(existing)
+
+        self.patchListWidget = None
+        self.patchListSection = None
+
+    def ShowHelpSection(self):
+        """Put the Help entries into sidebar slice 2 as a tree (D-d.2c).
+
+        Zement, 2026-09-01: "*Help* by the way should simply show the current
+        Help file menu contents as a tree in slice 2." It reads the existing
+        Help menu rather than listing the entries again, so an entry added to
+        the menu appears here with no second place to remember.
+        """
+        if self.sidebar is None:
+            return None
+
+        existing = self.sidebar.sectionFor(
+            getattr(self, 'helpTreeWidget', None))
+        if existing is not None:
+            self.sidebar.showSections()
+            return existing
+
+        from reggie.ui.helptree import HelpTreeWidget
+
+        self.helpTreeWidget = HelpTreeWidget(self)
+        self.helpTreeSection = self.sidebar.addSection(
+            globals_.trans.string('MenuItems', 88),
+            self.helpTreeWidget,
+            stretch=1,
+            on_close=self._closeHelpSection,
+            context=True)
+
+        return self.helpTreeSection
+
+    def _closeHelpSection(self):
+        """Take the Help tree out of slice 2 and forget it."""
+        if self.sidebar is None:
+            return
+
+        existing = self.sidebar.sectionFor(
+            getattr(self, 'helpTreeWidget', None))
+        if existing is not None:
+            self.sidebar.removeSection(existing)
+
+        self.helpTreeWidget = None
+        self.helpTreeSection = None
 
     def _closeDirectoryListing(self):
         """Take the directory listing out of slice 2 and forget it.

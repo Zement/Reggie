@@ -627,6 +627,11 @@ class Sidebar(QtWidgets.QWidget):
         self.sections = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         self.sections.setChildrenCollapsible(False)
         self._sections = []
+
+        # host -> is it context-sensitive. A dict rather than a third element in
+        # the `_sections` tuples, so the many places that unpack
+        # `(host, stretch)` keep working.
+        self._sectionContext = {}
         self.pages.addWidget(self.sections)
 
         # Rail row -> page widget, and rail row -> callback. A row may have
@@ -694,6 +699,12 @@ class Sidebar(QtWidgets.QWidget):
         # because slice 2 was still hidden. Applied by _applySliceWidth the
         # first time slice 2 is shown, then cleared.
         self._savedSliceWidth = None
+
+        # The last width slice 2 actually had, whether computed or dragged. A
+        # hidden splitter child keeps no width, so this is what re-opening a
+        # section restores it to - without it the slice comes back at its
+        # minimum however wide the user had made it.
+        self._lastSliceWidth = None
 
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal, self)
         self.splitter.setChildrenCollapsible(False)
@@ -896,7 +907,7 @@ class Sidebar(QtWidgets.QWidget):
 
     def addSection(self, title, widget, stretch=1, closable=True,
                    on_close=None, default_height=UNLIMITED,
-                   max_height=UNLIMITED):
+                   max_height=UNLIMITED, context=False):
         """Add a collapsible section to slice 2. Returns its ``SectionHost``.
 
         Sections stack vertically in a splitter, so several are visible at once
@@ -909,7 +920,35 @@ class Sidebar(QtWidgets.QWidget):
         the undo history passes its own handler so the menu tick stays in step,
         and D-d's collab section will pass one so closing the chat does not end
         the session.
+
+        ``context`` marks the section **context-sensitive** (Zement's model,
+        2026-09-01):
+
+        - *context-sensitive* sections are mutually exclusive and sit at the
+          top. Opening one closes the one before it. Game Patches, Directory
+          Listing and Help are the set today.
+        - *always-open* sections stack below them in the order they were opened
+          and survive every context switch, including having no context section
+          open at all. The undo history is the one today; logs and the collab
+          chat are planned.
+
+        This replaced an accidental split where Game Patches was a rail *page*
+        (a `QStackedWidget` entry) while the tree and the undo history were
+        sections. Two mechanisms that looked alike produced exactly the
+        confusion Zement reported: the patch list had no section header because
+        it was not a section, and the undo history appeared "attached to" the
+        directory listing because a page replaced the whole splitter while a
+        section merely joined it.
         """
+        if context:
+            # Mutually exclusive, and closed rather than hidden: a context
+            # section is cheap to rebuild and its owner re-creates it on the
+            # next activation, so keeping stale ones around would only make
+            # `_sections` disagree with what is on screen.
+            for existing, _stretch in list(self._sections):
+                if self._sectionContext.get(existing):
+                    self._closeSection(existing)
+
         host = SectionHost(title, widget, self.sections, closable=closable,
                            default_height=default_height,
                            max_height=max_height)
@@ -918,8 +957,18 @@ class Sidebar(QtWidgets.QWidget):
             host.closeRequested.connect(on_close)
         else:
             host.closeRequested.connect(lambda: self.removeSection(host))
-        self.sections.addWidget(host)
-        self._sections.append((host, stretch))
+
+        self._sectionContext[host] = bool(context)
+
+        # Context-sensitive sections go to the top, always-open ones below in
+        # the order they arrived. Since there is at most one context section,
+        # index 0 is the whole of "the top".
+        if context:
+            self.sections.insertWidget(0, host)
+            self._sections.insert(0, (host, stretch))
+        else:
+            self.sections.addWidget(host)
+            self._sections.append((host, stretch))
 
         host.toggled.connect(lambda _on: self._applySectionStretch())
         self._applySectionStretch()
@@ -947,8 +996,19 @@ class Sidebar(QtWidgets.QWidget):
         page, if one has been added, so the rail does not claim a different
         page is showing. Blocked, or the row change re-enters the handler.
         """
+        was_hidden = not self.pages.isVisible()
+
         self.pages.setCurrentWidget(self.sections)
         self.pages.setVisible(bool(self._sections))
+
+        # Slice 2 coming back from hidden needs the width re-divided, and a
+        # hidden splitter child cannot be sized - so this is the first moment it
+        # can take one. Without it, re-opening the directory listing after
+        # closing every section restored a zero-width slice: the section was
+        # there and visible, and had no room to be seen in (Zement, 2026-09-01 -
+        # "pressing Directory Listing in the rail does not bring it back").
+        if was_hidden and self.pages.isVisible():
+            self._resizeColumn()
 
         row = next((i for i, p in enumerate(self._railPages)
                     if p is self.sections), None)
@@ -969,6 +1029,37 @@ class Sidebar(QtWidgets.QWidget):
                 return host
         return None
 
+    def contextSection(self):
+        """The open context-sensitive section, or None. At most one exists."""
+        for host, _stretch in self._sections:
+            if self._sectionContext.get(host):
+                return host
+        return None
+
+    def _closeSection(self, host):
+        """Close ``host`` the way its own X would.
+
+        Through the owner's ``closeRequested`` handler rather than straight to
+        ``removeSection``, because the owner has state to keep in step - the
+        window drops its `levelTreeWidget` reference, the undo history unticks
+        its menu entry. Calling removeSection directly would leave the window
+        believing a section it can no longer see is still open, and its next
+        "already up?" test would then refuse to re-create it.
+
+        Deliberately **not** wrapped in try/except. An unhandled exception in a
+        PyQt6 slot aborts the interpreter rather than propagating out of
+        ``emit()`` - measured 2026-09-01, after writing exactly that guard and
+        watching the suite exit with no traceback - so a try/except here cannot
+        catch a failing handler and only reads as though it could.
+        """
+        host.closeRequested.emit()
+
+        # A handler is free to do nothing, and one that leaves the section in
+        # place would break exclusivity silently. This is the backstop that
+        # makes the rule hold regardless of what the owner did.
+        if self.sectionFor(host.sectionWidget) is host:
+            self.removeSection(host)
+
     def removeSection(self, host):
         """Take a section out of slice 2, leaving its widget alive.
 
@@ -984,6 +1075,7 @@ class Sidebar(QtWidgets.QWidget):
             widget.setParent(None)
 
             self._sections.pop(index)
+            self._sectionContext.pop(host, None)
             host.setParent(None)
             host.deleteLater()
 
@@ -1049,8 +1141,16 @@ class Sidebar(QtWidgets.QWidget):
 
         Same rule as the column, one axis over: from here on their width is the
         one that stands, and `_resizeColumn` stops re-dividing.
+
+        Their width is also *recorded*, so closing every section and re-opening
+        one restores it rather than the 180px floor a hidden splitter child
+        comes back at.
         """
         self._widthDragged = True
+
+        width = int(self.pages.width())
+        if width > 0:
+            self._lastSliceWidth = width
 
     def wantedSliceTwoHeight(self):
         """How tall slice 2 asks to be: the sum of what its sections want.
@@ -1095,12 +1195,6 @@ class Sidebar(QtWidgets.QWidget):
         if self._applySliceWidth():
             return
 
-        if self._widthDragged:
-            # The user has set this division by hand. Their number beats a
-            # computed one - the share is a sensible *starting* width, not one
-            # that keeps reasserting itself.
-            return
-
         if not self._sections and not self.pages.isVisible():
             # Nothing in slice 2, so there is nothing to divide: the splitter
             # gives the whole width to the panels on its own.
@@ -1109,6 +1203,21 @@ class Sidebar(QtWidgets.QWidget):
         total = self.splitter.width() - rail_width() - self.splitter.handleWidth() * 2
         if total <= 0:
             # Not laid out yet; showEvent runs this again once it is.
+            return
+
+        if self._widthDragged:
+            # The user has set this division by hand, so the computed share does
+            # not apply. Their width still has to be *re-applied* though, and
+            # this is why the early return that used to stand here was wrong:
+            # closing every section hides slice 2, and a hidden splitter child
+            # keeps no width - so re-opening one brought the slice back at its
+            # 180px floor rather than at the width the user chose (measured in a
+            # real boot, 2026-09-01).
+            if self._lastSliceWidth and self.pages.isVisible():
+                width = min(self._lastSliceWidth,
+                            max(0, total - MIN_SLICE_TWO_WIDTH))
+                if width >= MIN_SLICE_TWO_WIDTH:
+                    self._setSliceSizes(width, total - width)
             return
 
         wanted = max(MIN_SLICE_TWO_WIDTH, int(total * SLICE_TWO_SHARE))
@@ -1120,15 +1229,22 @@ class Sidebar(QtWidgets.QWidget):
         if wanted <= 0:
             return
 
-        panels = total - wanted
+        self._setSliceSizes(wanted, total - wanted)
 
-        # Blocked: setSizes emits splitterMoved, which is the signal that marks
-        # the division as user-dragged. Without this, the first computed
-        # division marks itself as the user's own and every later one is
-        # refused - which left the section frozen at whatever it first got.
+    def _setSliceSizes(self, slice_two, panels):
+        """Apply a slice 2 / panels division, without it counting as a drag.
+
+        Blocked, because setSizes emits splitterMoved - the signal that marks
+        the division as user-dragged. Without this the first computed division
+        would mark itself as the user's own and every later one would be
+        refused, which is how a section ends up frozen at whatever width it
+        first got.
+        """
+        self._lastSliceWidth = slice_two
+
         blocked = self.splitter.blockSignals(True)
         try:
-            sizes = [rail_width(), wanted, panels]
+            sizes = [rail_width(), slice_two, panels]
             if self._side == SIDE_RIGHT:
                 sizes.reverse()
             self.splitter.setSizes(sizes)
@@ -1263,10 +1379,15 @@ class Sidebar(QtWidgets.QWidget):
         # take the remainder, so one number is the whole of what the user chose
         # - and it survives a rail resize or a side flip, which a list of three
         # absolute widths would not.
-        if self._sections or self.pages.isVisible():
-            slice_two = int(self.pages.width())
-            if slice_two > 0:
-                setSetting('SidebarSliceTwoWidth', slice_two)
+        # `_lastSliceWidth` rather than `pages.width()` when slice 2 is hidden:
+        # a hidden widget reports a stale number, and closing every section
+        # before quitting would otherwise save whatever it happened to hold.
+        slice_two = int(self.pages.width()) if self.pages.isVisible() else 0
+        if slice_two <= 0:
+            slice_two = int(self._lastSliceWidth or 0)
+
+        if slice_two > 0:
+            setSetting('SidebarSliceTwoWidth', slice_two)
 
         window = self.win
         splitter = getattr(window, 'centralSplitter', None)
@@ -1557,14 +1678,7 @@ class Sidebar(QtWidgets.QWidget):
         self._savedSliceWidth = None
         self._widthDragged = True
 
-        blocked = self.splitter.blockSignals(True)
-        try:
-            sizes = [rail_width(), width, total - width]
-            if self._side == SIDE_RIGHT:
-                sizes.reverse()
-            self.splitter.setSizes(sizes)
-        finally:
-            self.splitter.blockSignals(blocked)
+        self._setSliceSizes(width, total - width)
 
         return True
 

@@ -617,12 +617,22 @@ class LevelTreeModel(QtCore.QAbstractItemModel):
     def _readOnly(self):
         """Whether this editor may not open levels itself.
 
-        True only for a *client* in a collaboration session. Guarded to the
-        point of paranoia: the tree must render with no collab layer at all,
-        which is how every headless test and every ordinary launch runs it.
+        True only for a *client* in a collaboration session. Guarded, because
+        the tree must render with no collab layer at all - which is how every
+        headless test and every ordinary launch runs it.
+
+        **The attribute is `_collab`, not `collab`** (fixed 2026-09-01). It was
+        `collab` here, which no window has ever had, so this returned False for
+        everyone and a client's tree was never greyed out - Zement, testing as a
+        client: "the color of the levels and areas in the tree does not look
+        different to me." The `getattr(..., None)` guard below turned a typo
+        into a permanent silent False rather than an AttributeError, which is
+        the standing hazard of a broad guard: it hides the mistake it was
+        written to tolerate. Hence the assertion in test_level_tree that the
+        attribute exists at all.
         """
         window = self.win or getattr(globals_, 'mainWindow', None)
-        controller = getattr(window, 'collab', None)
+        controller = getattr(window, '_collab', None)
         if controller is None:
             return False
 

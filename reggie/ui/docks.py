@@ -467,16 +467,22 @@ class DockBuilder:
         (Puzzle Next later), Logs/Undo, Help, Preferences. Provisional - entries
         are expected to be added as the later phases land.
 
-        Three kinds of entry are in use here, which is why `addPage` grew to
-        take all three:
+        **Every rail entry that shows something in slice 2 opens a section**
+        (Zement's model, 2026-09-01). Game Patches was a rail *page* until then -
+        a `QStackedWidget` entry rather than a section - and that accidental
+        split is what produced two of his four reports: the patch list had no
+        collapsible header because it was not a section, and the undo history
+        looked "attached to" the directory listing because a page replaced the
+        whole splitter while a section merely joined it.
 
-        - **Game Patches** owns a page of its own - a list that fills slice 2.
-        - **Directory Listing** and **Logs/Undo** select the *sections* page,
-          because their content is a collapsible section among others rather
-          than something that should hide the rest. D-d.2 puts the tree there;
-          the undo history is already there when the user opens it.
-        - **Preferences** is an action: it opens as a tool tab in the master
-          container and has no sidebar page at all.
+        So there are two kinds of entry left:
+
+        - **Game Patches**, **Directory Listing** and **Help** open
+          *context-sensitive* sections: mutually exclusive, always on top.
+        - **Preferences** is an action - it opens as a tool tab in the master
+          container and has no sidebar content at all. **Logs/Undo** is also an
+          action, but one that opens an *always-open* section, which stacks
+          below the context section and survives every switch between them.
         """
         sidebar = self.win.sidebar
         if sidebar is None:
@@ -485,7 +491,6 @@ class DockBuilder:
         # Lazy, like the other reggie.ui imports here: reggie.py defers `ui`
         # until after the QApplication exists (the Block A lesson).
         from reggie.ui.ui import GetIcon
-        from reggie.ui.patchlist import PatchListWidget
 
         trans = globals_.trans.string
 
@@ -498,14 +503,11 @@ class DockBuilder:
             return GetIcon(name, True)
 
         # -- Game Patches ------------------------------------------------
-        self.win.patchListWidget = PatchListWidget(self.win)
         sidebar.addPage(icon('game'), trans('MenuItems', 142),
-                        self.win.patchListWidget)
+                        sections=True,
+                        on_activate=self._showGamePatches)
 
         # -- Directory Listing --------------------------------------------
-        # A section rather than a page of its own (D-d.2): it belongs beside the
-        # undo history and the collab chat, which is the shape D-c chose for
-        # slice 2 - things a user wants at the same time, sized to taste.
         sidebar.addPage(icon('folderpath'), trans('MenuItems', 143),
                         sections=True,
                         on_activate=self._showDirectoryListing)
@@ -519,11 +521,16 @@ class DockBuilder:
 
         # -- Help ---------------------------------------------------------
         sidebar.addPage(icon('help'), trans('MenuItems', 88),
-                        on_activate=self.win.HelpBox)
+                        sections=True,
+                        on_activate=self._showHelp)
 
         # -- Preferences --------------------------------------------------
         sidebar.addPage(icon('settings'), trans('MenuItems', 18),
                         on_activate=self.win.HandlePreferences)
+
+    def _showGamePatches(self):
+        """Open the Game Patches section unless it is already up."""
+        self.win.ShowGamePatches()
 
     def _showDirectoryListing(self):
         """Open the directory listing section unless it is already up (D-d.2).
@@ -532,6 +539,10 @@ class DockBuilder:
         rail category should never *hide* the thing it names.
         """
         self.win.ShowDirectoryListing()
+
+    def _showHelp(self):
+        """Open the Help section unless it is already up (D-d.2c)."""
+        self.win.ShowHelpSection()
 
     def _showUndoHistory(self):
         """Open the undo history section unless it is already up.
