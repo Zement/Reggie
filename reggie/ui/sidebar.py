@@ -597,6 +597,18 @@ class Sidebar(QtWidgets.QWidget):
 
         self.rail.currentRowChanged.connect(self._handleRailChanged)
 
+        # And on a click, even when the row does not change. `currentRowChanged`
+        # fires only on a *change*, which was enough while every entry had a
+        # page of its own: clicking the current entry showed what was already
+        # shown. Since D-d.2c four entries share the sections page, so the
+        # highlight can sit on one entry while another's section is open - and
+        # clicking the highlighted one has to open its section rather than do
+        # nothing (Zement, 2026-09-01).
+        #
+        # `itemClicked` rather than `itemPressed`: a press that turns into a
+        # drag off the rail should not count.
+        self.rail.itemClicked.connect(self._handleRailClicked)
+
         # slice 2 - one page per rail entry: the directory listing, the game
         # patch list, the undo history, the collab chat.
         #
@@ -641,9 +653,31 @@ class Sidebar(QtWidgets.QWidget):
         self._railPages = []
         self._railActions = []
 
+        # Rail row -> a predicate answering "is this entry's own section the one
+        # currently showing?", or None. Only the owner can answer that: the
+        # sidebar sees an anonymous list of sections and cannot tell which entry
+        # any of them belongs to. Used to stop a click on the showing entry
+        # rebuilding its section (D-d.2c).
+        self._railOwns = []
+
         # The last row that actually selected a page, so an action entry can
         # hand the highlight back rather than leaving it on a button.
         self._lastPageRow = None
+
+        # The row whose content is currently showing. Distinct from the rail's
+        # `currentRow`, which is only where the highlight sits: since D-d.2c
+        # four entries share the sections page, so the highlight can be on one
+        # while another's section is open. `_handleRailClicked` compares against
+        # this to tell "clicked the entry already showing" - a no-op - from
+        # "clicked the highlighted entry whose section is not up", which must
+        # open it.
+        self._activeRow = None
+
+        # The rail row currently running its activation callback, so a section
+        # that callback opens knows which entry to highlight. Set and cleared
+        # around the callback in `_handleRailChanged`; None at every other time,
+        # which is when `showSections` falls back to inference.
+        self._pendingOwnerRow = None
 
         # The width _restoreWidth had to cut the saved value down to, or None
         # when it did not have to. saveLayout reads it so a clamped width is
@@ -794,7 +828,7 @@ class Sidebar(QtWidgets.QWidget):
             self.rail.item(row).setSizeHint(size)
 
     def addPage(self, icon, title, widget=None, on_activate=None,
-                sections=False):
+                sections=False, is_open=None):
         """Add a rail entry, and say what selecting it does.
 
         Three kinds of entry, because D-d needs all three (phase D-d.1):
@@ -812,6 +846,13 @@ class Sidebar(QtWidgets.QWidget):
 
         ``on_activate`` composes with the other two: an entry may both show a
         page and do something when picked.
+
+        ``is_open`` is an optional predicate answering "is this entry's own
+        section the one currently showing?". Clicking an entry whose section is
+        already up is then a no-op rather than a rebuild, which matters because
+        a context section is re-created on open - rebuilding would discard the
+        tree's scroll position, its expanded levels and the user's selection.
+        Only the owner can answer it; the sidebar sees an anonymous list.
         """
         item = QtWidgets.QListWidgetItem(self.rail)
         if icon is not None:
@@ -835,6 +876,7 @@ class Sidebar(QtWidgets.QWidget):
         # adds entries.
         self._railPages.append(page)
         self._railActions.append(on_activate)
+        self._railOwns.append(is_open)
 
         if self.rail.currentRow() < 0 and page is not None:
             self.rail.setCurrentRow(self.rail.count() - 1)
@@ -849,6 +891,17 @@ class Sidebar(QtWidgets.QWidget):
 
         if page is not None:
             self._lastPageRow = row
+
+            # The row whose content is showing - which for a shared page is not
+            # the same thing as the highlight. Set before the action runs, so
+            # that a section opened by the action attributes itself here.
+            self._activeRow = row
+
+            # Told which row asked, so `addSection` -> `showSections` puts the
+            # highlight on this entry rather than on the first entry that
+            # happens to share the sections page.
+            self._pendingOwnerRow = row
+
             self.pages.setCurrentWidget(page)
 
             # A page entry only makes slice 2 visible when it has something to
@@ -882,6 +935,52 @@ class Sidebar(QtWidgets.QWidget):
             # the same rule the patch selector refresh follows.
             import traceback
             traceback.print_exc()
+        finally:
+            self._pendingOwnerRow = None
+
+    def _handleRailClicked(self, item):
+        """A rail row was clicked, whether or not it was already current.
+
+        `currentRowChanged` covers the changing case; this covers the rest. Both
+        land in the same handler, so an entry behaves identically however the
+        selection got there.
+        """
+        row = self.rail.row(item)
+        if row < 0:
+            return
+
+        # The changing case has already run through currentRowChanged - running
+        # it twice would open a section, then close and re-open it.
+        if row != self._activeRow:
+            return
+
+        # Nor may re-clicking the entry that is *already showing* rebuild its
+        # section: a context section is torn down and re-created on open, so
+        # doing that would throw away the tree's scroll position, its expanded
+        # levels and the user's selection for no gain. Only an entry whose
+        # section is not up has anything to do here - which is exactly the case
+        # the bug left unreachable.
+        if self._sectionOwned(row):
+            return
+
+        self._handleRailChanged(row)
+
+    def _sectionOwned(self, row):
+        """Whether row ``row``'s own section is the one currently showing.
+
+        Asked of the *owner* rather than of the sidebar, because only the owner
+        knows which widget is its section - the sidebar sees an anonymous list.
+        A row with no such callback answers False, which keeps the old
+        behaviour for entries that have not opted in.
+        """
+        owns = self._railOwns[row] if row < len(self._railOwns) else None
+        if owns is None:
+            return False
+
+        try:
+            return bool(owns())
+        except Exception:
+            return False
 
     def _restoreRailSelection(self, row):
         """Move the rail's highlight off an action entry.
@@ -989,12 +1088,26 @@ class Sidebar(QtWidgets.QWidget):
 
         return host
 
-    def showSections(self):
+    def showSections(self, owner_row=None):
         """Bring the sections page to the front of slice 2, and show it.
 
-        Also moves the rail's highlight to the entry that owns the sections
-        page, if one has been added, so the rail does not claim a different
-        page is showing. Blocked, or the row change re-enters the handler.
+        ``owner_row`` is the rail row that asked for this, so the highlight
+        lands on the entry the user actually picked.
+
+        **It used to be inferred**, as "the first entry whose page is the
+        sections page" - which was right while exactly one entry owned that
+        page, and wrong the moment D-d.2c gave Game Patches, Directory Listing,
+        Logs/Undo and Help the same one. All four then parked the highlight on
+        row 0, and since `setCurrentRow` emits nothing when the row is already
+        current, clicking Game Patches became a no-op: the rail said "you are
+        on Game Patches" while showing the directory listing (Zement,
+        2026-09-01 - "Game Patches can not be opened via the rail button",
+        except right after Logs/Undo, which is an action that leaves the
+        highlight elsewhere).
+
+        Passing None keeps the old inference, which is still right for the one
+        caller that has no row of its own: `addSection`, where the section may
+        be opened by a menu entry rather than by the rail.
         """
         was_hidden = not self.pages.isVisible()
 
@@ -1010,8 +1123,12 @@ class Sidebar(QtWidgets.QWidget):
         if was_hidden and self.pages.isVisible():
             self._resizeColumn()
 
-        row = next((i for i, p in enumerate(self._railPages)
-                    if p is self.sections), None)
+        row = owner_row if owner_row is not None else self._pendingOwnerRow
+        if row is None or not (0 <= row < len(self._railPages)) \
+                or self._railPages[row] is not self.sections:
+            row = next((i for i, p in enumerate(self._railPages)
+                        if p is self.sections), None)
+
         if row is None or self.rail.currentRow() == row:
             return
 

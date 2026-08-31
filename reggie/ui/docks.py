@@ -502,27 +502,42 @@ class DockBuilder:
         def icon(name):
             return GetIcon(name, True)
 
+        # `is_open` on each: clicking the entry whose section is already showing
+        # must not rebuild it, or the tree loses its scroll position, its
+        # expanded levels and the selection. Each answers for its own widget,
+        # which is the only thing the sidebar cannot work out for itself.
+        def showing(attr):
+            def check():
+                widget = getattr(self.win, attr, None)
+                return (widget is not None
+                        and sidebar.sectionFor(widget) is not None)
+            return check
+
         # -- Game Patches ------------------------------------------------
         sidebar.addPage(icon('game'), trans('MenuItems', 142),
                         sections=True,
-                        on_activate=self._showGamePatches)
+                        on_activate=self._showGamePatches,
+                        is_open=showing('patchListWidget'))
 
         # -- Directory Listing --------------------------------------------
         sidebar.addPage(icon('folderpath'), trans('MenuItems', 143),
                         sections=True,
-                        on_activate=self._showDirectoryListing)
+                        on_activate=self._showDirectoryListing,
+                        is_open=showing('levelTreeWidget'))
 
         # -- Logs / Undo --------------------------------------------------
         # Selecting it shows the sections page and opens the undo history if it
         # is not already up, which is what makes the entry do something today.
         sidebar.addPage(icon('undo'), trans('MenuItems', 144),
                         sections=True,
-                        on_activate=self._showUndoHistory)
+                        on_activate=self._showUndoHistory,
+                        is_open=showing('undoHistoryView'))
 
         # -- Help ---------------------------------------------------------
         sidebar.addPage(icon('help'), trans('MenuItems', 88),
                         sections=True,
-                        on_activate=self._showHelp)
+                        on_activate=self._showHelp,
+                        is_open=showing('helpTreeWidget'))
 
         # -- Preferences --------------------------------------------------
         sidebar.addPage(icon('settings'), trans('MenuItems', 18),
