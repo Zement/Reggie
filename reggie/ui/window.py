@@ -364,6 +364,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
         focusgroups.install(self)
         print("[INIT2] ✓ Focus groups installed")
 
+        # The directory listing (D-d.2), up by default: it is the block's main
+        # feature and the thing the sidebar exists for. Before the level load
+        # below, so the tree is there to mark it as loaded.
+        print("[INIT2] Opening directory listing...")
+        self.ShowDirectoryListing()
+        print("[INIT2] ✓ Directory listing opened")
+
         # now get stuff ready
         loaded = False
         self.fileSavePath = None
@@ -673,6 +680,12 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self._SyncAreaComboBox()
         self.UpdateTitle()
 
+        # Bold-for-loaded in the directory listing (D-d.2). Here rather than in
+        # LoadLevel because this is the one point every route passes through -
+        # opening a level, switching area, and closing a session, which
+        # activates a survivor on its way out.
+        self.RefreshDirectoryListing()
+
         # Bring the toolbar, the zoom controls and the property panels in line
         # with this session (D-c.4). All three read state that now belongs to
         # the session, and none is driven by a signal a tab switch fires - so
@@ -875,6 +888,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # the session that just went away.
         if manager.active is not None:
             self.ActivateSession(manager.active)
+        else:
+            # No survivor to activate, so nothing else will repaint the tree's
+            # bold marks - and the level that just closed is still shown as
+            # loaded (D-d.2).
+            self.RefreshDirectoryListing()
 
         return True
 
@@ -1246,6 +1264,80 @@ class ReggieWindow(QtWidgets.QMainWindow):
             self.actions['redo'].setText('%s: %s' % (self._redoBaseText, text))
         else:
             self.actions['redo'].setText(self._redoBaseText)
+
+    def ShowDirectoryListing(self):
+        """Put the directory listing into sidebar slice 2 (Block D-d, phase 2).
+
+        Idempotent: if the section is already up it is brought to the front
+        rather than added twice. The rail entry calls this, and so will the
+        menu entry when there is one.
+
+        Unlike the undo history this is not a toggle - a rail category that
+        hid its own content when picked would be surprising - so closing it is
+        the section header's X, which the sidebar handles.
+        """
+        if self.sidebar is None:
+            return None
+
+        existing = self.sidebar.sectionFor(
+            getattr(self, 'levelTreeWidget', None))
+        if existing is not None:
+            self.sidebar.showSections()
+            return existing
+
+        from reggie.ui.leveltree import LevelTreeWidget
+
+        self.levelTreeWidget = LevelTreeWidget(self)
+        self.levelTreeSection = self.sidebar.addSection(
+            globals_.trans.string('MenuItems', 143),
+            self.levelTreeWidget,
+            # stretch=1: a tree is a scrolling list, so more height is directly
+            # more of what the user came for - the same reasoning that gives the
+            # palette its stretch in slice 3.
+            stretch=1,
+            on_close=self._closeDirectoryListing)
+
+        return self.levelTreeSection
+
+    def _closeDirectoryListing(self):
+        """Take the directory listing out of slice 2 and forget it.
+
+        The widget really is dropped here, unlike the collab window: the tree
+        belongs to the sidebar rather than to a controller that outlives it, and
+        rebuilding it is one folder listing.
+        """
+        if self.sidebar is None:
+            return
+
+        existing = self.sidebar.sectionFor(
+            getattr(self, 'levelTreeWidget', None))
+        if existing is not None:
+            self.sidebar.removeSection(existing)
+
+        self.levelTreeWidget = None
+        self.levelTreeSection = None
+
+    def RefreshDirectoryListing(self, rebuild=False):
+        """Keep the tree in step with the sessions, or with the patch.
+
+        ``rebuild`` re-reads the Stage folder, which is what a patch switch
+        needs; without it only the bold-for-loaded marks are repainted, which is
+        what opening or closing an area needs. Guarded, because the tree is a
+        section the user may have closed.
+        """
+        widget = getattr(self, 'levelTreeWidget', None)
+        if widget is None:
+            return
+
+        try:
+            if rebuild:
+                widget.refresh()
+            else:
+                widget.refreshLoadedMarks()
+        except Exception:
+            # A stale tree is worse than none, but neither is worth failing a
+            # patch switch or a level load over.
+            pass
 
     def HandleShowUndoHistory(self, checked=None):
         """

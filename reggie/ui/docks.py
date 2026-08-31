@@ -502,9 +502,13 @@ class DockBuilder:
         sidebar.addPage(icon('game'), trans('MenuItems', 142),
                         self.win.patchListWidget)
 
-        # -- Directory Listing (the tree lands here in D-d.2) -------------
+        # -- Directory Listing --------------------------------------------
+        # A section rather than a page of its own (D-d.2): it belongs beside the
+        # undo history and the collab chat, which is the shape D-c chose for
+        # slice 2 - things a user wants at the same time, sized to taste.
         sidebar.addPage(icon('folderpath'), trans('MenuItems', 143),
-                        sections=True)
+                        sections=True,
+                        on_activate=self._showDirectoryListing)
 
         # -- Logs / Undo --------------------------------------------------
         # Selecting it shows the sections page and opens the undo history if it
@@ -520,6 +524,14 @@ class DockBuilder:
         # -- Preferences --------------------------------------------------
         sidebar.addPage(icon('settings'), trans('MenuItems', 18),
                         on_activate=self.win.HandlePreferences)
+
+    def _showDirectoryListing(self):
+        """Open the directory listing section unless it is already up (D-d.2).
+
+        Not a toggle, for the same reason the undo entry is not: selecting a
+        rail category should never *hide* the thing it names.
+        """
+        self.win.ShowDirectoryListing()
 
     def _showUndoHistory(self):
         """Open the undo history section unless it is already up.

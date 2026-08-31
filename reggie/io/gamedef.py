@@ -1143,6 +1143,15 @@ def RefreshPatchSelector():
         except Exception:
             pass
 
+    # The directory listing lists a *patch's* levels, so a patch switch means a
+    # different Stage folder entirely - a full rebuild, not a repaint (D-d.2).
+    refresh_tree = getattr(window, 'RefreshDirectoryListing', None)
+    if refresh_tree is not None:
+        try:
+            refresh_tree(rebuild=True)
+        except Exception:
+            pass
+
 
 def NotifyCollabGameDefChanged():
     """

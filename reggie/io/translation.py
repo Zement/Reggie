@@ -577,6 +577,12 @@ class ReggieTranslation:
                 144: 'Logs and Undo',
                 145: 'Patch Manager...',
                 146: 'Select a patch to see what it is.',
+                # The directory listing (Block D-d, phase D-d.2).
+                147: 'Unlisted',
+                148: 'Slot [num]: [name]',
+                149: 'Slot [num]: (none)',
+                150: 'Group unlisted levels',
+                151: 'Off: one flat, sorted list of every level file, ignoring the categories in levelnames.xml. On: levels the catalog does not name are collected under "Unlisted".',
             },
             'Objects': {
                 0: '[b]Tileset [tileset], object [obj]:[/b][br][width]x[height] on layer [layer]',
