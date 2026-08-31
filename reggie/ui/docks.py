@@ -489,28 +489,36 @@ class DockBuilder:
 
         trans = globals_.trans.string
 
+        # big=True (D-d.1c): the 'sm' icons are 16px source art, so a rail
+        # asking for 38px (64 * 0.6) would upscale a 16px bitmap - soft, and
+        # never actually larger than 16. The 'lg' set is 48px, which covers
+        # every rail width. This is why "only the section reserved for the icon
+        # grows, not the actual icon" (Zement, 2026-08-31).
+        def icon(name):
+            return GetIcon(name, True)
+
         # -- Game Patches ------------------------------------------------
         self.win.patchListWidget = PatchListWidget(self.win)
-        sidebar.addPage(GetIcon('game'), trans('MenuItems', 142),
+        sidebar.addPage(icon('game'), trans('MenuItems', 142),
                         self.win.patchListWidget)
 
         # -- Directory Listing (the tree lands here in D-d.2) -------------
-        sidebar.addPage(GetIcon('folderpath'), trans('MenuItems', 143),
+        sidebar.addPage(icon('folderpath'), trans('MenuItems', 143),
                         sections=True)
 
         # -- Logs / Undo --------------------------------------------------
         # Selecting it shows the sections page and opens the undo history if it
         # is not already up, which is what makes the entry do something today.
-        sidebar.addPage(GetIcon('undo'), trans('MenuItems', 144),
+        sidebar.addPage(icon('undo'), trans('MenuItems', 144),
                         sections=True,
                         on_activate=self._showUndoHistory)
 
         # -- Help ---------------------------------------------------------
-        sidebar.addPage(GetIcon('help'), trans('MenuItems', 88),
+        sidebar.addPage(icon('help'), trans('MenuItems', 88),
                         on_activate=self.win.HelpBox)
 
         # -- Preferences --------------------------------------------------
-        sidebar.addPage(GetIcon('settings'), trans('MenuItems', 18),
+        sidebar.addPage(icon('settings'), trans('MenuItems', 18),
                         on_activate=self.win.HandlePreferences)
 
     def _showUndoHistory(self):

@@ -29,7 +29,7 @@ readers in D-c.1: when many places read one thing and few write it, make the one
 thing answer differently rather than editing the many.
 """
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from reggie.core import globals_
 from reggie.core.dirty import setSetting, setting
@@ -94,11 +94,37 @@ UNLIMITED = None
 RAIL_WIDTHS = (32, 48, 64)
 DEFAULT_RAIL_WIDTH = 48
 
+#: How much of a rail row the icon takes, leaving a margin around it. The rail
+#: is the only place icon size follows a setting, so this lives here rather than
+#: being a magic number inside the widget (Block D-d, phase D-d.1c).
+RAIL_ICON_RATIO = 0.6
+
+#: Never smaller than this, whatever the ratio works out to - a 16px icon in a
+#: 32px rail is already small enough to be hard to read.
+MIN_RAIL_ICON = 16
+
 #: How much of the window a restored sidebar must leave for the canvas. A floor
 #: for the canvas rather than a ceiling for the sidebar: the user is allowed a
 #: very wide sidebar if that is what they dragged, and only needs protecting
 #: from a saved width that would leave no level visible at all.
 MIN_CANVAS_WIDTH = 320
+
+
+def rail_icon_size(width=None):
+    """The icon size for a rail of this width (Block D-d, phase D-d.1c).
+
+    Was a fixed 24px, which produced three complaints at once: switching the
+    rail between 32, 48 and 64 grew the row but not the icon, the icon sat
+    left-of-centre in the wider rows, and the unused part of the icon box showed
+    as a darker rectangle inside the selection highlight (Zement, 2026-08-31).
+
+    All three are the same fault - the icon box did not match the row - so all
+    three are fixed by deriving one from the other.
+    """
+    if width is None:
+        width = rail_width()
+
+    return max(MIN_RAIL_ICON, int(width * RAIL_ICON_RATIO))
 
 
 def rail_width():
@@ -419,6 +445,75 @@ class PanelHost(_CollapsibleHost):
         return False
 
 
+class _CentredIconDelegate(QtWidgets.QStyledItemDelegate):
+    """Draws a rail row's icon centred, and nothing else (D-d.1c).
+
+    The rail is a `ListMode` view of icon-only rows. Qt left-aligns a
+    decoration there and gives the decoration its own sub-rectangle inside the
+    row, which is what produced both halves of Zement's report on 2026-08-31:
+    the icon sat left of centre, and the edge of that sub-rectangle showed as a
+    darker band inside the selection highlight.
+
+    There is no `Qt.TextAlignmentRole` equivalent for decorations, so the fix
+    is to paint the background through the style (keeping the platform's own
+    selection and hover look, full row width) and then place the pixmap in the
+    middle by hand.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        #: Where the last icon was drawn, or None before the first paint.
+        self.lastIconRect = None
+
+    def paint(self, painter, option, index):
+        # Let the style paint the row itself - selection, hover and focus - so
+        # the rail still looks native and the highlight covers the whole row.
+        opt = QtWidgets.QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+
+        # The icon is drawn below, so hand the style an empty row. Left in and
+        # it would draw the off-centre copy this delegate exists to replace.
+        opt.icon = QtGui.QIcon()
+        opt.text = ''
+        opt.features &= ~QtWidgets.QStyleOptionViewItem.ViewItemFeature.HasDecoration
+
+        widget = opt.widget
+        style = widget.style() if widget is not None else QtWidgets.QApplication.style()
+        style.drawControl(QtWidgets.QStyle.ControlElement.CE_ItemViewItem,
+                          opt, painter, widget)
+
+        icon = index.data(QtCore.Qt.ItemDataRole.DecorationRole)
+        if icon is None or icon.isNull():
+            return
+
+        size = option.decorationSize
+        rect = option.rect
+
+        # actualSize, not the requested size: an icon with no source large
+        # enough returns what it really has, and centring on the requested box
+        # would leave it off-centre by the difference.
+        actual = icon.actualSize(size)
+        x = rect.x() + (rect.width() - actual.width()) // 2
+        y = rect.y() + (rect.height() - actual.height()) // 2
+
+        mode = QtGui.QIcon.Mode.Normal
+        if not (option.state & QtWidgets.QStyle.StateFlag.State_Enabled):
+            mode = QtGui.QIcon.Mode.Disabled
+        elif option.state & QtWidgets.QStyle.StateFlag.State_Selected:
+            mode = QtGui.QIcon.Mode.Selected
+
+        target = QtCore.QRect(x, y, actual.width(), actual.height())
+
+        #: Where the last icon was drawn. Read by the rail's test suite, which
+        #: cannot measure this from a rendered image - the offscreen style
+        #: paints the whole row, so nothing in the pixels separates the icon
+        #: from its highlight.
+        self.lastIconRect = QtCore.QRect(target)
+
+        icon.paint(painter, target, QtCore.Qt.AlignmentFlag.AlignCenter, mode)
+
+
 class Sidebar(QtWidgets.QWidget):
     """The window's docked sidebar: the icon rail, its pages, and the panels.
 
@@ -448,7 +543,12 @@ class Sidebar(QtWidgets.QWidget):
         self.rail.setMovement(QtWidgets.QListView.Movement.Static)
         self.rail.setFlow(QtWidgets.QListView.Flow.TopToBottom)
         self.rail.setWrapping(False)
-        self.rail.setIconSize(QtCore.QSize(24, 24))
+
+        # Scaled from the rail width rather than fixed at 24 (D-d.1c), so the
+        # icon actually grows with the 32/48/64 setting instead of only its row
+        # growing around it.
+        _icon = rail_icon_size()
+        self.rail.setIconSize(QtCore.QSize(_icon, _icon))
         self.rail.setFixedWidth(rail_width())
         self.rail.setHorizontalScrollBarPolicy(
             QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -462,6 +562,13 @@ class Sidebar(QtWidgets.QWidget):
         self.rail.setWordWrap(False)
         self.rail.setTextElideMode(QtCore.Qt.TextElideMode.ElideNone)
         self.rail.setUniformItemSizes(True)
+
+        # A ListMode row left-aligns its decoration, so the icon sat against the
+        # left edge of a full-width row - visible as an off-centre icon, and as
+        # a darker rectangle where the icon box ended inside the highlight
+        # (Zement, 2026-08-31, clearest at 64px). Qt offers no alignment role
+        # for a decoration, so the delegate draws it centred itself.
+        self.rail.setItemDelegate(_CentredIconDelegate(self.rail))
 
         self.rail.currentRowChanged.connect(self._handleRailChanged)
 
@@ -1043,7 +1150,15 @@ class Sidebar(QtWidgets.QWidget):
 
     def applyRailWidth(self):
         """Re-read the rail width setting, for the settings dialog to call."""
-        self.rail.setFixedWidth(rail_width())
+        width = rail_width()
+        self.rail.setFixedWidth(width)
+
+        # The icon follows the rail too (D-d.1c). Without this, switching
+        # between 32, 48 and 64 grew the row and left the icon at its old size -
+        # which is exactly what Zement saw: "only the section reserved for the
+        # icon grows, not the actual icon".
+        icon = rail_icon_size(width)
+        self.rail.setIconSize(QtCore.QSize(icon, icon))
 
         # The rows are sized from the rail's width, so they have to follow it
         # (D-d.1b). Without this a narrower rail keeps wide rows and the
