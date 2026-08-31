@@ -109,7 +109,13 @@ _FULL_ONLY_ACTIONS = (
 _LEADER_ACTIONS = ('newlevel', 'openfromname', 'openrecent')
 
 # The game patch: the host only, whatever the client's role.
-_HOST_ONLY_ACTIONS = ('changegamedef',)
+#
+# Empty since D-d.1b, when the 'changegamedef' action was removed with the
+# Change Game menu. The restriction it carried is not gone - it moved to the
+# sidebar's Game Patches list, disabled for clients in _applyPermissions below.
+# The tuple stays because `actionAllowedBySession` is the one place the rule is
+# written down, and a future host-only *action* belongs here.
+_HOST_ONLY_ACTIONS = ()
 
 # Adding, importing and deleting areas. Grouped separately from the Full-only
 # dialogs because they are a different kind of act - they change what areas
@@ -1176,8 +1182,13 @@ class CollabController(QtCore.QObject):
         host = self.is_host
         may_change_area = self.actionAllowedBySession('addarea')
 
-        self._setWidgetAllowed(getattr(window, 'patchComboBox', None),
-                               'patchComboBox', not active or host)
+        # The sidebar's Game Patches page, which replaced the patch combo box in
+        # D-d.1b. The restriction is unchanged and still matters: a client that
+        # switched patch would pull its tilesets out from under the session.
+        patch_list = getattr(window, 'patchListWidget', None)
+        self._setWidgetAllowed(getattr(patch_list, 'list', None),
+                               'patchList', not active or host)
+
         self._setWidgetAllowed(getattr(window, 'areaComboBox', None),
                                'areaComboBox', may_change_area)
 

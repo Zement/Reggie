@@ -437,8 +437,14 @@ class Sidebar(QtWidgets.QWidget):
         self._side = configured_side()
 
         # slice 1 - the icon rail.
+        # ListMode, not IconMode (fixed D-d.1b). In IconMode an item is laid out
+        # around its icon and the selection rectangle follows the *item*, which
+        # sat visibly off-centre against the icon it was meant to highlight
+        # (Zement, 2026-08-31). These entries are icon-only rows in a
+        # fixed-width column - a list, not an icon grid - and ListMode gives
+        # each row the full width, so the highlight lines up by construction.
         self.rail = QtWidgets.QListWidget(self)
-        self.rail.setViewMode(QtWidgets.QListView.ViewMode.IconMode)
+        self.rail.setViewMode(QtWidgets.QListView.ViewMode.ListMode)
         self.rail.setMovement(QtWidgets.QListView.Movement.Static)
         self.rail.setFlow(QtWidgets.QListView.Flow.TopToBottom)
         self.rail.setWrapping(False)
@@ -446,6 +452,17 @@ class Sidebar(QtWidgets.QWidget):
         self.rail.setFixedWidth(rail_width())
         self.rail.setHorizontalScrollBarPolicy(
             QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.rail.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        # No text is ever set on a rail item - the label lives in the tooltip -
+        # so nothing here has to stay readable against the highlight. That was
+        # the second half of the same report: a highlighted label would have
+        # been unreadable, and the answer is that there is no label.
+        self.rail.setWordWrap(False)
+        self.rail.setTextElideMode(QtCore.Qt.TextElideMode.ElideNone)
+        self.rail.setUniformItemSizes(True)
+
         self.rail.currentRowChanged.connect(self._handleRailChanged)
 
         # slice 2 - one page per rail entry. Empty until D-d fills it in, so it
@@ -482,6 +499,11 @@ class Sidebar(QtWidgets.QWidget):
         # The last row that actually selected a page, so an action entry can
         # hand the highlight back rather than leaving it on a button.
         self._lastPageRow = None
+
+        # The width _restoreWidth had to cut the saved value down to, or None
+        # when it did not have to. saveLayout reads it so a clamped width is
+        # never written back over the wider one the user chose (D-d.1b).
+        self._clampedWidth = None
 
         # slice 3 - the palette and the property panels, stacked vertically and
         # scrollable: four property editors plus the palette is more than fits
@@ -595,6 +617,29 @@ class Sidebar(QtWidgets.QWidget):
 
     # -- slice 1 / 2 -----------------------------------------------------
 
+    def _railItemSize(self):
+        """The size one rail row should claim.
+
+        Derived from the configured rail width rather than a fixed 40x40
+        (D-d.1b). The rail can be 32, 48 or 64 px wide, and a row narrower than
+        the rail is what left the selection highlight not covering its icon.
+        Full width, square-ish height, and the icon centres itself inside it.
+        """
+        width = self.rail.width() or rail_width()
+
+        # The viewport is the rail minus its frame; claiming the full rail width
+        # would overflow it and bring back a horizontal scrollbar.
+        frame = self.rail.frameWidth() * 2
+        width = max(16, width - frame)
+
+        return QtCore.QSize(width, max(width, self.rail.iconSize().height() + 8))
+
+    def _resizeRailItems(self):
+        """Re-apply the row size after the rail's width changes."""
+        size = self._railItemSize()
+        for row in range(self.rail.count()):
+            self.rail.item(row).setSizeHint(size)
+
     def addPage(self, icon, title, widget=None, on_activate=None,
                 sections=False):
         """Add a rail entry, and say what selecting it does.
@@ -619,7 +664,7 @@ class Sidebar(QtWidgets.QWidget):
         if icon is not None:
             item.setIcon(icon)
         item.setToolTip(title)
-        item.setSizeHint(QtCore.QSize(40, 40))
+        item.setSizeHint(self._railItemSize())
         item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
 
         if sections:
@@ -1000,6 +1045,11 @@ class Sidebar(QtWidgets.QWidget):
         """Re-read the rail width setting, for the settings dialog to call."""
         self.rail.setFixedWidth(rail_width())
 
+        # The rows are sized from the rail's width, so they have to follow it
+        # (D-d.1b). Without this a narrower rail keeps wide rows and the
+        # highlight runs off the side again.
+        self._resizeRailItems()
+
     # -- remembering the layout ------------------------------------------
 
     def saveLayout(self):
@@ -1035,23 +1085,43 @@ class Sidebar(QtWidgets.QWidget):
         width = int(self.width())
 
         # Do not overwrite a wider saved width with one the restore clamped.
-        # This is the second half of the ratchet fix: without it, one launch in
-        # a smaller window permanently shrinks what the user had set, and every
-        # launch after that shrinks it again.
+        # Without this, one launch in a smaller window permanently shrinks what
+        # the user had set, and every launch after that shrinks it again.
+        #
+        # **The test is what the restore did, not what the window looks like
+        # now** (fixed D-d.1b). This used to recompute the clamp against the
+        # splitter's *current* width, which is only the same number when the
+        # window has not been resized since. The real sequence is:
+        #
+        #   restore at 800px  -> 620 clamped to 480
+        #   user maximises    -> splitter 1920, sidebar still 480
+        #   closeEvent        -> clamp recomputed as 1600; 480 < 1600, so the
+        #                        guard did not fire and 480 was saved
+        #
+        # So the ratchet survived in exactly the case it was written for: a
+        # window that grows after the restore. Zement, 2026-08-31 - "settings.ini
+        # holds the correct values and yet it still restores a wrong size".
+        #
+        # `_clampedWidth` is set by _restoreWidth when it had to cut the saved
+        # value, and cleared the moment the user drags the divider themselves.
         previous = setting('SidebarWidth', None)
         try:
             previous = int(previous) if previous is not None else None
         except (TypeError, ValueError):
             previous = None
 
-        if previous is not None and previous > width:
-            # Only keep the larger value if this session never actually gave the
-            # user that much room - i.e. the difference is the clamp's doing,
-            # not the user dragging the sidebar narrower.
-            canvas_floor = min(MIN_CANVAS_WIDTH, splitter.width() // 2)
-            clamped_to = max(0, splitter.width() - canvas_floor)
-            if width >= clamped_to:
-                return
+        # Note the test is for *equality*, not "at most". A width the clamp
+        # produced is one exact number; anything else - including something
+        # narrower - is the user having moved the divider since, and theirs is
+        # the value to keep. An earlier `width <= self._clampedWidth` also
+        # suppressed a deliberate drag to something smaller, which would have
+        # made the sidebar impossible to narrow in a small window.
+        if (previous is not None and previous > width
+                and self._clampedWidth is not None
+                and width == self._clampedWidth):
+            # This width is the clamp's doing, not the user's. Keep what they
+            # asked for, so the next launch in a big enough window gets it.
+            return
 
         setSetting('SidebarWidth', width)
 
@@ -1078,16 +1148,41 @@ class Sidebar(QtWidgets.QWidget):
             return False
 
         total = splitter.width()
-        if total <= 0:
-            # Not laid out yet. One retry on the next turn of the event loop,
-            # not a loop: if it still has no width then, something else is
-            # wrong and quietly spinning would hide it. Silently dropping the
-            # saved width is how it came back at the default (Zement,
-            # 2026-08-30).
+
+        # Two ways the splitter's width is not yet the one to clamp against,
+        # and both need the same answer: wait a turn.
+        #
+        #   1. `total <= 0` - not laid out at all.
+        #   2. The window is maximized (or full screen) but the layout still
+        #      reports the *pre-maximize* size. Measured 2026-08-31: with the
+        #      window maximized on a 1920px screen, the restore posted from
+        #      showEvent still saw a 533px splitter, so a saved 620 was clamped
+        #      to 267 and the sidebar came back a third of the width it should
+        #      have been. Zement: "settings.ini seems to hold the correct values
+        #      and yet it still restores a wrong size... smaller sizes work".
+        #      Smaller ones work because they fall under even the stale clamp.
+        #
+        # Case 2 is the one the original `total <= 0` test missed: the splitter
+        # has a perfectly valid width, it is just the wrong one.
+        # `total <= 0` is not the only "no real layout yet" value: a splitter
+        # that has never been shown reports Qt's default 100px, which is a
+        # perfectly ordinary number and would clamp the sidebar to almost
+        # nothing. Anything narrower than one usable canvas plus the rail is not
+        # a window the user is looking at.
+        unlaid = total <= max(MIN_CANVAS_WIDTH, rail_width() * 2)
+
+        if unlaid or (retry and self._maximizePending(total)):
+            # One retry on the next turn of the event loop, not a loop: if it is
+            # still wrong then, something else is going on and quietly spinning
+            # would hide it. Silently dropping the saved width is how it came
+            # back at the default (Zement, 2026-08-30).
             if retry:
                 QtCore.QTimer.singleShot(
                     0, lambda: self._restoreWidth(retry=False))
-            return False
+                return False
+
+            if unlaid:
+                return False
 
         # Leave the canvas a usable strip, but no more than that. An earlier
         # version capped at half the window and produced a ratchet (Zement,
@@ -1100,11 +1195,68 @@ class Sidebar(QtWidgets.QWidget):
         #     the window, so an intermediate width costs nothing, and
         #   - never save a width the clamp produced (see saveLayout).
         canvas_floor = min(MIN_CANVAS_WIDTH, total // 2)
-        width = min(width, max(0, total - canvas_floor))
+        allowed = max(0, total - canvas_floor)
+
+        if width > allowed:
+            # Remember that this width is not the user's choice but the clamp's,
+            # so saveLayout does not write it back over the wider value they
+            # actually asked for. Recomputing the clamp at save time cannot tell
+            # the difference once the window has been resized (D-d.1b).
+            self._clampedWidth = allowed
+            width = allowed
+        else:
+            self._clampedWidth = None
 
         other = total - width
         splitter.setSizes([width, other] if index == 0 else [other, width])
         return True
+
+    def _maximizePending(self, total):
+        """Whether the window is maximized but the layout has not caught up.
+
+        Qt sets the maximized *state* before the resize reaches the layout, so
+        a restore posted from showEvent can run against the window's previous,
+        smaller geometry. Comparing the splitter against the screen tells the
+        two apart: a genuinely maximized window fills it, a stale one does not.
+
+        Conservative on purpose - any doubt (no window handle, no screen, not
+        maximized) answers False, so the restore proceeds as it always did.
+        """
+        window = self.win
+        if window is None or not hasattr(window, 'windowState'):
+            return False
+
+        state = window.windowState()
+        maximized = bool(
+            state & (QtCore.Qt.WindowState.WindowMaximized
+                     | QtCore.Qt.WindowState.WindowFullScreen))
+        if not maximized:
+            return False
+
+        handle = window.windowHandle()
+        screen = handle.screen() if handle is not None else None
+        if screen is None:
+            screen = QtWidgets.QApplication.primaryScreen()
+        if screen is None:
+            return False
+
+        available = screen.availableGeometry().width()
+        if available <= 0:
+            return False
+
+        # A generous margin: window frame, and the splitter is inset from the
+        # window by whatever chrome sits beside it. Only a width that is *far*
+        # short of the screen counts as stale.
+        return total < (available * 3) // 4
+
+    def _handleSidebarResized(self, _pos, _index):
+        """The user dragged the sidebar/canvas divider.
+
+        Their drag is the authority from then on, so a clamp recorded earlier
+        must stop suppressing the save - otherwise deliberately narrowing the
+        sidebar in a small window would never be remembered.
+        """
+        self._clampedWidth = None
 
     def restoreLayout(self):
         """Put back what ``saveLayout`` wrote. Silent when there is nothing.

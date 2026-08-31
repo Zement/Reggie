@@ -417,9 +417,9 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.RecentMenu = RecentFilesMenu()
         print("[INIT2] ✓ RecentFilesMenu created")
         
-        print("[INIT2] Creating GameDefMenu...")
-        self.GameDefMenu = deferred.GameDefMenu()
-        print("[INIT2] ✓ GameDefMenu created")
+        # No GameDefMenu since D-d.1b: File -> Change Game is gone, and the menu
+        # was only ever reachable through it. Its one irreplaceable part - the
+        # patch info panel - lives in the Patch Manager now (PatchInfoPanel).
 
         print("[INIT2] Creating menubar...")
         # Menu/toolbar/action construction extracted to
@@ -823,6 +823,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
         side = configured_side()
         wanted = 0 if side == SIDE_LEFT else 1
 
+        # Once, on the first placement: a drag of this divider is the user
+        # setting the sidebar width themselves, which clears any clamp the
+        # restore recorded (D-d.1b). Connected here because it is the one place
+        # that knows both the splitter and the sidebar exist.
+        if not getattr(self, '_sidebarDragConnected', False):
+            self.centralSplitter.splitterMoved.connect(
+                self.sidebar._handleSidebarResized)
+            self._sidebarDragConnected = True
+
         if self.centralSplitter.indexOf(self.sidebar) == wanted:
             return False
 
@@ -894,23 +903,17 @@ class ReggieWindow(QtWidgets.QMainWindow):
         finally:
             self.areaComboBox.blockSignals(blocked)
 
-    def HandleSwitchPatch(self, index):
-        """
-        Handle activated signals for patchComboBox
-        """
-        if index < 0:
-            return
-        
-        # Get the selected item data
-        patch_data = self.patchComboBox.itemData(index)
-        
-        if patch_data == 'patchmanager':
-            # Open Patch Manager
-            self.HandlePatchManager()
-            # Reset to current patch
-            self.updatePatchComboBox()
-            return
+    def SwitchPatch(self, folder):
+        """Load a different game patch. ``folder is None`` means retail.
 
+        The single entry point since D-d.1b. It was `HandleSwitchPatch(index)`,
+        which took a combo-box row and read the folder back out of it - so a
+        caller without a combo box had to fake one. The combo box is gone (the
+        sidebar's Game Patches page replaced it), and this takes the patch id
+        directly.
+
+        Returns True if the patch actually changed.
+        """
         # Unsaved work is settled *before* the patch changes (Block C - B3,
         # round 2, R5). Asking afterwards would offer to save the old patch's
         # level through the new patch's paths, and Cancel would have nothing to
@@ -918,70 +921,25 @@ class ReggieWindow(QtWidgets.QMainWindow):
         #
         # Cancel is right here, unlike the join dialog: the user started this
         # and may reasonably change their mind.
+        from reggie.io.gamedef import loadNewGameDef, RefreshPatchSelector
+
         if self.CheckDirty():
-            self.updatePatchComboBox()
-            return
+            RefreshPatchSelector()
+            return False
 
-        from reggie.io.gamedef import loadNewGameDef
+        # folder is None for the base game, which loadNewGameDef takes as-is.
+        success = loadNewGameDef(folder)
 
-        # patch_data is None for the base game, which loadNewGameDef takes as-is.
-        success = loadNewGameDef(patch_data)
-
-        # Either way the combo box is put back in step: with the new patch on
-        # success, with the restored one on failure.
-        self.updatePatchComboBox()
+        # Either way every patch control is put back in step: on the new patch
+        # after a success, on the restored one after a failure.
+        RefreshPatchSelector()
 
         if success:
             # Open the new patch's own first level, rather than keeping one
             # whose tilesets belong to the patch that was just unloaded.
             self.LoadFirstLevelOfPatch()
 
-    def updatePatchComboBox(self):
-        """
-        Updates the patch combo box with current patches and selects the active one
-
-        Since D-d.1 the rows come from the shared ``PatchListModel`` rather than
-        from this method's own walk of the patches directory, so this control
-        and the Change Game menu cannot list different patches (deferred item
-        **f7**). What stays here is only what is particular to a combo box: the
-        separator and the 'Patch Manager...' row, which are actions rather than
-        patches and so are not the model's business.
-        """
-        # Check if patch combo box exists (might be disabled in preferences)
-        if not hasattr(self, 'patchComboBox') or self.patchComboBox is None:
-            return
-
-        from reggie.ui.patchmodel import patch_model
-
-        # Reads the model rather than refreshing it. RefreshPatchSelector
-        # refreshes once for all three views; a view that re-read the disk here
-        # would make one patch switch three scans, and - worse - could show a
-        # different set from the view refreshed a moment earlier.
-        model = patch_model()
-
-        current_folder = model.current_folder()
-        current_index = 0
-
-        # Repopulating fires activated() on some styles, and that would re-enter
-        # HandleSwitchPatch and load a patch the user never picked.
-        blocked = self.patchComboBox.blockSignals(True)
-        try:
-            self.patchComboBox.clear()
-
-            for entry in model.entries:
-                self.patchComboBox.addItem(entry.name, entry.folder)
-                if entry.folder == current_folder:
-                    current_index = self.patchComboBox.count() - 1
-
-            # Add Patch Manager separator and option
-            self.patchComboBox.insertSeparator(self.patchComboBox.count())
-            self.patchComboBox.addItem('Patch Manager...', 'patchmanager')
-
-            # Set current selection
-            if current_index < self.patchComboBox.count():
-                self.patchComboBox.setCurrentIndex(current_index)
-        finally:
-            self.patchComboBox.blockSignals(blocked)
+        return success
 
     def DeselectPathSelection(self, checked):
         """

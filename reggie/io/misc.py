@@ -1662,9 +1662,10 @@ def LoadActionsLists():
         (globals_.trans.string('MenuItems', 10), False, 'saveas'),
         (globals_.trans.string('MenuItems', 128), False, 'savecopyas'),
         (globals_.trans.string('MenuItems', 12), False, 'metainfo'),
-        (globals_.trans.string('MenuItems', 98), False, 'changegamedef'),
+        # 'changegamedef' and 'changegamepath' removed in D-d.1b along with
+        # their File-menu entries; a toolbar toggle for an action that no
+        # longer exists would put a dead button in the customiser.
         (globals_.trans.string('MenuItems', 14), True, 'screenshot'),
-        (globals_.trans.string('MenuItems', 16), False, 'changegamepath'),
         (globals_.trans.string('MenuItems', 18), False, 'preferences'),
         (globals_.trans.string('MenuItems', 20), False, 'exit'),
     )
@@ -1711,7 +1712,9 @@ def LoadActionsLists():
         (globals_.trans.string('MenuItems', 82), False, 'deletearea'),
         (globals_.trans.string('MenuItems', 84), False, 'reloadgfx'),
         (globals_.trans.string('MenuItems', 138), False, 'reloaddata'),
-        (globals_.trans.string('MenuItems', 142), True, 'gamepatches'),
+        # 'gamepatches' (the patch combo box toolbar) removed in D-d.1b - the
+        # sidebar's Game Patches page replaced it, and a preference toggling a
+        # control that no longer exists is worse than no toggle.
     )
     globals_.HelpActions = (
         (globals_.trans.string('MenuItems', 86), False, 'infobox'),
@@ -1739,7 +1742,10 @@ def LoadDefaultKeybinds():
         'undohistory':    ('Ctrl+H',                              globals_.trans.string('Undo', 2)),
         'collaborate':    (None,                                  'Collaborate'),
         'screenshot':     ('Ctrl+Alt+S',                          globals_.trans.string('MenuItems', 14)),
-        'changegamepath': ('Ctrl+Alt+G',                          globals_.trans.string('MenuItems', 16)),
+        # 'changegamepath' removed in D-d.1b with its menu entry. Its old
+        # Ctrl+Alt+G is deliberately left unassigned rather than reused: a
+        # keybind that silently starts doing something else is worse than one
+        # that stops working.
         'preferences':    ('Ctrl+Alt+P',                          globals_.trans.string('MenuItems', 18)),
         'exit':           ('Ctrl+Q',                              globals_.trans.string('MenuItems', 20)),
     }

@@ -126,11 +126,14 @@ class MenuBuilder:
             GetKeybind('collaborate'),
         )
 
-        self.CreateAction(
-            'changegamedef', None, GetIcon('game'),
-            globals_.trans.stringOneLine('MenuItems', 98), globals_.trans.stringOneLine('MenuItems', 99),
-            None,
-        )
+        # 'changegamedef' (Change Game) and 'changegamepath' (Change Game Path)
+        # were removed in Block D-d, phase D-d.1b. A patch is reached from the
+        # Patch Manager or from the sidebar's Game Patches page now, and having
+        # three entry points to one action was the thing D-d set out to end.
+        #
+        # `HandleChangeGamePath` itself is KEPT - `LoadGameDef` calls it
+        # directly the first time a patch is opened without a Stage folder, so
+        # it is a first-run flow, not only a menu command.
 
         self.CreateAction(
             'patchmanager', self.win.HandlePatchManager, GetIcon('game'),
@@ -142,12 +145,6 @@ class MenuBuilder:
             'screenshot', self.win.HandleScreenshot, GetIcon('screenshot'),
             globals_.trans.stringOneLine('MenuItems', 14), globals_.trans.stringOneLine('MenuItems', 15),
             GetKeybind('screenshot'),
-        )
-
-        self.CreateAction(
-            'changegamepath', self.win.HandleChangeGamePath, GetIcon('folderpath'),
-            globals_.trans.stringOneLine('MenuItems', 16), globals_.trans.stringOneLine('MenuItems', 17),
-            GetKeybind('changegamepath'),
         )
 
         self.CreateAction(
@@ -441,7 +438,6 @@ class MenuBuilder:
 
         # Configure them
         self.win.actions['openrecent'].setMenu(self.win.RecentMenu)
-        self.win.actions['changegamedef'].setMenu(self.win.GameDefMenu)
 
         self.win.actions['collisions'].setChecked(globals_.CollisionsShown)
         self.win.actions['realview'].setChecked(globals_.RealViewEnabled)
@@ -486,10 +482,8 @@ class MenuBuilder:
         fmenu.addSeparator()
         fmenu.addAction(self.win.actions['collaborate'])
         fmenu.addSeparator()
-        fmenu.addAction(self.win.actions['changegamedef'])
         fmenu.addAction(self.win.actions['patchmanager'])
         fmenu.addAction(self.win.actions['screenshot'])
-        fmenu.addAction(self.win.actions['changegamepath'])
         fmenu.addAction(self.win.actions['preferences'])
         fmenu.addSeparator()
         fmenu.addAction(self.win.actions['exit'])
@@ -599,23 +593,16 @@ class MenuBuilder:
         self.win.areaComboBox.activated.connect(self.win.HandleSwitchArea)
         self.win.toolbar.addWidget(self.win.areaComboBox)
 
-        # Add the patch combo box (check if enabled in preferences)
-        if setting('ToolbarActs') in (None, 'None', 'none', '', 0):
-            # Default: enabled
-            show_patches = True
-        else:
-            toggled = setting('ToolbarActs')
-            show_patches = toggled.get('gamepatches', True)
-        
-        if show_patches:
-            self.win.patchToolbar = self.win.addToolBar(globals_.trans.string('Menubar', 6))
-            self.win.patchToolbar.setObjectName('PatchToolbar')
-            self.win.patchComboBox = QtWidgets.QComboBox()
-            self.win.patchComboBox.setMinimumWidth(200)
-            self.win.patchComboBox.activated.connect(self.win.HandleSwitchPatch)
-            self.win.patchToolbar.addWidget(self.win.patchComboBox)
-        else:
-            self.win.patchComboBox = None
+        # The patch combo box and its toolbar were removed in Block D-d, phase
+        # D-d.1b. Switching patch is the sidebar's Game Patches page now, and
+        # the Patch Manager's; a third control that did the same thing is what
+        # made the two lists able to disagree in the first place (f7).
+        #
+        # The attribute stays and stays None: `collab_controller` and
+        # `RefreshPatchSelector` both reach for it with getattr and handle its
+        # absence, and the preferences toolbar toggle can still be turned on for
+        # a control that no longer exists without anything noticing.
+        self.win.patchComboBox = None
     def SetupHelpMenu(self, menu=None):
         """
         Creates the help menu.
@@ -677,9 +664,7 @@ class MenuBuilder:
                 'saveas',
                 'savecopyas',
                 'metainfo',
-                'changegamedef',
                 'screenshot',
-                'changegamepath',
                 'preferences',
                 'exit',
             ), (

@@ -510,8 +510,10 @@ class LevelIO:
 
         self.win.areaComboBox.setCurrentIndex(areaNum - 1)
 
-        # Update patch combo box
-        self.win.updatePatchComboBox()
+        # Put the patch controls in step. Was `updatePatchComboBox()`; the
+        # combo box went in D-d.1b and this is the seam every patch view shares.
+        from reggie.io.gamedef import RefreshPatchSelector
+        RefreshPatchSelector()
 
         # Refresh object layouts
         for layer in globals_.Area.layers:

@@ -576,6 +576,7 @@ class ReggieTranslation:
                 143: 'Directory Listing',
                 144: 'Logs and Undo',
                 145: 'Patch Manager...',
+                146: 'Select a patch to see what it is.',
             },
             'Objects': {
                 0: '[b]Tileset [tileset], object [obj]:[/b][br][width]x[height] on layer [layer]',

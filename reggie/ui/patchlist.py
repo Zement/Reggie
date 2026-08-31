@@ -92,11 +92,12 @@ class PatchListWidget(QtWidgets.QWidget):
     def _handleActivated(self, item):
         """Switch to the double-clicked patch.
 
-        Routed through the window's own handler rather than calling
-        ``loadNewGameDef`` here: that handler settles unsaved work first, puts
+        Routed through ``window.SwitchPatch`` rather than calling
+        ``loadNewGameDef`` here: that method settles unsaved work first, puts
         every patch control back in step afterwards, and opens the new patch's
         first level. Reimplementing any of that would be a second, subtly
-        different way to switch patch.
+        different way to switch patch - which is what D-d.1b just finished
+        removing.
         """
         if item is None:
             return
@@ -107,30 +108,13 @@ class PatchListWidget(QtWidgets.QWidget):
         if window is None:
             return
 
-        combo = getattr(window, 'patchComboBox', None)
-        if combo is not None:
-            # The combo box is the handler's input: it reads the row's data
-            # rather than taking an argument. Selecting the row and calling the
-            # handler with its index keeps one code path for a patch switch.
-            for i in range(combo.count()):
-                if combo.itemData(i) == folder:
-                    combo.setCurrentIndex(i)
-                    window.HandleSwitchPatch(i)
-                    return
-
-        # No combo box - it can be turned off in preferences. Fall back to the
-        # menu's route, which does the same work from the other side.
-        from reggie.io.gamedef import loadNewGameDef
-
-        if window.CheckDirty():
-            self.refresh()
+        if folder == patch_model().current_folder():
+            # Already loaded. Switching to it would still tear the level down
+            # and reload it, which is a surprising amount of work for a
+            # double-click on the row that is already bold.
             return
 
-        if loadNewGameDef(folder):
-            window.LoadFirstLevelOfPatch()
-
-        from reggie.io.gamedef import RefreshPatchSelector
-        RefreshPatchSelector()
+        window.SwitchPatch(folder)
 
     def _handleManage(self):
         """Open the Patch Manager - a tool tab in the master container."""
