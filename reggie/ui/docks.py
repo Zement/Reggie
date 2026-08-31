@@ -454,3 +454,76 @@ class DockBuilder:
         # list can use the height, which is why one setSizePolicy on the panel
         # was not enough.
         self.win.sidebar.relaxPanelHeights()
+
+        # Slice 1 gets its entries (D-d.1). Last, because the Game Patches page
+        # is a real widget and the rail's first entry selects a page as soon as
+        # it is added.
+        self.buildRail()
+
+    def buildRail(self):
+        """Fill slice 1, the icon rail (Block D-d, phase D-d.1).
+
+        The set comes from Zement's brief: Game Patches, Directory Listing,
+        (Puzzle Next later), Logs/Undo, Help, Preferences. Provisional - entries
+        are expected to be added as the later phases land.
+
+        Three kinds of entry are in use here, which is why `addPage` grew to
+        take all three:
+
+        - **Game Patches** owns a page of its own - a list that fills slice 2.
+        - **Directory Listing** and **Logs/Undo** select the *sections* page,
+          because their content is a collapsible section among others rather
+          than something that should hide the rest. D-d.2 puts the tree there;
+          the undo history is already there when the user opens it.
+        - **Preferences** is an action: it opens as a tool tab in the master
+          container and has no sidebar page at all.
+        """
+        sidebar = self.win.sidebar
+        if sidebar is None:
+            return
+
+        # Lazy, like the other reggie.ui imports here: reggie.py defers `ui`
+        # until after the QApplication exists (the Block A lesson).
+        from reggie.ui.ui import GetIcon
+        from reggie.ui.patchlist import PatchListWidget
+
+        trans = globals_.trans.string
+
+        # -- Game Patches ------------------------------------------------
+        self.win.patchListWidget = PatchListWidget(self.win)
+        sidebar.addPage(GetIcon('game'), trans('MenuItems', 142),
+                        self.win.patchListWidget)
+
+        # -- Directory Listing (the tree lands here in D-d.2) -------------
+        sidebar.addPage(GetIcon('folderpath'), trans('MenuItems', 143),
+                        sections=True)
+
+        # -- Logs / Undo --------------------------------------------------
+        # Selecting it shows the sections page and opens the undo history if it
+        # is not already up, which is what makes the entry do something today.
+        sidebar.addPage(GetIcon('undo'), trans('MenuItems', 144),
+                        sections=True,
+                        on_activate=self._showUndoHistory)
+
+        # -- Help ---------------------------------------------------------
+        sidebar.addPage(GetIcon('help'), trans('MenuItems', 88),
+                        on_activate=self.win.HelpBox)
+
+        # -- Preferences --------------------------------------------------
+        sidebar.addPage(GetIcon('settings'), trans('MenuItems', 18),
+                        on_activate=self.win.HandlePreferences)
+
+    def _showUndoHistory(self):
+        """Open the undo history section unless it is already up.
+
+        Not the menu's toggle: a rail entry that closed the panel when it is
+        already open would make selecting "Logs/Undo" *hide* the logs, which is
+        not what picking a category means.
+        """
+        if self.win.sidebar is None:
+            return
+
+        existing = self.win.sidebar.sectionFor(
+            getattr(self.win, 'undoHistoryView', None))
+        if existing is None:
+            self.win.HandleShowUndoHistory()

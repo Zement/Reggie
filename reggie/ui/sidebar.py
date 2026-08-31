@@ -472,10 +472,16 @@ class Sidebar(QtWidgets.QWidget):
         self._sections = []
         self.pages.addWidget(self.sections)
 
-        # Rail row -> page widget. The sections page above is deliberately not
-        # in it: it is what slice 2 shows by default, not something the rail
-        # selects.
+        # Rail row -> page widget, and rail row -> callback. A row may have
+        # either, both or (for an action entry like Preferences) only the
+        # callback; see addPage. Parallel lists rather than a dict because the
+        # rail is addressed by row and both are appended together.
         self._railPages = []
+        self._railActions = []
+
+        # The last row that actually selected a page, so an action entry can
+        # hand the highlight back rather than leaving it on a button.
+        self._lastPageRow = None
 
         # slice 3 - the palette and the property panels, stacked vertically and
         # scrollable: four property editors plus the palette is more than fits
@@ -589,8 +595,26 @@ class Sidebar(QtWidgets.QWidget):
 
     # -- slice 1 / 2 -----------------------------------------------------
 
-    def addPage(self, icon, title, widget):
-        """Add a rail entry and the slice-2 page it selects."""
+    def addPage(self, icon, title, widget=None, on_activate=None,
+                sections=False):
+        """Add a rail entry, and say what selecting it does.
+
+        Three kinds of entry, because D-d needs all three (phase D-d.1):
+
+        - ``widget`` - the entry owns a slice-2 page of its own. The original
+          behaviour.
+        - ``sections=True`` - the entry selects the **sections page**, the
+          splitter of collapsible sections that slice 2 shows by default. This
+          is what the Directory Listing and Logs/Undo entries want: their
+          content is a section among others, not a page that hides the rest.
+        - ``on_activate`` - the entry is an **action**, not a page. Preferences
+          opens as a tool tab in the master container and has no sidebar page at
+          all, so selecting it runs a callback and the rail selection springs
+          back to where it was.
+
+        ``on_activate`` composes with the other two: an entry may both show a
+        page and do something when picked.
+        """
         item = QtWidgets.QListWidgetItem(self.rail)
         if icon is not None:
             item.setIcon(icon)
@@ -598,23 +622,83 @@ class Sidebar(QtWidgets.QWidget):
         item.setSizeHint(QtCore.QSize(40, 40))
         item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
 
-        self.pages.addWidget(widget)
+        if sections:
+            page = self.sections
+        elif widget is not None:
+            page = widget
+            self.pages.addWidget(widget)
+        else:
+            page = None
 
         # Recorded rather than derived from the index. Since D-c.6 the stack
         # also holds the sections page, which has no rail entry of its own, so
         # "rail row N is page N" stopped being true - and a mapping that is
         # nearly right is how a rail ends up selecting the wrong page as D-d
         # adds entries.
-        self._railPages.append(widget)
+        self._railPages.append(page)
+        self._railActions.append(on_activate)
 
-        if self.rail.currentRow() < 0:
-            self.rail.setCurrentRow(0)
+        if self.rail.currentRow() < 0 and page is not None:
+            self.rail.setCurrentRow(self.rail.count() - 1)
 
         return item
 
     def _handleRailChanged(self, row):
-        if 0 <= row < len(self._railPages):
-            self.pages.setCurrentWidget(self._railPages[row])
+        if not (0 <= row < len(self._railPages)):
+            return
+
+        page = self._railPages[row]
+
+        if page is not None:
+            self._lastPageRow = row
+            self.pages.setCurrentWidget(page)
+
+            # A page entry only makes slice 2 visible when it has something to
+            # show. The sections page hides itself while it holds no sections
+            # (see __init__), and overriding that here would put an empty
+            # column beside the palette - the thing D-c.3 spent a phase fixing.
+            if page is not self.sections or self._sections:
+                self.pages.setVisible(True)
+
+        action = self._railActions[row]
+        if action is None:
+            return
+
+        # An action entry is a button wearing a list row. Leaving it selected
+        # would say "you are here" about a place the rail cannot show, so the
+        # selection goes back to the last real page.
+        if page is None:
+            self._restoreRailSelection(row)
+
+        try:
+            action()
+        except Exception:
+            # A rail entry must not be able to take the sidebar down with it -
+            # the same rule the patch selector refresh follows.
+            import traceback
+            traceback.print_exc()
+
+    def _restoreRailSelection(self, row):
+        """Move the rail's highlight off an action entry.
+
+        Back to the previously selected page entry, or the first one there is.
+        Blocked, or setCurrentRow re-enters this handler and re-runs whichever
+        action we are stepping away from.
+        """
+        target = self._lastPageRow
+        if target is None or not (0 <= target < len(self._railPages)) \
+                or self._railPages[target] is None:
+            target = next((i for i, p in enumerate(self._railPages)
+                           if p is not None), None)
+
+        if target is None or target == row:
+            return
+
+        blocked = self.rail.blockSignals(True)
+        try:
+            self.rail.setCurrentRow(target)
+        finally:
+            self.rail.blockSignals(blocked)
 
     def addSection(self, title, widget, stretch=1, closable=True,
                    on_close=None, default_height=UNLIMITED,
@@ -646,7 +730,12 @@ class Sidebar(QtWidgets.QWidget):
         host.toggled.connect(lambda _on: self._applySectionStretch())
         self._applySectionStretch()
 
-        self.pages.setVisible(True)
+        # Bring the sections page forward as well as making slice 2 visible
+        # (D-d.1). Before the rail had entries the stack only ever showed this
+        # page, so setVisible was enough; now a rail entry may have selected a
+        # page of its own, and adding a section would otherwise reveal slice 2
+        # still showing that other page - the section apparently ignored.
+        self.showSections()
 
         # Size the column for the new total. Deliberately here and in
         # removeSection, but NOT on fold: folding should give its space to slice
@@ -656,6 +745,28 @@ class Sidebar(QtWidgets.QWidget):
         self._resizeColumn()
 
         return host
+
+    def showSections(self):
+        """Bring the sections page to the front of slice 2, and show it.
+
+        Also moves the rail's highlight to the entry that owns the sections
+        page, if one has been added, so the rail does not claim a different
+        page is showing. Blocked, or the row change re-enters the handler.
+        """
+        self.pages.setCurrentWidget(self.sections)
+        self.pages.setVisible(bool(self._sections))
+
+        row = next((i for i, p in enumerate(self._railPages)
+                    if p is self.sections), None)
+        if row is None or self.rail.currentRow() == row:
+            return
+
+        blocked = self.rail.blockSignals(True)
+        try:
+            self.rail.setCurrentRow(row)
+            self._lastPageRow = row
+        finally:
+            self.rail.blockSignals(blocked)
 
     def sectionFor(self, widget):
         """The section holding ``widget``, or None."""
@@ -683,7 +794,13 @@ class Sidebar(QtWidgets.QWidget):
             host.deleteLater()
 
             self._applySectionStretch()
-            self.pages.setVisible(bool(self._sections))
+
+            # "Empty means absent" applies to the *sections page*, not to slice
+            # 2 as a whole (D-d.1). Removing the last section while a rail page
+            # of its own is showing must not hide that page too.
+            if self.pages.currentWidget() is self.sections:
+                self.pages.setVisible(bool(self._sections))
+
             self._resizeColumn()
             return widget
 

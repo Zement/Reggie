@@ -572,6 +572,10 @@ class ReggieTranslation:
                 140: 'Camera Profiles...',
                 141: 'Edit event-activated camera settings',
                 142: 'Game Patches',
+                # The sidebar rail's entries (Block D-d, phase D-d.1).
+                143: 'Directory Listing',
+                144: 'Logs and Undo',
+                145: 'Patch Manager...',
             },
             'Objects': {
                 0: '[b]Tileset [tileset], object [obj]:[/b][br][width]x[height] on layer [layer]',

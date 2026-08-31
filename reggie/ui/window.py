@@ -939,60 +939,49 @@ class ReggieWindow(QtWidgets.QMainWindow):
     def updatePatchComboBox(self):
         """
         Updates the patch combo box with current patches and selects the active one
+
+        Since D-d.1 the rows come from the shared ``PatchListModel`` rather than
+        from this method's own walk of the patches directory, so this control
+        and the Change Game menu cannot list different patches (deferred item
+        **f7**). What stays here is only what is particular to a combo box: the
+        separator and the 'Patch Manager...' row, which are actions rather than
+        patches and so are not the model's business.
         """
         # Check if patch combo box exists (might be disabled in preferences)
         if not hasattr(self, 'patchComboBox') or self.patchComboBox is None:
             return
-        
-        from reggie.io.gamedef import getAvailableGameDefs
-        from reggie.core.dirty import setting
-        
-        # Store current selection
-        current_patch = setting('LastGameDef')
-        
-        # Clear and repopulate
-        self.patchComboBox.clear()
-        
-        # Get all patches
-        patches = getAvailableGameDefs()
-        
-        # Find current patch index
+
+        from reggie.ui.patchmodel import patch_model
+
+        # Reads the model rather than refreshing it. RefreshPatchSelector
+        # refreshes once for all three views; a view that re-read the disk here
+        # would make one patch switch three scans, and - worse - could show a
+        # different set from the view refreshed a moment earlier.
+        model = patch_model()
+
+        current_folder = model.current_folder()
         current_index = 0
-        
-        # Add base game if it exists
-        if None in patches:
-            patches.remove(None)
-            self.patchComboBox.addItem('New Super Mario Bros. Wii', None)
-            if current_patch is None:
-                current_index = self.patchComboBox.count() - 1
-        
-        # Add custom patches
-        for patch_folder in patches:
-            if patch_folder is not None:
-                try:
-                    from reggie.io.gamedef import ReggieGameDefinition
-                    # Check if it's a custom path
-                    custom_path = setting('PatchPath_' + patch_folder)
-                    if custom_path:
-                        patch_def = ReggieGameDefinition(patch_folder, custom_path=custom_path)
-                    else:
-                        patch_def = ReggieGameDefinition(patch_folder)
-                    
-                    if patch_def.custom:
-                        self.patchComboBox.addItem(patch_def.name, patch_folder)
-                        if patch_folder == current_patch:
-                            current_index = self.patchComboBox.count() - 1
-                except:
-                    # Skip invalid patches
-                    continue
-        
-        # Add Patch Manager separator and option
-        self.patchComboBox.insertSeparator(self.patchComboBox.count())
-        self.patchComboBox.addItem('Patch Manager...', 'patchmanager')
-        
-        # Set current selection
-        if current_index < self.patchComboBox.count():
-            self.patchComboBox.setCurrentIndex(current_index)
+
+        # Repopulating fires activated() on some styles, and that would re-enter
+        # HandleSwitchPatch and load a patch the user never picked.
+        blocked = self.patchComboBox.blockSignals(True)
+        try:
+            self.patchComboBox.clear()
+
+            for entry in model.entries:
+                self.patchComboBox.addItem(entry.name, entry.folder)
+                if entry.folder == current_folder:
+                    current_index = self.patchComboBox.count() - 1
+
+            # Add Patch Manager separator and option
+            self.patchComboBox.insertSeparator(self.patchComboBox.count())
+            self.patchComboBox.addItem('Patch Manager...', 'patchmanager')
+
+            # Set current selection
+            if current_index < self.patchComboBox.count():
+                self.patchComboBox.setCurrentIndex(current_index)
+        finally:
+            self.patchComboBox.blockSignals(blocked)
 
     def DeselectPathSelection(self, checked):
         """

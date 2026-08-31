@@ -10,6 +10,9 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 from reggie.ui.ui import GetIcon, createVertLine
 from reggie.io.misc import LoadSpriteData, LoadSpriteListData, LoadSpriteCategories, LoadBgANames, LoadBgBNames, LoadObjDescriptions, LoadTilesetNames, LoadTilesetInfo, LoadEntranceNames, LoadMusicInfo, LoadZoneThemes
 from reggie.core.dirty import setting, setSetting
+# Safe at module level: patchmodel imports only globals_ and dirty, and this
+# module already imports from reggie.ui above.
+from reggie.ui.patchmodel import patch_model
 
 from reggie.core import globals_
 from reggie.core import spritelib as SLib
@@ -148,23 +151,8 @@ class GameDefMenu(QtWidgets.QMenu):
         self.addSeparator()
 
         # Add entries for each gamedef
-        self.GameDefs = getAvailableGameDefs()
-
         self.actGroup = QtGui.QActionGroup(self)
-        loadedDef = setting('LastGameDef')
-        for folder in self.GameDefs:
-            def_ = ReggieGameDefinition(folder)
-
-            act = QtGui.QAction(self)
-            act.setText(def_.name)
-            act.setToolTip(def_.description)
-            act.setData(folder)
-            act.setActionGroup(self.actGroup)
-            act.setCheckable(True)
-            act.setChecked(folder == loadedDef)
-            act.toggled.connect(self.handleGameDefClicked)
-
-            self.addAction(act)
+        self._addPatchActions()
 
         # add button
         self.addSeparator()
@@ -233,6 +221,49 @@ class GameDefMenu(QtWidgets.QMenu):
             act.setChecked(act.data() == real_gamedef)
         self.update_flag = False
 
+    def _addPatchActions(self, before=None):
+        """Build one checkable action per row of the shared patch model.
+
+        Shared by ``__init__`` and ``refreshMenu``, which carried two copies of
+        this loop. That duplication was half of deferred item **f7**: the menu
+        built each ``ReggieGameDefinition`` from a bare folder name, ignoring the
+        ``PatchPath_`` key the combo box honoured, so a patch installed outside
+        ``reggiedata/patches`` was constructed from a folder that is not there.
+        ``ReggieGameDefinition.__init__`` treats that as a missing patch and
+        clears ``LastGameDef``, so merely *listing* the patches could forget
+        which one was loaded.
+
+        ``before`` is the action to insert ahead of, for the refresh case; with
+        no ``before`` the actions are appended, which is what building the menu
+        wants.
+        """
+        model = patch_model()
+        loaded = model.current_folder()
+
+        for entry in model.entries:
+            act = QtGui.QAction(self)
+            act.setText(entry.name)
+            act.setToolTip(entry.description)
+            act.setData(entry.folder)
+            act.setActionGroup(self.actGroup)
+            act.setCheckable(True)
+
+            # setChecked fires toggled, and handleGameDefClicked would take that
+            # for a click and start loading the patch we are only listing. The
+            # flag is the same guard _recheckLoadedGameDef uses.
+            self.update_flag = True
+            try:
+                act.setChecked(entry.folder == loaded)
+            finally:
+                self.update_flag = False
+
+            act.toggled.connect(self.handleGameDefClicked)
+
+            if before is not None:
+                self.insertAction(before, act)
+            else:
+                self.addAction(act)
+
     def refreshMenu(self):
         """
         Refresh the menu to show newly added patches
@@ -241,28 +272,13 @@ class GameDefMenu(QtWidgets.QMenu):
         for act in self.actGroup.actions():
             self.removeAction(act)
             self.actGroup.removeAction(act)
-        
-        # Reload game defs
-        self.GameDefs = getAvailableGameDefs()
-        
-        # Re-add entries for each gamedef
-        loadedDef = setting('LastGameDef')
-        for folder in self.GameDefs:
-            def_ = ReggieGameDefinition(folder)
-            
-            act = QtGui.QAction(self)
-            act.setText(def_.name)
-            act.setToolTip(def_.description)
-            act.setData(folder)
-            act.setActionGroup(self.actGroup)
-            act.setCheckable(True)
-            act.setChecked(folder == loadedDef)
-            act.toggled.connect(self.handleGameDefClicked)
-            
-            # Insert before the separator and "Add" button
-            actions = self.actions()
-            if len(actions) >= 3:  # viewer, separator, patches..., separator, add button
-                self.insertAction(actions[-2], act)  # Insert before last separator
+
+        patch_model().refresh()
+
+        # Insert before the separator and "Add" button
+        actions = self.actions()
+        before = actions[-2] if len(actions) >= 3 else None
+        self._addPatchActions(before)
 
         # Also refresh the main window's patch combo box if it exists, so a
         # newly added patch appears in both controls.
@@ -1363,10 +1379,26 @@ def RefreshPatchSelector():
     if window is None:
         return
 
+    # Re-read the shared list once, here, rather than letting each view refresh
+    # it: three refreshes would hit the disk three times for one switch, and
+    # a view that refreshed the model *after* another had read it could show a
+    # different set - which is the disagreement f7 exists to end.
+    patch_model().refresh()
+
     updater = getattr(window, 'updatePatchComboBox', None)
     if updater is not None:
         try:
             updater()
+        except Exception:
+            pass
+
+    # The sidebar's Game Patches page (D-d.1). Guarded like the rest: the page
+    # is only there once the sidebar is built, and a patch switch must not fail
+    # because a piece of chrome could not be updated.
+    patch_list = getattr(window, 'patchListWidget', None)
+    if patch_list is not None:
+        try:
+            patch_list.refresh()
         except Exception:
             pass
 
