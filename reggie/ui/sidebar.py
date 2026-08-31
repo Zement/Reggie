@@ -109,6 +109,31 @@ MIN_RAIL_ICON = 16
 #: from a saved width that would leave no level visible at all.
 MIN_CANVAS_WIDTH = 320
 
+#: How narrow slice 2 may get before its contents stop being readable. A level
+#: tree is the constraint: "World 1-Castle: Creepcrack Castle" indented three
+#: deep is the widest thing the sidebar routinely shows, and a column that
+#: elides it into "World 1-Cas..." is a column the user cannot work from.
+MIN_SLICE_TWO_WIDTH = 180
+
+#: Below this a three-slice sidebar cannot show all three at a usable size, so
+#: a saved width under it is treated as one written by a two-slice build and
+#: replaced with the default. The rail plus both floors plus a little room to
+#: be worth restoring at all.
+MIN_THREE_SLICE_WIDTH = 460
+
+#: What the sidebar opens at on a first run, before the user has dragged it or
+#: anything has been saved. Enough for all three slices to be usable at once:
+#: the rail, a level tree wide enough to read, and property editors wide enough
+#: to fill in. Left to the splitter's own arithmetic until D-d.2b, which gave
+#: 251px - two slices' worth, and one slice short.
+DEFAULT_SIDEBAR_WIDTH = 640
+
+#: The share of the sidebar slice 2 takes when it first appears, before the user
+#: has dragged the divider. Slice 3 keeps the rest. Slightly under half because
+#: the property panels are forms with a natural width, while a tree simply uses
+#: whatever it is given - so the panels are the ones that would look starved.
+SLICE_TWO_SHARE = 0.45
+
 
 def rail_icon_size(width=None):
     """The icon size for a rail of this width (Block D-d, phase D-d.1c).
@@ -572,14 +597,22 @@ class Sidebar(QtWidgets.QWidget):
 
         self.rail.currentRowChanged.connect(self._handleRailChanged)
 
-        # slice 2 - one page per rail entry. Empty until D-d fills it in, so it
-        # asks for nothing: a stretch factor here would hand a third of the
-        # column to a widget with nothing in it, which is what squeezed the
-        # palette into half the sidebar and then a third of it once a property
-        # panel appeared (Zement, 2026-08-29).
+        # slice 2 - one page per rail entry: the directory listing, the game
+        # patch list, the undo history, the collab chat.
+        #
+        # **Its own vertical slice, beside the panels rather than above or below
+        # them** (Zement, 2026-08-31). It was stacked under slice 3 from D-c.6
+        # until D-d.2b, which was the right answer while the only content was a
+        # single undo history and the wrong one the moment a directory listing
+        # arrived: the tree and the property panels are both tall, both wanted at
+        # once, and stacked they are zero-sum - Zement's live test found the
+        # endpoint, where dragging the divider pushes one of them entirely out of
+        # sight. Side by side they compete for *width*, which the sidebar has
+        # more of and which is set once and left alone.
         self.pages = QtWidgets.QStackedWidget(self)
         self.pages.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
-                                 QtWidgets.QSizePolicy.Policy.Preferred)
+                                 QtWidgets.QSizePolicy.Policy.Expanding)
+        self.pages.setMinimumWidth(MIN_SLICE_TWO_WIDTH)
 
         # Slice 2's default page is a splitter of collapsible sections rather
         # than one widget per rail entry (Zement, 2026-08-30). The reason is
@@ -629,32 +662,18 @@ class Sidebar(QtWidgets.QWidget):
         self.panelScroll.setHorizontalScrollBarPolicy(
             QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
-        # slices 2 and 3 share a column, split vertically so the user decides
-        # how much of it the panels get.
+        # Slice 3 is a vertical splitter holding only the panel scroll area.
         #
-        # **Slice 3 goes on top** (Zement, 2026-08-30). The palette and the item
-        # property editors are the most frequently used things in the sidebar,
-        # and with slice 2 above them every section D-d adds would push them
-        # further down - out of sight, or squeezed to nothing at the bottom.
-        # Putting them first means slice 2 grows downward into space slice 3 is
-        # not using, rather than displacing it.
+        # It held slice 2 as well until D-d.2b, when slice 2 became a column of
+        # its own; a splitter with one child is a plain container. Kept as a
+        # splitter rather than flattened to the scroll area because the saved
+        # `SidebarColumnSizes`, `_resizeColumn` and the whole "vertical division
+        # inside slice 3" idea are what D-d.5 will use to put the Default
+        # Properties panel below the palette. Flattening now would delete the
+        # mechanism and then need it rebuilt two phases later.
         self.column = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical, self)
         self.column.addWidget(self.panelScroll)
-        self.column.addWidget(self.pages)
-
-        # **Slice 3 takes the leftover space; slice 2 takes what it asks for.**
-        # Not an even split (Zement, 2026-08-30: a single 400px undo section
-        # filled half the sidebar). The two want different things from height:
-        # the palette is a scrolling list, so more of it is directly more of
-        # what the user came for, while a section has a default height it wants
-        # and nothing useful to do with the rest.
-        #
-        # So slice 2 is sized to the sum of its sections and slice 3 absorbs the
-        # remainder. Both of Zement's rules follow from that one: an empty slice
-        # 2 asks for nothing, and each section added adds its own height to what
-        # it asks for.
         self.column.setStretchFactor(0, 1)
-        self.column.setStretchFactor(1, 0)
 
         # Whether the user has dragged the column divider. Once they have, their
         # division is the one that stands: _resizeColumn stops recomputing, and
@@ -662,15 +681,23 @@ class Sidebar(QtWidgets.QWidget):
         self._columnDragged = False
         self.column.splitterMoved.connect(self._handleColumnDragged)
 
-        # Slice 2 held nothing until D-c.6, and giving space to an empty widget
-        # was what squeezed the palette into a third of the sidebar. Now that it
-        # has sections, it hides itself while it has none instead - the same
-        # protection, expressed as "empty means absent" rather than as a stretch
-        # factor that would have to be undone the moment content arrived.
+        # "Empty means absent" - unchanged from D-c.6, but now it buys back
+        # *width* rather than height. With no sections open the sidebar is the
+        # rail plus the panels, exactly as it was before D-d.
         self.pages.setVisible(False)
+
+        # Whether the user has dragged the slice 2 / slice 3 divider. Same rule
+        # as the column: once they have, _resizeColumn leaves the width alone.
+        self._widthDragged = False
+
+        # A width restoreLayout read from settings but could not spend yet,
+        # because slice 2 was still hidden. Applied by _applySliceWidth the
+        # first time slice 2 is shown, then cleared.
+        self._savedSliceWidth = None
 
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal, self)
         self.splitter.setChildrenCollapsible(False)
+        self.splitter.splitterMoved.connect(self._handleSliceDragged)
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -681,14 +708,20 @@ class Sidebar(QtWidgets.QWidget):
     # -- slice order -----------------------------------------------------
 
     def _layOutSlices(self):
-        """Insert the slices in the order this side calls for.
+        """Insert the three slices in the order this side calls for.
 
         A QSplitter is ordered by insertion, so flipping sides is re-inserting
         rather than rebuilding - which is why this is a loop and not a second
         constructor. The rail stays outermost either way, so it is against the
         window edge on both sides rather than sitting in the middle.
+
+        Reversing the whole list rather than only moving the rail is deliberate:
+        the order is rail, then slice 2, then the panels, reading *inward* from
+        the window edge. On the right that is the mirror image, so the panels
+        stay next to the canvas on both sides - which is where the thing you are
+        editing wants its property editors.
         """
-        ordered = [self.rail, self.column]
+        ordered = [self.rail, self.pages, self.column]
         if self._side == SIDE_RIGHT:
             ordered.reverse()
 
@@ -698,10 +731,12 @@ class Sidebar(QtWidgets.QWidget):
         for index, widget in enumerate(ordered):
             self.splitter.insertWidget(index, widget)
 
-        self.splitter.setStretchFactor(
-            0 if self._side == SIDE_LEFT else 1, 0)
-        self.splitter.setStretchFactor(
-            1 if self._side == SIDE_LEFT else 0, 1)
+        # The rail is fixed-width and takes no stretch; slice 2 and the panels
+        # share what is left. Both get a stretch factor so a sidebar resize is
+        # divided between them rather than landing entirely on one - the widths
+        # themselves are set by _resizeSlices and by the user's drag.
+        for index, widget in enumerate(ordered):
+            self.splitter.setStretchFactor(index, 0 if widget is self.rail else 1)
 
     @property
     def side(self):
@@ -810,7 +845,14 @@ class Sidebar(QtWidgets.QWidget):
             # (see __init__), and overriding that here would put an empty
             # column beside the palette - the thing D-c.3 spent a phase fixing.
             if page is not self.sections or self._sections:
+                was_hidden = not self.pages.isVisible()
                 self.pages.setVisible(True)
+
+                # Slice 2 arriving changes how the sidebar's width divides, and
+                # a hidden splitter child cannot be sized - so the division is
+                # computed here, the moment it can take one (D-d.2b).
+                if was_hidden:
+                    self._resizeColumn()
 
         action = self._railActions[row]
         if action is None:
@@ -974,15 +1016,15 @@ class Sidebar(QtWidgets.QWidget):
     def _capSliceTwo(self):
         """Shrink slice 2 to its headers when every section in it is folded.
 
-        Capping each *section* is not enough, and this is the bug Zement found
-        (2026-08-30): the sections live inside `pages`, which is one half of the
-        `column` splitter, and that splitter keeps slice 2's share of the height
-        however small the sections inside it become. So the palette below never
-        saw the space folding was supposed to release.
+        Written for the stacked layout, where slice 2 kept its share of the
+        *height* however small its sections folded to and the palette below
+        never saw the space released (Zement, 2026-08-30). Since D-d.2b slice 2
+        is its own column and can no longer take height from anything, so the
+        cap is now cosmetic: it stops a stack of folded headers from sitting in
+        a full-height empty column.
 
-        The cap has to be lifted again the moment anything unfolds, which is why
-        this runs from `_applySectionStretch` - the one place every fold, unfold,
-        add and remove already passes through.
+        Still worth keeping, and still runs from `_applySectionStretch` - the
+        one place every fold, unfold, add and remove already passes through.
         """
         if not self._sections:
             self.pages.setMaximumHeight(QtWidgets.QWIDGETSIZE_MAX)
@@ -1002,13 +1044,24 @@ class Sidebar(QtWidgets.QWidget):
         """The user moved the column divider - stop recomputing it."""
         self._columnDragged = True
 
+    def _handleSliceDragged(self, _pos, _index):
+        """The user moved the slice 2 / panels divider (D-d.2b).
+
+        Same rule as the column, one axis over: from here on their width is the
+        one that stands, and `_resizeColumn` stops re-dividing.
+        """
+        self._widthDragged = True
+
     def wantedSliceTwoHeight(self):
         """How tall slice 2 asks to be: the sum of what its sections want.
 
         A folded section contributes its header, an expanded one its default
-        height - or its natural size hint where no default was given. This is
-        what makes Zement's two rules one rule: an empty slice 2 wants nothing,
-        and adding a section adds that section's height to what it wants.
+        height - or its natural size hint where no default was given.
+
+        Sized slice 2's share of the column until D-d.2b. Slice 2 now has a
+        column of its own and takes its full height, so nothing consults this
+        for layout; it stays because the section suites measure through it and
+        it is still the honest answer to the question it asks.
         """
         if not self._sections:
             return 0
@@ -1024,53 +1077,63 @@ class Sidebar(QtWidgets.QWidget):
             0, len(self._sections) - 1)
 
     def _resizeColumn(self):
-        """Cap slice 2 at half the column, however much it asks for.
+        """Divide the sidebar's width between slice 2 and the panels.
 
-        The *sizing* is done by the splitter itself - stretch 1/0 plus each
-        section's size hint - and measurement says so:
+        Was the *height* division between the two while they shared a column.
+        Since D-d.2b they are side by side, so what needs computing is how wide
+        slice 2 opens at - and the answer is much simpler than the height one
+        was, because a tree has no natural width to respect the way a section
+        had a natural height. It gets a share, once, and the user adjusts it.
 
-            stretch 1/1, hint 400   -> [29, 967]   <- Zement's bug
-            stretch 1/0, hint 400   -> [596, 400]  <- what is wanted
-            stretch 1/0, no hint    -> [786, 210]
-
-        Those get the *first* layout right. What they cannot do is re-divide
-        afterwards: a QSplitter consults a child's size hint once, and
-        ``updateGeometry()`` does not make it look again - measured, after a
-        round of assuming otherwise. Percentage heights change on every sidebar
-        resize, so the division has to be recomputed explicitly, which is what
-        this does.
+        Named for the column it no longer divides. Kept because every caller -
+        addSection, removeSection, showEvent, applyRailWidth - wants exactly
+        this: "the set of slices changed, re-divide". Renaming it would touch
+        five call sites to say the same thing.
         """
-        if self._columnDragged:
-            # The user has set this division by hand. Their number beats a
-            # computed one - the point of the percentages is a sensible
-            # *starting* height, not a height that keeps reasserting itself.
+        # A width waiting from settings takes precedence over the computed
+        # share, and marks the division as the user's own once it lands.
+        if self._applySliceWidth():
             return
 
-        total = self.column.height()
+        if self._widthDragged:
+            # The user has set this division by hand. Their number beats a
+            # computed one - the share is a sensible *starting* width, not one
+            # that keeps reasserting itself.
+            return
+
+        if not self._sections and not self.pages.isVisible():
+            # Nothing in slice 2, so there is nothing to divide: the splitter
+            # gives the whole width to the panels on its own.
+            return
+
+        total = self.splitter.width() - rail_width() - self.splitter.handleWidth() * 2
         if total <= 0:
             # Not laid out yet; showEvent runs this again once it is.
             return
 
-        # Never more than half, however much slice 2 asks for: the palette is
-        # what the user works in, and a stack of sections with generous defaults
-        # must not be able to push it aside.
-        wanted = min(self.wantedSliceTwoHeight(), total // 2)
+        wanted = max(MIN_SLICE_TWO_WIDTH, int(total * SLICE_TWO_SHARE))
+
+        # Never so wide that the panels are squeezed below their own floor. On a
+        # narrow sidebar this is the binding constraint, and it is why the share
+        # is a maximum rather than a promise.
+        wanted = min(wanted, max(0, total - MIN_SLICE_TWO_WIDTH))
+        if wanted <= 0:
+            return
+
+        panels = total - wanted
 
         # Blocked: setSizes emits splitterMoved, which is the signal that marks
-        # the column as user-dragged. Without this, the first computed division
-        # marks itself as the user's own and every later one is refused - which
-        # left the section frozen at whatever height it first got.
-        # setSizes cannot go below a child's minimum size, and slice 3's panels
-        # add up to a large one - so without this the splitter silently keeps
-        # slice 2 far taller than asked. Lifting the *scroll area's* minimum is
-        # safe and is what it is for: the panels inside it scroll.
-        self.panelScroll.setMinimumHeight(0)
-
-        blocked = self.column.blockSignals(True)
+        # the division as user-dragged. Without this, the first computed
+        # division marks itself as the user's own and every later one is
+        # refused - which left the section frozen at whatever it first got.
+        blocked = self.splitter.blockSignals(True)
         try:
-            self.column.setSizes([total - wanted, wanted])
+            sizes = [rail_width(), wanted, panels]
+            if self._side == SIDE_RIGHT:
+                sizes.reverse()
+            self.splitter.setSizes(sizes)
         finally:
-            self.column.blockSignals(blocked)
+            self.splitter.blockSignals(blocked)
 
     # -- slice 3 ---------------------------------------------------------
 
@@ -1176,21 +1239,34 @@ class Sidebar(QtWidgets.QWidget):
         earlier Reggie versions was exactly this: resizing the same panels at
         every start.
 
-        Two numbers, both of which the user sets by dragging:
+        Three numbers, all of which the user sets by dragging:
 
         - the **sidebar's width** - the split between the sidebar and the canvas
-        - the **column split** - how the sidebar's height divides between the
-          sections (slice 2) and the panels (slice 3)
+        - the **slice split** - how that width divides between slice 2 and the
+          panels (D-d.2b; before that the two shared a column and this was a
+          height)
+        - the **column split** - how slice 3's own height divides, which is one
+          number today and becomes meaningful again in D-d.5
 
         Stored as plain lists rather than Qt's opaque ``saveState`` blobs, so a
         settings file stays readable and a bad value can be corrected by hand.
         """
-        # Only when slice 2 actually has a height. With no sections open it is
-        # hidden and reports zero, and saving that would overwrite a division
-        # the user set in an earlier session with a number that means nothing.
+        # Only when the column actually has a height. A hidden or unlaid widget
+        # reports zero, and saving that would overwrite a division the user set
+        # in an earlier session with a number that means nothing.
         sizes = [int(n) for n in self.column.sizes()]
-        if all(n > 0 for n in sizes):
+        if sizes and all(n > 0 for n in sizes):
             setSetting('SidebarColumnSizes', sizes)
+
+        # The slice division, saved as slice 2's width alone rather than the
+        # whole list. The rail's width is a setting of its own and the panels
+        # take the remainder, so one number is the whole of what the user chose
+        # - and it survives a rail resize or a side flip, which a list of three
+        # absolute widths would not.
+        if self._sections or self.pages.isVisible():
+            slice_two = int(self.pages.width())
+            if slice_two > 0:
+                setSetting('SidebarSliceTwoWidth', slice_two)
 
         window = self.win
         splitter = getattr(window, 'centralSplitter', None)
@@ -1250,13 +1326,35 @@ class Sidebar(QtWidgets.QWidget):
         width = setting('SidebarWidth', None)
         splitter = getattr(self.win, 'centralSplitter', None)
 
-        if width is None or splitter is None:
+        if splitter is None:
             return False
 
+        # No saved width - a first run, or a settings file from before the
+        # sidebar existed. Left to the splitter until D-d.2b, which produced 251
+        # px from the children's size hints: fine for two slices, and much too
+        # narrow for three (measured: rail 48, slice 2 at its 180 floor, and 68
+        # px of panels - the property editors squeezed to nothing on first
+        # launch). So the first-run width is stated rather than inferred.
+        if width is None:
+            width = DEFAULT_SIDEBAR_WIDTH
+
+        # A width saved by a pre-D-d.2b build is a *two*-slice width, and
+        # restoring it into three slices leaves the panels unusable - Zement's
+        # own settings.ini holds 251, which divides as rail 48, tree 180 and 23
+        # px of property editors.
+        #
+        # Widened rather than migrated on a version check: no version is
+        # recorded for this key, and "too narrow to hold its own slices" is
+        # both the real condition and one that stays correct if the floors ever
+        # change. A user who genuinely wants a sidebar this narrow gets it back
+        # by dragging, and that drag is saved.
         try:
             width = int(width)
         except (TypeError, ValueError):
             return False
+
+        if width < MIN_THREE_SLICE_WIDTH:
+            width = DEFAULT_SIDEBAR_WIDTH
 
         index = splitter.indexOf(self)
         if width <= 0 or index == -1:
@@ -1387,14 +1485,17 @@ class Sidebar(QtWidgets.QWidget):
             except (TypeError, ValueError):
                 sizes = None
 
-            # A zero for slice 2 is what gets saved when it holds no sections -
-            # it is hidden then, and a hidden widget has no height. Restoring it
-            # would be harmless but pointless, and treating it as "the user
-            # chose this" would stop _resizeColumn ever sizing the first section
-            # that arrives. So a zero means "nothing to restore".
+            # A zero is what gets saved for a widget that was hidden or not yet
+            # laid out. Restoring it would be harmless but pointless, and
+            # treating it as "the user chose this" would stop _resizeColumn ever
+            # sizing what arrives later. So a zero means "nothing to restore".
             if sizes and 0 in sizes:
                 sizes = None
 
+            # The length test also discards the pre-D-d.2b value, where this
+            # setting held two numbers because slice 2 lived in this splitter.
+            # A settings file written by an older build heals itself on the
+            # first save rather than needing a migration.
             if sizes and len(sizes) == self.column.count() and sum(sizes) > 0:
                 blocked = self.column.blockSignals(True)
                 try:
@@ -1408,7 +1509,64 @@ class Sidebar(QtWidgets.QWidget):
                 # method exists to bring back.
                 self._columnDragged = True
 
+        self._restoreSliceWidth()
         self._restoreWidth()
+
+    def _restoreSliceWidth(self):
+        """Put slice 2 back to its saved width (D-d.2b).
+
+        Deliberately *not* applied to the splitter here. Slice 2 is hidden while
+        it holds no sections, and setting sizes on a splitter with a hidden
+        child does nothing at all - the widths would be silently discarded and
+        the first section to open would get the computed share instead of the
+        user's. So the number is remembered and `_applySliceWidth` spends it
+        when slice 2 next becomes visible.
+        """
+        width = setting('SidebarSliceTwoWidth', None)
+        try:
+            width = int(width) if width is not None else None
+        except (TypeError, ValueError):
+            width = None
+
+        if width is not None and width > 0:
+            self._savedSliceWidth = width
+
+    def _applySliceWidth(self):
+        """Spend a restored slice 2 width, once, when it can actually take.
+
+        Returns True if it was applied. A restored width counts as the user's
+        own division, so it also stops `_resizeColumn` recomputing over it -
+        the same rule the column split follows.
+        """
+        width = self._savedSliceWidth
+        if width is None or not self.pages.isVisible():
+            return False
+
+        total = self.splitter.width() - rail_width() - self.splitter.handleWidth() * 2
+        if total <= 0:
+            return False
+
+        # Re-checked against this window rather than trusted, for the same
+        # reason the sidebar's own width is: a division saved on a wide screen
+        # must not leave the panels with nothing on a narrow one.
+        width = max(MIN_SLICE_TWO_WIDTH,
+                    min(width, max(0, total - MIN_SLICE_TWO_WIDTH)))
+        if width <= 0 or width >= total:
+            return False
+
+        self._savedSliceWidth = None
+        self._widthDragged = True
+
+        blocked = self.splitter.blockSignals(True)
+        try:
+            sizes = [rail_width(), width, total - width]
+            if self._side == SIDE_RIGHT:
+                sizes.reverse()
+            self.splitter.setSizes(sizes)
+        finally:
+            self.splitter.blockSignals(blocked)
+
+        return True
 
     def _applyPanelStretch(self):
         """Give the stretch to the expanded panels only.
