@@ -30,9 +30,13 @@ SETTING_GROUPS = {
                     'OverviewTranslucent', 'OverviewOpacityPct', 'RailWidth',
                     'IncrementPastedIDs'],
     # Geometry settings are NOT in a group - they stay at root level for Qt.
-    # SidebarWidth and SidebarColumnSizes (D-c.6) belong here too: they are
-    # remembered layout, not preferences, and there is nothing in the settings
-    # dialog that sets them - the user sets them by dragging.
+    # That list is the one in _get_group_for_setting below, not this dict.
+    #
+    # SidebarWidth and SidebarColumnSizes (D-c.6) are deliberately NOT in that
+    # list, so they land in [Main]: they are remembered layout rather than
+    # preferences, but they are ours, not Qt's, and nothing needs them at root
+    # level. (An earlier version of this comment claimed they were ungrouped,
+    # which the code never did.)
 }
 
 def _get_group_for_setting(name):
@@ -244,9 +248,25 @@ def reorganizeSettings():
         globals_.settings.remove(key)
     
     # Write back with groups in specific order
-    # Order: Main, View, Freeze, Preferences, GamePaths, then Geometry at root level
-    group_order = ['Main', 'View', 'Freeze', 'Preferences', 'GamePaths', None]
-    
+    # Order: Main, View, Freeze, Preferences, GamePaths, Keybinds, then Geometry
+    # at root level.
+    #
+    # Every group _get_group_for_setting can return must appear here. A key
+    # whose group is missing is read, removed above, and then never written
+    # back - silent data loss. 'Keybinds' was absent until 2026-08-31, so a
+    # settings file with ungrouped Keybind_* entries lost every custom shortcut
+    # the first time this migration ran.
+    group_order = ['Main', 'View', 'Freeze', 'Preferences', 'GamePaths',
+                   'Keybinds', None]
+
+    known = set(group_order)
+    for key in values:
+        group = _get_group_for_setting(key)
+        if group not in known:
+            # Better to leave a key ungrouped than to drop it.
+            group_order.insert(-1, group)
+            known.add(group)
+
     for group_name in group_order:
         for key, value in values.items():
             group = _get_group_for_setting(key)
