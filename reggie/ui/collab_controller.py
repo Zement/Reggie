@@ -867,6 +867,12 @@ class CollabController(QtCore.QObject):
         # inheriting this one's controls and chat log.
         self.status_window = None
         window.setRoster([])
+
+        # Take the tab down first (D-c.5). The window is about to be deleted,
+        # and a tab still holding it would be a page over a destroyed widget -
+        # the exact shape of D-b's "wrapped C/C++ object has been deleted".
+        self._closeStatusTab()
+
         window.close()
         window.deleteLater()
 
@@ -1007,6 +1013,14 @@ class CollabController(QtCore.QObject):
     # -- status window ------------------------------------------------------
 
     def showStatusWindow(self):
+        """Bring the roster and chat up - as a tool tab since D-c.5.
+
+        The controller still owns the window: it builds it, wires its callbacks,
+        feeds it every roster and chat message, and closes it at teardown. What
+        changed is only where it is shown. That split matters - a session's
+        status display must not depend on the shell being in any particular
+        state, so the tab is asked for and the window works with or without one.
+        """
         if self.status_window is None:
             window = collab_dialogs.CollabStatusWindow(self.is_host, self.window)
             window.chatRequested = self._sendChat
@@ -1023,8 +1037,56 @@ class CollabController(QtCore.QObject):
             # showed it once, so a stale or missing one is a dead end.
             self.status_window.setJoinCode(self.join_code)
 
+        if self._showAsTab():
+            return
+
         self.status_window.show()
         self.status_window.raise_()
+
+    def _toolTabManager(self):
+        """The shell's tool-tab manager, or None if there is no shell.
+
+        Wrapped in a try rather than a plain getattr for two reasons, both real
+        rather than theoretical. Teardown runs while a window may already be
+        going away, and touching a deleted QWidget raises RuntimeError instead
+        of returning nothing. And a controller built without ``__init__`` - the
+        collab suites do exactly that, to test disposal on a bare object -
+        raises RuntimeError on *any* attribute access. Neither is a reason a
+        session should fail to tear down.
+        """
+        try:
+            return getattr(self.window, 'toolTabs', None)
+        except (AttributeError, RuntimeError):
+            return None
+
+    def _closeStatusTab(self):
+        """Take the collaboration tool tab down, if there is one."""
+        manager = self._toolTabManager()
+        if manager is None:
+            return
+
+        from reggie.ui import tooltabs
+        manager.closeTool(tooltabs.COLLABORATE, apply=False)
+
+    def _showAsTab(self):
+        """Put the status window in a tool tab. False if there is no shell.
+
+        Falls back to a free-floating window rather than failing, because the
+        collab layer is used headlessly by the test suites and must not require
+        a MasterTabWidget to exist.
+        """
+        manager = self._toolTabManager()
+        if manager is None:
+            return False
+
+        from reggie.ui import tooltabs
+
+        # owns=False: this controller built the window and keeps it for the
+        # length of the session. Closing the tab must put it away, not destroy
+        # a widget the controller goes on feeding roster and chat messages.
+        return manager.openTool(tooltabs.COLLABORATE,
+                                lambda: self.status_window,
+                                'Collaboration', owns=False) is not None
 
     def _appendStatus(self, text):
         if self.status_window is not None:

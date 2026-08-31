@@ -107,6 +107,34 @@ class LevelIO:
 
             self.win.LoadLevel(dlg.currentlevel, False, 1)
 
+    def _ClearDirtyForSavedFile(self, file_path):
+        """Mark every area of a just-saved file as clean.
+
+        Since Block D-c, `globals_.Dirty` is per session, so assigning it False
+        would only clear the tab that happened to be in front. Saving is per
+        *file* - Level.save() serialises every area in one pass - so every
+        session sharing that path is now clean, and leaving the others marked
+        would put a `*` on tabs whose work is safely on disk.
+
+        Note what this does NOT do: rebind the sessions to a new path on Save
+        As. They keep the path they were opened under, which is a pre-existing
+        gap (the handle is keyed by path in the manager) and not one a dirty
+        marker should be reaching into. Recorded in DEFERRED_ITEMS.md.
+
+        Falls back to the plain assignment when there is no manager, which is
+        how the headless suites and the pre-session path run.
+        """
+        manager = globals_.get_session_manager()
+        if manager is None:
+            globals_.Dirty = False
+            return
+
+        manager.clear_dirty_for_file(file_path)
+
+        # The active session may be on another file entirely (Save As from a
+        # tab, with other files open), so clear it explicitly too.
+        globals_.Dirty = False
+
     def _ProposeCollabSwitch(self, level, area):
         """
         Whether this editor may load a level itself, or has handed the decision
@@ -200,7 +228,11 @@ class LevelIO:
                                           globals_.trans.string('Err_Save', 1, '[err1]', e.args[0], '[err2]', e.args[1]))
             return False
 
-        globals_.Dirty = False
+        # Saving is per *file*: Level.save() serialises every area in one pass,
+        # so a save from any tab persists all of them and leaving the other tabs
+        # marked dirty would misreport that. Assigning globals_.Dirty would only
+        # clear the active session's flag.
+        self._ClearDirtyForSavedFile(self.win.fileSavePath)
         globals_.AutoSaveDirty = False
         self.win.UpdateTitle()
 
@@ -261,7 +293,10 @@ class LevelIO:
 
         if not copy:
             globals_.AutoSaveDirty = False
-            globals_.Dirty = False
+            # Save As writes every area too - see _ClearDirtyForSavedFile. The
+            # path it clears is the one the sessions still carry, which is the
+            # old one: fileSavePath is only reassigned on the next line.
+            self._ClearDirtyForSavedFile(self.win.fileSavePath)
 
             self.win.fileSavePath = fn
             if globals_.UseFullFilepath:
@@ -346,7 +381,12 @@ class LevelIO:
                 return False
 
             name = checkname
-            same = name == self.win.fileSavePath  # Just an area change
+            # "Just an area change" - but only if that level is still open.
+            # fileSavePath survives every session being closed, so on its own it
+            # would send a genuine re-open down the area-change branch, where
+            # globals_.Level is None and there is nothing to change the area of.
+            same = (name == self.win.fileSavePath
+                    and getattr(globals_, 'Level', None) is not None)
             
             # If we just discarded changes, force a full reload even if it's the same level
             if hasattr(self.win, 'justDiscardedChanges') and self.win.justDiscardedChanges:

@@ -290,26 +290,41 @@ def main():
     # default on a fresh one.
     #
     # Reginald does not migrate settings from Reggie! Next: the settings.ini
-    # format diverged too far to be worth translating. A missing, foreign or
-    # unparseable version key therefore means "start clean" rather than "try to
-    # upgrade". This replaces a guard that compared against 4.0 and called
-    # sys.exit(1), which under Reginald's 0.9x numbering would have rejected
-    # every existing settings file outright.
+    # format diverged too far to be worth translating. So the question asked
+    # here is ONLY "did a Reginald write this file?", answered by the presence
+    # of the ReginaldVersion key.
     #
-    # The key is ReginaldVersion, not ReggieVersion, for two reasons: an old
-    # Reggie settings.ini has no such key and so resets cleanly, and an old
-    # Reggie pointed at the same file cannot read 0.95 and decide the file is
-    # ancient.
+    # It is deliberately not a version *comparison* (Zement, 2026-08-31). An
+    # earlier version of this guard also reset outside the range
+    # 0.9 <= v <= ReginaldVersionFloat, which had two faults:
+    #
+    #   * It earned nothing against Reggie files. An old Reggie writes
+    #     ReggieVersion, never ReginaldVersion, so it is already caught by the
+    #     key being absent - its 4.10.1 is never compared against anything.
+    #   * It reset a settings file written by a NEWER Reginald. Once this
+    #     constant moves to 0.96 or 1.0, running an older build - a CI
+    #     artifact, a second working copy - would silently wipe the newer
+    #     file. That is the opposite of what a version stamp is for.
+    #
+    # The compatibility rule that replaces it: settings are additive. New keys
+    # may be added, and every reader must have a defined answer for a key that
+    # is not there yet - which `setting(name, default)` already provides. No
+    # release renames or repurposes an existing key, so any Reginald file stays
+    # readable by any other Reginald.
+    #
+    # The float parse is kept even though nothing compares the result: the
+    # planned update feature needs to answer "which version wrote this file"
+    # without crashing on a malformed value, and this is that primitive.
     print("[BOOT] Checking settings provenance...")
     _raw_version = setting("ReginaldVersion")
     try:
         _settings_version = float(_raw_version) if _raw_version is not None else None
     except (TypeError, ValueError):
         # A hand-edited or foreign file can hold a non-numeric value here.
-        # Treat it as foreign rather than crashing on the comparison.
+        # Treat it as foreign rather than crashing.
         _settings_version = None
 
-    if _settings_version is None or not (0.9 <= _settings_version <= globals_.ReginaldVersionFloat):
+    if _settings_version is None:
         # settings.ini.bak was already written above, so this is recoverable.
         _had_settings = _raw_version is not None or bool(globals_.settings.allKeys())
         globals_.settings.clear()
@@ -322,14 +337,22 @@ def main():
                 QtWidgets.QMessageBox.Icon.Information,
                 'Settings reset',
                 'Reginald could not use the existing settings.ini - it was written by '
-                'Reggie! Next or by a different version of Reginald, and the format has '
-                'diverged too far to convert.\n\n'
+                'Reggie! Next or by another program, and the format has diverged too '
+                'far to convert.\n\n'
                 'Your settings have been reset to defaults. The previous file was kept '
                 'as settings.ini.bak.'
             ).exec()
         print("[BOOT] ✓ Settings reset to defaults")
     else:
-        print("[BOOT] ✓ Settings provenance OK")
+        # A Reginald file. Keep it, and stamp the version that is now using it
+        # so the key tracks reality rather than only recording the last reset.
+        if _settings_version != globals_.ReginaldVersionFloat:
+            setSetting("ReginaldVersion", globals_.ReginaldVersionFloat)
+            globals_.settings.sync()
+            print("[BOOT] ✓ Settings kept (written by %s, now %s)"
+                  % (_settings_version, globals_.ReginaldVersionFloat))
+        else:
+            print("[BOOT] ✓ Settings provenance OK")
 
     # Ensure all important settings are visible in the file
     print("[BOOT] Ensuring settings visible...")

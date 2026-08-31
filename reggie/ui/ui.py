@@ -517,6 +517,11 @@ class ListWidgetWithToolTipSignal(QtWidgets.QListWidget):
 OS_RESERVED_KEYBINDS = ('Alt+F4', 'Alt+Tab', 'Ctrl+Esc')
 QPT_RESERVED_KEYBINDS = ('Q', 'S', 'C', 'E', 'F', 'D', 'F1', 'F2', 'F3', 'Esc')
 
+# Reserved by the editor itself: Tab cycles within a focus group and Ctrl+Tab
+# moves between groups, so binding either to an action would strand anyone
+# navigating by keyboard.
+UI_RESERVED_KEYBINDS = ('Ctrl+Tab', 'Ctrl+Shift+Tab')
+
 
 class KeybindLineEdit(QtWidgets.QKeySequenceEdit):
     """
@@ -558,6 +563,9 @@ class KeybindLineEdit(QtWidgets.QKeySequenceEdit):
             message = globals_.trans.string('PrefsDlg', 69)
         elif seq_str in QPT_RESERVED_KEYBINDS:
             message = globals_.trans.string('PrefsDlg', 70)
+        elif seq_str in UI_RESERVED_KEYBINDS:
+            message = ('%s is reserved for moving between panel groups.'
+                       % seq_str)
         else:
             clash = self._findClash(seq_str)
             if clash is None:

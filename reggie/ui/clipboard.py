@@ -19,8 +19,8 @@ signatures (``select``/``xOverride``/``yOverride``).
 
 from PyQt6 import QtCore, QtWidgets
 
-from reggie.core import globals_
-from reggie.core.dirty import SetDirty
+from reggie.core import common, globals_
+from reggie.core.dirty import SetDirty, setting
 from reggie.core.levelitems import ObjectItem, SpriteItem, EntranceItem, LocationItem, PathItem, Path
 from reggie.core.raw_data import RawData
 
@@ -303,12 +303,80 @@ class ClipboardController:
         self.win.SelectionUpdateFlag = False
         self.win.ChangeSelectionHandler()
 
-        # Combine everything that was added
-        added = sprites + entrances + locations + paths + path_nodes
+        # Combine everything that was added.
+        #
+        # The Path containers are deliberately absent. A Path is a plain object,
+        # not a QGraphicsItem: it holds the nodes and the line between them, and
+        # every consumer of this list treats its members as scene items. The
+        # collaboration layer is the one that says so out loud - it refuses a
+        # Path with "item type Path cannot be synchronised" (Zement, 2026-08-31,
+        # pasting paths while hosting) - but the same assumption is in the undo
+        # stack and the selection handling.
+        #
+        # The nodes are what represents a path everywhere else in the editor:
+        # drawing one by hand tracks the node, and the sync layer recreates the
+        # container from a node's description. So the nodes carry the paste too.
+        added = sprites + entrances + locations + path_nodes
         for layer in layers:
             added += layer
 
         return added
+
+    # ReggieClip type codes whose items carry an id that should be unique
+    # within an area: entrance, location, path.
+    #
+    # Locations were left out at first because duplicate location ids are legal
+    # in NSMBW. They are in now (Zement, 2026-08-31): legal is not the same as
+    # wanted, and the ids Nintendo actually uses are unique. The one deliberate
+    # exception, id 0, is handled at the decode site rather than here - a clip
+    # of nothing but id-0 locations still offers the choice, and choosing
+    # "free IDs" simply leaves them alone.
+    _ID_BEARING_CLIP_TYPES = ('2', '3', '4')  # entrance, location, path
+
+    @classmethod
+    def _clipHasIDdItems(cls, clip):
+        """
+        Whether a split clip contains any entrance or path.
+
+        Cheap enough to run on every paste: it stops at the first match, and a
+        clip of pure objects - by far the common case - never reaches the
+        dialog at all.
+        """
+        for item in clip:
+            if item.split(':', 1)[0] in cls._ID_BEARING_CLIP_TYPES:
+                return True
+        return False
+
+    def _askAboutIDs(self):
+        """
+        Asks whether to renumber pasted entrances and paths.
+
+        Returns True to renumber, False to keep the original ids, or None if
+        the user cancelled the paste entirely.
+        """
+        box = QtWidgets.QMessageBox(self.win)
+        box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+        box.setWindowTitle('Paste Items With IDs')
+        box.setText('This clipboard contains entrances, locations and/or paths.')
+        box.setInformativeText(
+            'Two entrances or paths sharing an ID can crash the level in-game, '
+            'so pasted items are normally given the first free ID.\n\n'
+            'Keeping the original IDs is still useful when moving items '
+            'between areas, or when the duplicates are only temporary.')
+
+        fresh = box.addButton('Use &Free IDs', QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+        keep = box.addButton('&Keep Original IDs', QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(fresh)
+
+        box.exec()
+        clicked = box.clickedButton()
+
+        if clicked is fresh:
+            return True
+        if clicked is keep:
+            return False
+        return None
 
     def getEncodedObjects(self, encoded):
         """
@@ -322,10 +390,33 @@ class ClipboardController:
         paths = []
         path_nodes = []
 
+        # Whether a pasted entrance, location or path gets a fresh ID (D-c.6).
+        # Read once per paste rather than per item, so a clip cannot be
+        # half-renumbered if the setting changes underneath a long decode.
+        increment_ids = bool(setting('IncrementPastedIDs', True))
+
+        # Original path id -> the id it was given here. Empty when not
+        # renumbering, in which case the node lookup below finds every id
+        # unchanged.
+        path_id_map = {}
+
         if not (encoded.startswith('ReggieClip|') and encoded.endswith('|%')):
             return layers, sprites, entrances, locations, paths, path_nodes
 
         clip = encoded[11:-2].split('|')
+
+        # Ask before renumbering, if there is anything to renumber (D-c.6).
+        #
+        # Not conditioned on the clip coming from another area: a clip carries
+        # no origin (it travels through the system clipboard, so it can arrive
+        # from another instance entirely), and Zement's point stands anyway -
+        # keeping the original ids is sometimes what the user wants within one
+        # area too, so the choice should be offered whenever it is meaningful.
+        if increment_ids and self._clipHasIDdItems(clip):
+            choice = self._askAboutIDs()
+            if choice is None:
+                return layers, sprites, entrances, locations, paths, path_nodes
+            increment_ids = choice
 
         self.win.spriteList.prepareBatchAdd()
         for item in clip:
@@ -406,7 +497,22 @@ class ClipboardController:
                     if path < 0 or path > 255: continue
                     if cPipeDir < 0 or cPipeDir > 3: continue
 
-                    newitem = self.win.CreateEntrance(objx, objy, entID, allow_dupe_id=True)
+                    # Two entrances with the same ID can crash the level in the
+                    # game (Zement's live test, 2026-07-26), so by default a
+                    # pasted entrance takes the first free ID instead of the
+                    # one it was copied with. Passing None makes CreateEntrance
+                    # pick it, which is the same path a hand-placed entrance
+                    # takes - so the "first free" rule has one definition.
+                    #
+                    # The setting exists for the legitimate case it would
+                    # otherwise break: pasting into a *different* area or level,
+                    # where keeping the original IDs is exactly the point.
+                    if increment_ids:
+                        newitem = self.win.CreateEntrance(objx, objy)
+                    else:
+                        newitem = self.win.CreateEntrance(objx, objy, entID,
+                                                          allow_dupe_id=True)
+
                     if newitem is None: continue
 
                     # Set entrance data
@@ -437,7 +543,20 @@ class ClipboardController:
                     width = int(split[4])
                     height = int(split[5])
 
-                    newitem = self.win.CreateLocation(objx, objy, width, height, locID)
+                    # Locations join the free-ID rule (Zement, 2026-08-31).
+                    # Upstream Reggie could not copy them at all, so this only
+                    # became reachable with F10.
+                    #
+                    # ID 0 is the exception and is kept as-is: it is legal and
+                    # deliberately used, with several ID-0 locations at once as
+                    # a special case. Renumbering one to 1 would break that on
+                    # purpose, so only ids from 1 upward are treated as
+                    # "should be unique".
+                    if increment_ids and locID != 0:
+                        newitem = self.win.CreateLocation(objx, objy, width, height)
+                    else:
+                        newitem = self.win.CreateLocation(objx, objy, width, height, locID)
+
                     if newitem is None: continue
                     locations.append(newitem)
 
@@ -448,7 +567,34 @@ class ClipboardController:
                     pathID = int(split[1])
                     loops = int(split[2])
 
-                    path = Path(pathID, globals_.mainWindow.scene, loops)
+                    # Same rule as entrances, with one extra step: a path node
+                    # names its parent by the *original* id, so remapping a path
+                    # has to be recorded for the nodes below to follow. Without
+                    # that they would attach to whichever path happened to be
+                    # first, which is worse than a duplicate id.
+                    newID = pathID
+                    if increment_ids:
+                        # _id, not an `id` property - Path exposes set_id() but
+                        # no getter, and the node lookup below reads _id too.
+                        used = set(p._id for p in globals_.Area.paths)
+                        used |= set(path_id_map.values())
+
+                        # From 1, not 0: Nintendo's levels never use path id 0,
+                        # and hand-drawing a path already skips it (see the
+                        # getids[0] = True in misc2.py). Zement checked with
+                        # Nin0 and Ogu_99, 2026-08-31 - 0 is most likely legal,
+                        # but there is no reason to be the only thing in the
+                        # editor that produces it.
+                        #
+                        # Entrances are the opposite and do start at 0, which is
+                        # why they use the default minimum.
+                        candidate = common.find_first_available_id(used, 256, 1)
+                        if candidate is not None:
+                            newID = candidate
+
+                    path_id_map[pathID] = newID
+
+                    path = Path(newID, globals_.mainWindow.scene, loops)
                     globals_.Area.paths.append(path)
                     paths.append(path)
 
@@ -464,11 +610,16 @@ class ClipboardController:
                     accel = float(split[6])
                     delay = int(split[7])
 
-                    # Make sure the clip has the parent path
+                    # Make sure the clip has the parent path. The id in the clip
+                    # is the one the path was *copied* with, so it is looked up
+                    # through the remap before matching - otherwise every node
+                    # of a renumbered path would fall through to paths[0].
                     if paths:
+                        wantedID = path_id_map.get(pathID, pathID)
+
                         path = paths[0]
                         for p in paths:
-                            if pathID == p._id:
+                            if wantedID == p._id:
                                 path = p
                                 break
 

@@ -256,8 +256,12 @@ def create_hotkey_overlay(main_window) -> Optional[HotkeyOverlay]:
         HotkeyOverlay widget or None if creation failed
     """
     try:
-        # Create overlay as child of central widget to overlay the view
-        overlay = HotkeyOverlay(main_window.centralWidget())
+        # Parent to the tab container rather than the central widget: since
+        # D-c.3 the centre is a splitter holding the sidebar as well, and an
+        # overlay parented there would be positioned against the sidebar's
+        # geometry too. The container is the canvas area itself.
+        host = getattr(main_window, 'tabs', None) or main_window.centralWidget()
+        overlay = HotkeyOverlay(host)
         
         # Position it (will be updated when view geometry changes)
         if hasattr(main_window, 'view') and main_window.view:

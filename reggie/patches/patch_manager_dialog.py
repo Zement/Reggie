@@ -121,6 +121,9 @@ class PatchManagerDialog(QtWidgets.QDialog):
         self.table.horizontalHeaderItem(4).setToolTip('Indicates if this is a full mod installed to Riivolution folder')
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        # Tab moves to the next section, not the next cell - the rows are
+        # navigated with the arrow keys.
+        self.table.setTabKeyNavigation(False)
         self.table.itemSelectionChanged.connect(self._on_patch_selected)
         
         # Populate table
@@ -178,6 +181,7 @@ class PatchManagerDialog(QtWidgets.QDialog):
         self.catalogTable.horizontalHeader().setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         self.catalogTable.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.catalogTable.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.catalogTable.setTabKeyNavigation(False)
         
         # Populate catalog
         self._populate_catalog()

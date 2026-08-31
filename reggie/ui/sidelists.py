@@ -26,7 +26,14 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         # Set minimum height to ensure visibility when docked
         self.setMinimumHeight(80)
 
-        self.bgbrush = QtGui.QBrush(globals_.theme.color('bg'))
+        # Qt-native, not theme.color('bg'). The theme's `bg` is the *canvas*
+        # colour, which is exactly what this must not match - against it the
+        # overview was invisible (Zement, 2026-08-29). Taken from the running
+        # palette so it follows a light or dark system theme with no setting of
+        # its own, and it is the first of the theme colours to be retired; see
+        # "Retire the old theming engine" in DEFERRED_ITEMS.md for the other 44.
+        self._bgcolor = self.palette().color(QtGui.QPalette.ColorRole.Mid)
+        self.bgbrush = QtGui.QBrush(self._bgcolor)
         self.objbrush = QtGui.QBrush(globals_.theme.color('overview_object'))
         self.viewbrush = QtGui.QBrush(globals_.theme.color('overview_zone_fill'))
         self.view = QtCore.QRectF()
@@ -37,11 +44,119 @@ class LevelOverviewWidget(QtWidgets.QWidget):
 
         self.Reset()
 
-        self.Xposlocator = 0
-        self.Yposlocator = 0
-        self.Hlocator = 50
-        self.Wlocator = 80
+        # The white rectangle showing where the canvas is looking. These four
+        # were plain attributes fed by whichever view's scrollbars last fired,
+        # so with tabs open every area drew the same rectangle - the position of
+        # whichever one was scrolled most recently (Zement, 2026-08-29).
+        #
+        # They are properties now, derived from the ACTIVE view rather than
+        # stored: every session's view already knows its own scroll position and
+        # size, so reading it cannot go stale, and there is no fifth copy of the
+        # state to keep in step. The setters are kept because XScrollChange and
+        # friends still assign them, and they write the fallback used before any
+        # view exists.
+        self._xposlocator = 0
+        self._yposlocator = 0
+        self._hlocator = 50
+        self._wlocator = 80
         self.mainWindowScale = 1
+
+    @staticmethod
+    def _mappedBounds(item, transform):
+        """An item's scene rect through ``transform``, or None if it is dead.
+
+        An area keeps its own lists - Area.zones, .locations, each path's nodes
+        - and those outlive the scene the items were in, so an item whose
+        session has been closed is still in the list while its C++ object is
+        not. Touching one raises RuntimeError.
+
+        That matters more here than almost anywhere: this runs from paintEvent,
+        and an exception in a paint handler is what the D-b.4 unbreakable loop
+        was made of - the error box's nested event loop repaints, which raises
+        again. Zement's host log for 2026-08-29 shows exactly that, starting
+        from a ZoneItem in CalcSize.
+        """
+        try:
+            return transform.mapRect(item.sceneBoundingRect())
+        except RuntimeError:
+            return None
+
+    def setBackgroundAlpha(self, alpha):
+        """Set how opaque this widget's own background is (Block D-c).
+
+        The overlay frame paints a translucent background, but this widget then
+        fills its whole rect before drawing the level - so without matching the
+        alpha here the frame's transparency would be entirely hidden behind an
+        opaque overview. Only the background: the level drawing itself stays at
+        full strength, which is the point of fading the background at all.
+        """
+        colour = QtGui.QColor(self._bgcolor)
+        colour.setAlpha(max(0, min(255, int(alpha))))
+        self.bgbrush = QtGui.QBrush(colour)
+        self.update()
+
+    def _activeView(self):
+        """The view the locator should describe, or None."""
+        window = getattr(globals_, 'mainWindow', None)
+        return getattr(window, 'view', None) if window is not None else None
+
+    @property
+    def Xposlocator(self):
+        view = self._activeView()
+        if view is None:
+            return self._xposlocator
+        try:
+            return view.XScrollBar.value()
+        except RuntimeError:
+            # The view was destroyed with its session; fall back rather than
+            # take a repaint down.
+            return self._xposlocator
+
+    @Xposlocator.setter
+    def Xposlocator(self, value):
+        self._xposlocator = value
+
+    @property
+    def Yposlocator(self):
+        view = self._activeView()
+        if view is None:
+            return self._yposlocator
+        try:
+            return view.YScrollBar.value()
+        except RuntimeError:
+            return self._yposlocator
+
+    @Yposlocator.setter
+    def Yposlocator(self, value):
+        self._yposlocator = value
+
+    @property
+    def Wlocator(self):
+        view = self._activeView()
+        if view is None:
+            return self._wlocator
+        try:
+            return view.viewport().width()
+        except RuntimeError:
+            return self._wlocator
+
+    @Wlocator.setter
+    def Wlocator(self, value):
+        self._wlocator = value
+
+    @property
+    def Hlocator(self):
+        view = self._activeView()
+        if view is None:
+            return self._hlocator
+        try:
+            return view.viewport().height()
+        except RuntimeError:
+            return self._hlocator
+
+    @Hlocator.setter
+    def Hlocator(self, value):
+        self._hlocator = value
 
     def Reset(self):
         """
@@ -107,7 +222,9 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         painter.setPen(QtGui.QPen(globals_.theme.color('overview_zone_lines'), 1))
 
         for zone in globals_.Area.zones:
-            rect = transform.mapRect(zone.sceneBoundingRect())
+            rect = self._mappedBounds(zone, transform)
+            if rect is None:
+                continue
             fr(rect, b)
             dr(rect)
 
@@ -131,7 +248,9 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         painter.setPen(QtGui.QPen(globals_.theme.color('overview_location_lines'), 1))
 
         for location in globals_.Area.locations:
-            rect = transform.mapRect(location.sceneBoundingRect())
+            rect = self._mappedBounds(location, transform)
+            if rect is None:
+                continue
             fr(rect, b)
             dr(rect)
 
@@ -139,13 +258,23 @@ class LevelOverviewWidget(QtWidgets.QWidget):
 
         for path in globals_.Area.paths:
             for node in path._nodes:
-                rect = transform.mapRect(node.sceneBoundingRect())
-                fr(rect, b)
+                rect = self._mappedBounds(node, transform)
+                if rect is not None:
+                    fr(rect, b)
 
             # TODO: Draw the path lines
 
         painter.setPen(QtGui.QPen(globals_.theme.color('overview_viewbox'), 1))
 
+        # The rectangle showing where the canvas is looking.
+        #
+        # Deliberately NOT clipped to the level extent. A first attempt at the
+        # empty-level bug clipped it there, which broke the working case badly:
+        # the rectangle is free to sit anywhere the canvas can scroll to, which
+        # is well outside the bounding box of the placed items, so clipping made
+        # it shrink to nothing as it moved and refuse to pass the last object
+        # (Zement, 2026-08-29). The empty-level case is fixed in CalcSize, where
+        # it belongs - by giving an empty level a real extent instead of zero.
         scalar = 1 / (24 * self.mainWindowScale)
         painter.drawRect(QtCore.QRectF(
             scalar * self.Xposlocator, scalar * self.Yposlocator,
@@ -230,7 +359,9 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         rect = QtCore.QRectF()
 
         for zone in globals_.Area.zones:
-            rect |= transform.mapRect(zone.sceneBoundingRect())
+            mapped = self._mappedBounds(zone, transform)
+            if mapped is not None:
+                rect |= mapped
 
         for layer in globals_.Area.layers:
             for obj in layer:
@@ -243,11 +374,27 @@ class LevelOverviewWidget(QtWidgets.QWidget):
             rect |= ent.LevelRect
 
         for location in globals_.Area.locations:
-            rect |= transform.mapRect(location.sceneBoundingRect())
+            mapped = self._mappedBounds(location, transform)
+            if mapped is not None:
+                rect |= mapped
 
         for path in globals_.Area.paths:
             for node in path._nodes:
                 rect |= node.LevelRect
+
+        if rect.isNull():
+            # Nothing placed yet, so there is no level geometry to measure. The
+            # old code left maxX/maxY at 0 here, which made Rescale divide the
+            # widget width by 45 - an enormous scale - and the viewport
+            # rectangle then drew far larger than the widget holding it. Zement
+            # reports this has been so since the Reggie 1.0 days.
+            #
+            # A default the size of one screen of level gives an empty canvas
+            # the same proportions a level with one object in the corner has,
+            # which is what it should look like.
+            self.maxX = 100
+            self.maxY = 40
+            return
 
         _, _, self.maxX, self.maxY = rect.getCoords()
 
@@ -1279,6 +1426,11 @@ class SpriteList(QtWidgets.QWidget):
         headers = [globals_.trans.string('Sprites', 21), globals_.trans.string('Sprites', 22)] + list(globals_.trans.stringList('Sprites', 23)[1:])
         self.table.setHorizontalHeaderLabels(headers)
         self.table.verticalHeader().setVisible(False) # hide row numbers
+
+        # A table claims Tab for "next cell", so it never reaches the focus
+        # chain and Tab behaves like an arrow key. The rows are navigated with
+        # the arrow keys here, so hand Tab back to the focus chain.
+        self.table.setTabKeyNavigation(False)
         self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
         self.table.setSortingEnabled(True)
         self.table.setMouseTracking(True) # for 'entered' signal

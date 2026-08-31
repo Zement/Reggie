@@ -99,6 +99,29 @@ from reggie.ui.clipboard import ClipboardController
 from reggie.ui.menus import MenuBuilder
 from reggie.ui.docks import DockBuilder
 from reggie.ui.level_io import LevelIO
+from reggie.ui.tabs import MasterTabWidget
+from reggie.ui.sidebar import Percent
+
+#: The undo history section's starting and maximum heights, as percentages of
+#: the sidebar (Zement, 2026-08-30). Relative rather than absolute because 400px
+#: was chosen on one machine and came out at 40% of a shorter sidebar - the same
+#: reasoning that put the level overview's size behind a percentage in D-c.4.
+#: Over 100 is allowed and means "taller than the sidebar", which scrolls.
+UNDO_SECTION_DEFAULT_HEIGHT = Percent(15)
+UNDO_SECTION_MAX_HEIGHT = Percent(75)
+
+from reggie.ui import tooltabs
+from reggie.ui import focusgroups
+from reggie.ui.tooltabs import ToolTabManager
+
+#: Version marker for saveState/restoreState (Block D-c).
+#
+# Bump this whenever the set of docks changes. Qt ignores a state whose version
+# does not match, so a bump discards a layout describing a window that no longer
+# exists and applies the new default instead - no migration code, no prompt, and
+# no partly-applied layout. 0 was the pre-D-c editor; 1 is D-c.3, where the
+# palette and the four property editors stopped being docks.
+LAYOUT_VERSION = 1
 from reggie.ui import deferred
 from reggie.ui import qpt_boot
 # Defer imports that depend on ui to avoid Qt object creation before QApplication
@@ -182,8 +205,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # required variables
         self.UpdateFlag = False
         self.SelectionUpdateFlag = False
-        self.selObj = None
-        self.CurrentSelection = []
+
+        # selObj / CurrentSelection / ZoomLevel are properties below, forwarding
+        # to the active session (D-c.4). These are the fallbacks they use before
+        # a session exists - the window is built before the first level opens.
+        self._fallbackSelObj = None
+        self._fallbackSelection = []
+        self._fallbackZoomLevel = 100.0
 
         # set up the window
         QtWidgets.QMainWindow.__init__(self, None)
@@ -195,20 +223,44 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.setIconSize(QtCore.QSize(16, 16))
         self.setUnifiedTitleAndToolBarOnMac(True)
 
-        # create the level view
-        self.scene = LevelScene(0, 0, 1024 * 24, 512 * 24, self)
-        self.scene.setItemIndexMethod(QtWidgets.QGraphicsScene.ItemIndexMethod.NoIndex)
-        self.scene.selectionChanged.connect(self.ChangeSelectionHandler)
+        # The canvas belongs to the active session from D-c.1 on; self.scene and
+        # self.view are properties reading it. This pair is the fallback, used
+        # before the first level is opened - the window exists and is shown well
+        # before any session does, and ~87 call sites read mainWindow.scene /
+        # .view without checking.
+        self._fallbackScene = LevelScene(0, 0, 1024 * 24, 512 * 24, self)
+        self._fallbackScene.setItemIndexMethod(QtWidgets.QGraphicsScene.ItemIndexMethod.NoIndex)
+        self._fallbackScene.selectionChanged.connect(self.ChangeSelectionHandler)
 
-        self.view = LevelViewWidget(self.scene, self)
-        self.view.centerOn(0, 0)  # this scrolls to the top left
-        self.view.PositionHover.connect(self.PositionHovered)
-        self.view.XScrollBar.valueChanged.connect(self.XScrollChange)
-        self.view.YScrollBar.valueChanged.connect(self.YScrollChange)
-        self.view.FrameSize.connect(self.HandleWindowSizeChange)
+        self._fallbackView = LevelViewWidget(self._fallbackScene, self)
+        self._fallbackView.centerOn(0, 0)  # this scrolls to the top left
+        self._fallbackView.PositionHover.connect(self.PositionHovered)
+        self._fallbackView.XScrollBar.valueChanged.connect(self.XScrollChange)
+        self._fallbackView.YScrollBar.valueChanged.connect(self.YScrollChange)
+        self._fallbackView.FrameSize.connect(self.HandleWindowSizeChange)
 
-        # done creating the window!
-        self.setCentralWidget(self.view)
+        # The master container (D-c.2): one tab per open session. Since D-c.3 it
+        # is no longer the central widget itself - it shares a splitter with the
+        # sidebar, and that splitter is the centre. The fallback view is what
+        # the container shows while no session exists: during this constructor,
+        # and in the headless suites that never open one.
+        self.tabs = MasterTabWidget(self)
+        self.sidebar = None
+
+        # The tool tabs (D-c.5) - Preferences, the Patch Manager, the undo
+        # history and the collaboration window, as pages rather than windows.
+        # Built here, before anything can open one, and beside the session
+        # manager rather than inside it: sessions are levels, and none of these
+        # four is a level.
+        self.toolTabs = ToolTabManager(self)
+
+        self.centralSplitter = QtWidgets.QSplitter(
+            QtCore.Qt.Orientation.Horizontal, self)
+        self.centralSplitter.setChildrenCollapsible(False)
+        self.centralSplitter.addWidget(self.tabs)
+        self.setCentralWidget(self.centralSplitter)
+
+        self.ShowSessionCanvas(None)
 
         # Composed controllers extracted from this class (Phase 2 refactor).
         # Instantiated before the clipboard wiring below, because
@@ -306,6 +358,12 @@ class ReggieWindow(QtWidgets.QMainWindow):
         else:
             print(f"[INIT2] QPT not available (available={qpt.available}, initialized={qpt.initialized}, payload={qpt.payload is not None})")
 
+        # Keyboard focus groups (D-c.6). Installed here because it registers the
+        # sidebar and the toolbar, so both have to exist first.
+        print("[INIT2] Installing focus groups...")
+        focusgroups.install(self)
+        print("[INIT2] ✓ Focus groups installed")
+
         # now get stuff ready
         loaded = False
         self.fileSavePath = None
@@ -338,7 +396,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if globals_.settings.contains('MainWindowGeometry'):
             self.restoreGeometry(setting('MainWindowGeometry'))
         if globals_.settings.contains('MainWindowState'):
-            self.restoreState(setting('MainWindowState'), 0)
+            # Version 1 since D-c.3. The palette and the four property editors
+            # stopped being docks in that phase, so a saved version-0 state
+            # describes a window that no longer exists. Qt returns False and
+            # ignores a state whose version does not match, which is exactly the
+            # migration wanted here: the new default layout applies, and the
+            # next save writes a version-1 state. Measured in §2.4 of the plan -
+            # a stale state is inert rather than dangerous, so this is about
+            # giving a sensible default, not about avoiding breakage.
+            self.restoreState(setting('MainWindowState'), LAYOUT_VERSION)
 
         # Aaaaaand... initializing is done!
         globals_.Initializing = False
@@ -368,6 +434,120 @@ class ReggieWindow(QtWidgets.QMainWindow):
     actions = {}
 
     @property
+    def scene(self):
+        """The active session's canvas scene.
+
+        A property rather than an attribute so the ~87 sites that read
+        ``mainWindow.scene`` / ``.view`` reach whichever tab is in front without
+        any of them changing - the same trick ``undoStack`` uses, and the same
+        reason: many readers, and none of them holds the value across a switch.
+
+        Falls back to a window-owned scene before the first session exists; the
+        window is built and shown before a level is opened.
+        """
+        session = self._activeSession()
+        return self._fallbackScene if session is None else session.scene
+
+    @property
+    def view(self):
+        """The active session's canvas view. See :attr:`scene`."""
+        session = self._activeSession()
+        return self._fallbackView if session is None else session.view
+
+    def _activeSession(self):
+        """The active session, or None before one exists."""
+        manager = globals_.get_session_manager()
+        return manager.active if manager is not None else None
+
+    @property
+    def ZoomLevel(self):
+        """The active session's zoom, as a percentage.
+
+        Per session since D-c.4. The *view* has held its own transform since
+        D-c.1, so the canvas already zoomed correctly per area; this number did
+        not, and the status bar therefore reported whichever area was zoomed
+        last. Writable, because ZoomTo assigns it.
+
+        A session that has never been shown has no zoom yet and takes the
+        window's default - it cannot pick one at construction, since the list of
+        levels lives here.
+        """
+        session = self._activeSession()
+        if session is None:
+            return self._fallbackZoomLevel
+        if session.zoom_level is None:
+            session.zoom_level = self._fallbackZoomLevel
+        return session.zoom_level
+
+    @ZoomLevel.setter
+    def ZoomLevel(self, value):
+        session = self._activeSession()
+        if session is None:
+            self._fallbackZoomLevel = value
+        else:
+            session.zoom_level = value
+
+    @property
+    def selObj(self):
+        """The item whose property panel is open, per session (D-c.4).
+
+        Window-owned until the tab bar made it visibly wrong: a sprite selected
+        in one area kept its panel up over a tab where nothing was selected, and
+        UpdateModeInfo would then fill that panel from the other area's item.
+        """
+        session = self._activeSession()
+        return self._fallbackSelObj if session is None else session.sel_obj
+
+    @selObj.setter
+    def selObj(self, value):
+        session = self._activeSession()
+        if session is None:
+            self._fallbackSelObj = value
+        else:
+            session.sel_obj = value
+
+    @property
+    def CurrentSelection(self):
+        """The active session's selected items. See :attr:`selObj`."""
+        session = self._activeSession()
+        return self._fallbackSelection if session is None else session.current_selection
+
+    @CurrentSelection.setter
+    def CurrentSelection(self, value):
+        session = self._activeSession()
+        if session is None:
+            self._fallbackSelection = value
+        else:
+            session.current_selection = value
+
+    def ShowSessionCanvas(self, session):
+        """Bring a session's canvas to the front of the master container.
+
+        Since D-c.2 the central widget is the tab container and every session's
+        view is a page in it, so this selects a tab rather than swapping the
+        window's centre. Deliberately *not* reparenting anything: the outgoing
+        view keeps its scene and its items, which is the whole point of a canvas
+        per session.
+
+        Called from ``SessionManager.activate()``, so it runs for every path
+        that makes a session active - including the ones that never reach
+        ``ActivateSession``. Opening a file goes open_level -> open() ->
+        activate(), and when this only ran from the window's method the boot
+        canvas was left showing the empty fallback: the level was loaded, in a
+        view nobody had put on screen.
+        """
+        tabs = getattr(self, 'tabs', None)
+        if tabs is None:
+            return False
+
+        if session is None:
+            tabs.showPlaceholder(self._fallbackView)
+            return True
+
+        tabs.sync()
+        return tabs.showSession(session)
+
+    @property
     def undoStack(self):
         """The active session's undo history.
 
@@ -376,13 +556,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
         of them changing. Falls back to a window-owned stack before the first
         session exists - the window is built before a level is opened.
         """
-        manager = globals_.get_session_manager()
-        session = manager.active if manager is not None else None
-
-        if session is None:
-            return self._fallbackUndoStack
-
-        return session.undo_stack
+        session = self._activeSession()
+        return self._fallbackUndoStack if session is None else session.undo_stack
 
     def BindUndoStack(self, stack):
         """Point the undo/redo menu items at ``stack``.
@@ -425,37 +600,44 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.HandleUndoTextChanged(stack.undoText())
         self.HandleRedoTextChanged(stack.redoText())
 
+        # The undo history section, if it is open, shows the same stack the menu
+        # items do - so it moves here rather than being wired once at creation.
+        # A QUndoView bound to a dead session's stack is both wrong and a crash
+        # waiting to happen, since the stack goes when the session does.
+        #
+        # getattr throughout: the manager can call this during the window's
+        # constructor, before the sidebar or these attributes exist.
+        view = getattr(self, 'undoHistoryView', None)
+        if view is not None:
+            view.setStack(stack)
+
+            # And retitle it, so the header names the area whose history this
+            # now is. Without it the section would quietly show a different
+            # level's steps under the old name.
+            section = getattr(self, 'undoHistorySection', None)
+            if section is not None:
+                section.setTitle(self.UndoHistoryTitle())
+
     def ActivateSession(self, session):
         """Show an already-open session's area, without touching the disk.
 
-        The editor-facing half of an area switch (Block D, phase D-4). The
-        session manager moves the state bindings - globals_.Area, spritelib, the
-        undo stack; this moves what the user sees.
+        The editor-facing half of an area switch (Block D-b.4). The session
+        manager moves the state bindings - globals_.Area, spritelib, the undo
+        stack; this moves what the user sees.
 
-        The scene is emptied and rebuilt rather than swapped: one LevelScene is
-        window-owned for now, and a scene per session is the UI block's job. The
-        items themselves live on their area and survive being detached, so this
-        is a re-parent, not a reload - nothing is re-read or re-parsed.
+        **Since D-c.1 each session owns its scene**, so activation shows a
+        different canvas rather than emptying and refilling a shared one. That
+        deletes the most dangerous code in D-b: the old path detached every item
+        from one scene and rebuilt it from the incoming area, and getting that
+        subtly wrong destroyed the outgoing area's items twice over (the
+        ZoneItem crash, then the path-node crash). Nothing is detached here at
+        all - the outgoing scene simply stops being on screen.
 
-        **The scene is emptied with removeItem(), never clear().**
-        QGraphicsScene.clear() *destroys* the items it holds - the C++ objects
-        are deleted and the Python wrappers left dangling. That is right in
-        LoadLevel, which is discarding the level and rebuilding every item from
-        scratch, and wrong here, where the outgoing area has to stay intact in
-        its own session. Using clear() here left globals_.Area.zones full of
-        deleted ZoneItems, and the level overview raised "wrapped C/C++ object
-        of type ZoneItem has been deleted" on the way back - inside paintEvent,
-        so the error dialog repainted the widget and the crash repeated until
-        the process was killed (Zement, 2026-08-28, A1 -> A2 -> A1).
+        The side lists are still window-owned, so they are still rebuilt.
         """
         manager = globals_.get_session_manager()
         if manager is None or session is None:
             return False
-
-        # The area's items are about to be pulled out from under the selection.
-        self.scene.clearSelection()
-        self.CurrentSelection = []
-        self._DetachSceneItems()
 
         for thingList in (self.spriteList, self.entranceList, self.locationList,
                           self.pathList, self.commentList):
@@ -464,12 +646,23 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 QtCore.QModelIndex(),
                 QtCore.QItemSelectionModel.SelectionFlag.Clear)
 
+        # Note: CurrentSelection is NOT cleared here. It was, before D-c.4 made
+        # it per session - at which point clearing it before activate() would
+        # wipe the *outgoing* area's selection, so leaving that area would lose
+        # what was picked in it. The incoming session brings its own.
+
         # Moves globals_.Area, spritelib's own bindings, this session's tilesets
-        # and the undo stack together. Everything below reads through them.
+        # and the undo stack together. Everything below reads through them -
+        # including self.scene and self.view, which resolve to this session's.
+        # activate() also brings this session's tab to the front, so by the time
+        # it returns the property and the widget on screen already agree.
         manager.activate(session)
 
-        # Rebuilding the scene moves items and fires their positionChanged
-        # handlers, which call SetDirty. Nothing here is a user edit.
+        # ResetPalette adds each item to the scene and fires positionChanged
+        # handlers, which call SetDirty. Nothing here is a user edit. It is
+        # still called on every activation because the *side lists* were just
+        # cleared; the scene work inside it is a no-op the second time, since
+        # QGraphicsScene ignores an item it already holds.
         globals_.DirtyOverride += 1
         try:
             self.ResetPalette()
@@ -480,52 +673,201 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self._SyncAreaComboBox()
         self.UpdateTitle()
 
+        # Bring the toolbar, the zoom controls and the property panels in line
+        # with this session (D-c.4). All three read state that now belongs to
+        # the session, and none is driven by a signal a tab switch fires - so
+        # without this the status bar keeps the previous area's zoom % and a
+        # property panel stays open over an area where nothing is selected.
+        self.SyncToolbarContext()
+
         self.scene.update()
         self.levelOverview.Reset()
         self.levelOverview.update()
 
         return True
 
-    def _DetachSceneItems(self):
-        """Empty the scene without destroying what was in it.
+    def SetMenuEnabled(self, name, enabled):
+        """Enable or disable a whole menu by name (Block D-c).
 
-        The counterpart to scene.clear() for a switch between two areas that
-        both stay open. clear() deletes the underlying C++ objects, which is
-        correct when the level is being thrown away and fatal when it is not:
-        the area keeps Python references to its zones, sprites and entrances,
-        and every one of them would be left wrapping freed memory.
+        Names are 'file', 'edit', 'view', 'level', 'help' - untranslated, since
+        the menu *titles* change with the language and keying on them would make
+        every caller depend on the translation.
 
-        removeItem() detaches instead, and an item detached this way can be
-        added back to a scene unchanged - which is exactly what ResetPalette
-        does when that area is activated again.
+        Disabling the menu greys the top-level entry, so the menu cannot be
+        opened at all; the actions inside keep their own enabled state, which is
+        what makes this composable with SyncToolbarContext rather than fighting
+        it. Returns False for an unknown name rather than raising - a caller
+        naming a menu that does not exist should not take the editor down.
         """
-        # Paths track whether their connecting line is in a scene, and
-        # add_to_scene() re-adds the line only when that flag is False. The line
-        # is about to be detached with everything else, so leaving the flag set
-        # would make the path's nodes come back with no line joining them.
-        # Nothing else in the editor detaches a path wholesale, which is why the
-        # flag has never needed clearing before.
-        #
-        # Two sources, because neither alone is enough. The scene's line items
-        # know their path, but globals_.Area may already be the *incoming* area
-        # by the time this runs - open_area() activates before ActivateSession
-        # is called - so the outgoing area is not reachable through the proxy.
-        # And a line that is already detached is not in the scene to be found,
-        # so a path left inconsistent by anything else would stay that way.
-        # Taking both makes this self-correcting rather than order-dependent.
-        for item in self.scene.items():
-            if isinstance(item, PathEditorLineItem):
-                path = getattr(item, '_path', None)
-                if path is not None:
-                    path._has_line = False
+        menu = getattr(self, 'menus', {}).get(name)
+        if menu is None:
+            return False
 
-        for path in getattr(globals_.Area, 'paths', None) or ():
-            line = getattr(path, '_line_item', None)
-            if line is None or line.scene() is None:
-                path._has_line = False
+        menu.menuAction().setEnabled(bool(enabled))
+        return True
 
-        for item in self.scene.items():
-            self.scene.removeItem(item)
+    def SetMenusEnabled(self, enabled, names=None):
+        """Enable or disable several menus at once. Defaults to all of them."""
+        menus = getattr(self, 'menus', {})
+        wanted = list(menus) if names is None else list(names)
+        return [name for name in wanted if self.SetMenuEnabled(name, enabled)]
+
+    def SetToolbarEnabled(self, enabled):
+        """Enable or disable every toolbar button at once (Block D-c).
+
+        The toolbar itself, not the actions on it: an action is usually shared
+        with a menu entry, so disabling the actions would grey the menus too.
+        Disabling the widget leaves each action's own state untouched, so
+        turning the toolbar back on restores exactly what was enabled before
+        rather than enabling everything.
+        """
+        bars = [getattr(self, 'toolbar', None), getattr(self, 'patchToolbar', None)]
+        touched = 0
+
+        for bar in bars:
+            if bar is not None:
+                bar.setEnabled(bool(enabled))
+                touched += 1
+
+        return touched
+
+    def SyncToolbarContext(self):
+        """Enable only what the thing in front can actually do (D-c.4).
+
+        "Context-sensitive" here means the *enabled state* follows what is in
+        front, not that the buttons rearrange themselves. Which buttons the
+        toolbar holds is the user's choice, made in Preferences, and a toolbar
+        that reshuffles under the pointer would be worse than one with a few
+        greyed items.
+
+        Two thirds of it already worked and are not repeated here: the
+        selection-dependent actions (cut, copy, shift, merge, deselect) are set
+        by ChangeSelectionHandler, and the zoom actions by SyncZoomToSession -
+        both of which an area switch now calls. What was missing is the case
+        with no canvas at all, where every level action was still enabled and
+        would act on nothing.
+        """
+        session = self._activeSession()
+        has_canvas = session is not None and session.area is not None
+
+        # Everything that edits or reports on a level. Deliberately a list of
+        # names rather than "all actions": File > Open and Preferences must
+        # stay reachable with no level open, which is how the user gets one.
+        level_actions = (
+            'save', 'saveas', 'savecopyas', 'screenshot',
+            'selectall', 'deselect', 'shiftitems', 'mergelocations',
+            'zoommax', 'zoomin', 'zoomactual', 'zoomout', 'zoommin',
+            'areaoptions', 'zones', 'backgrounds', 'camprofiles',
+            'addarea', 'importarea', 'deletearea', 'reloadgfx',
+            'swapobjectstypes', 'swapobjectstilesets', 'diagnostic',
+        )
+
+        # Names are checked rather than assumed: they are registered across
+        # menus.py and docks.py, and a typo here would silently leave an action
+        # enabled forever rather than raising.
+        for name in level_actions:
+            act = self.actions.get(name)
+            if act is not None:
+                act.setEnabled(has_canvas)
+
+        if has_canvas:
+            # Hand the finer-grained state back to the handlers that own it,
+            # rather than leaving everything blanket-enabled by the loop above.
+            self.ChangeSelectionHandler()
+            self.SyncZoomToSession()
+
+    def SyncZoomToSession(self):
+        """Point the zoom controls at the active session's zoom.
+
+        The view already carries its own transform - it has been per session
+        since D-c.1 - so this is about the *reporting*: the status-bar widget,
+        the slider, and which of the five zoom actions are enabled. Applying the
+        transform again here would be redundant but harmless; not doing it keeps
+        this a read of state rather than a second writer of it.
+        """
+        z = self.ZoomLevel
+
+        try:
+            zi = self.ZoomLevels.index(z)
+        except ValueError:
+            # A zoom that is not one of the steps - reachable by fitting the
+            # window to a zone. The buttons stay usable; only the exact index
+            # is unavailable, so bracket it.
+            zi = min(range(len(self.ZoomLevels)),
+                     key=lambda i: abs(self.ZoomLevels[i] - z))
+
+        self.actions['zoommax'].setEnabled(zi < len(self.ZoomLevels) - 1)
+        self.actions['zoomin'].setEnabled(zi < len(self.ZoomLevels) - 1)
+        self.actions['zoomactual'].setEnabled(z != 100.0)
+        self.actions['zoomout'].setEnabled(zi > 0)
+        self.actions['zoommin'].setEnabled(zi > 0)
+
+        self.ZoomWidget.setZoomLevel(z)
+        self.ZoomStatusWidget.setZoomLevel(z)
+
+        self.levelOverview.mainWindowScale = z / 100.0
+
+    def PlaceSidebar(self):
+        """Put the sidebar on its configured side of the master container.
+
+        A QSplitter is ordered by insertion, so moving the sidebar from one side
+        to the other is re-inserting it - insertWidget(0) or addWidget - not a
+        rebuild. Called when the sidebar is created and again whenever the side
+        setting changes.
+        """
+        from reggie.ui.sidebar import SIDE_LEFT, configured_side
+
+        if self.sidebar is None:
+            return False
+
+        side = configured_side()
+        wanted = 0 if side == SIDE_LEFT else 1
+
+        if self.centralSplitter.indexOf(self.sidebar) == wanted:
+            return False
+
+        self.centralSplitter.insertWidget(wanted, self.sidebar)
+
+        # The canvas takes the slack; the sidebar keeps the width the user gave
+        # it. Set by position rather than remembered, so it stays right after a
+        # flip.
+        self.centralSplitter.setStretchFactor(wanted, 0)
+        self.centralSplitter.setStretchFactor(1 - wanted, 1)
+
+        self.sidebar.applySide(side)
+        return True
+
+    def CloseSession(self, session):
+        """Close one open area, keeping the rest of the level open.
+
+        The tab bar's close button, and the only place a single session is torn
+        down at the user's request. Refuses the last canvas tab: Zement's rule is
+        that one area stays loaded at all times, so there is no editor state with
+        no level in it.
+
+        No dirty prompt. A session's edits live in the shared level object, not
+        in the session, so closing a tab does not discard them - saving the file
+        afterwards still writes that area, exactly as saving from another tab
+        always did. The prompt stays where work genuinely can be lost: quitting,
+        changing patch, opening another file.
+        """
+        manager = globals_.get_session_manager()
+        if manager is None or session is None:
+            return False
+
+        if len(manager) <= 1:
+            return False
+
+        manager.close(session)
+        self.tabs.sync()
+
+        # close() activated a survivor, but only moved the state bindings and
+        # the tab - the side lists, the title and the overview still describe
+        # the session that just went away.
+        if manager.active is not None:
+            self.ActivateSession(manager.active)
+
+        return True
 
     def _RefillAreaComboBox(self):
         """Rebuild the area selector from the level actually open.
@@ -698,6 +1040,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         # ' - Reggie Next' is added automatically by Qt (see QApplication.setApplicationDisplayName()).
         self.setWindowTitle('%s%s' % (self.fileTitle, (' ' + globals_.trans.string('MainWindow', 0)) if globals_.Dirty else ''))
+
+        # The tab labels carry the same dirty marker, per tab rather than for
+        # the window as a whole. Hooked here because UpdateTitle is what the
+        # editor already calls whenever the dirty state may have moved.
+        tabs = getattr(self, 'tabs', None)
+        if tabs is not None:
+            tabs.refreshTitles()
 
     def CheckDirty(self):
         """
@@ -951,27 +1300,93 @@ class ReggieWindow(QtWidgets.QMainWindow):
         else:
             self.actions['redo'].setText(self._redoBaseText)
 
-    def HandleShowUndoHistory(self):
+    def HandleShowUndoHistory(self, checked=None):
         """
-        Shows the undo history in a modal dialog (File menu; moves to a
-        nicer home in Block D)
-        """
-        dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle(globals_.trans.string('Undo', 2))
-        dlg.resize(400, 500)
+        Toggles the undo history section in sidebar slice 2 (D-c.6)
 
-        view = QtWidgets.QUndoView(self.undoStack, dlg)
+        Was a tool tab in D-c.5, and briefly a modal dialog before that. It is
+        better beside the canvas than covering it: undoing is something you do
+        *while* looking at what you are undoing, and a full-width tab made you
+        leave the level to reach it (Zement, 2026-08-30).
+
+        A toggle rather than an open, because a section in the sidebar has no
+        close button of its own - the menu entry is how it comes and goes.
+
+        ``checked`` arrives from the checkable QAction. Ignored in favour of
+        what is actually on screen: the two agree in normal use, and when they
+        disagree - the section removed by something other than the menu - the
+        sidebar is right and the action is stale.
+        """
+        if self.sidebar is None:
+            return None
+
+        existing = self.sidebar.sectionFor(getattr(self, 'undoHistoryView', None))
+        if existing is not None:
+            self.sidebar.removeSection(existing)
+            self.undoHistoryView = None
+            self.undoHistorySection = None
+            self._SyncUndoHistoryAction(False)
+            return None
+
+        view = QtWidgets.QUndoView()
         view.setEmptyLabel(globals_.trans.string('Undo', 3))
 
-        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(dlg.reject)
-        buttons.accepted.connect(dlg.accept)
+        # Bound to the *stack*, which since D-b belongs to a session - so this
+        # follows BindUndoStack rather than being wired once here. Without that
+        # it would show whichever level was open when it was opened, and go
+        # quiet after the first area switch.
+        view.setStack(self.undoStack)
 
-        layout = QtWidgets.QVBoxLayout(dlg)
-        layout.addWidget(view)
-        layout.addWidget(buttons)
+        self.undoHistoryView = view
+        self.undoHistorySection = self.sidebar.addSection(
+            self.UndoHistoryTitle(), view,
+            # Its own handler rather than the sidebar's default removal: closing
+            # from the header has to leave the menu tick and this window's
+            # references in the same state the menu entry would, or the two
+            # disagree about whether the section is up.
+            on_close=self.HandleShowUndoHistory,
+            # Zement's numbers (2026-08-30). The default is a starting height
+            # the user can drag away from, not a rule; the maximum stops a long
+            # history from taking the whole sidebar.
+            default_height=UNDO_SECTION_DEFAULT_HEIGHT,
+            max_height=UNDO_SECTION_MAX_HEIGHT)
 
-        dlg.exec()
+        self._SyncUndoHistoryAction(True)
+
+        return self.undoHistorySection
+
+    def _SyncUndoHistoryAction(self, shown):
+        """Keep the menu's tick in step with whether the section is up."""
+        act = self.actions.get('undohistory')
+        if act is None or not act.isCheckable():
+            return
+
+        # Blocked, or setChecked would re-fire triggered() on some styles and
+        # toggle the section straight back off.
+        blocked = act.blockSignals(True)
+        try:
+            act.setChecked(bool(shown))
+        finally:
+            act.blockSignals(blocked)
+
+    def UndoHistoryTitle(self):
+        """The undo section's header: which level and area it is following.
+
+        Asked for by name (Zement, 2026-08-30). A history that silently follows
+        the active area needs to say which one it is showing, or a step list
+        that changed under you looks like a bug rather than a context switch.
+        """
+        base = globals_.trans.string('Undo', 2)
+
+        session = self._activeSession()
+        if session is None:
+            return base
+
+        name = os.path.splitext(os.path.basename(session.file_path or ''))[0]
+        if not name:
+            name = globals_.trans.string('WindowTitle', 0)
+
+        return '%s - %s, Area %d' % (base, name, session.area_num)
 
     def _maySaveInSession(self):
         """
@@ -1614,20 +2029,32 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
     def HandlePatchManager(self):
         """
-        Open the Patch Manager dialog
+        Open the Patch Manager as a tool tab (D-c.5)
         """
-        dlg = deferred.PatchManagerDialog()
-        dlg.exec()
+        self.toolTabs.openTool(tooltabs.PATCH_MANAGER,
+                               deferred.PatchManagerDialog,
+                               'Patch Manager')
 
     def HandlePreferences(self):
         """
-        Edit Reggie Next preferences
-        """
-        # Show the dialog
-        dlg = PreferencesDialog()
-        if dlg.exec() == QtWidgets.QDialog.DialogCode.Rejected:
-            return
+        Open the preferences as a tool tab (D-c.5)
 
+        Was a modal ``exec()`` whose caller read a hundred widget values on the
+        line after it returned. As a tab there is no line after, so the reading
+        moved into ApplyPreferences and the tab manager calls it when the user
+        presses OK - which is the same moment, reached differently.
+        """
+        self.toolTabs.openTool(tooltabs.PREFERENCES,
+                               PreferencesDialog,
+                               globals_.trans.string('PrefsDlg', 0))
+
+    def ApplyPreferences(self, dlg):
+        """
+        Write back everything the preferences page holds.
+
+        Called by ToolTabManager when the page is confirmed, with the page still
+        whole. Every line below is what used to follow ``dlg.exec()``.
+        """
         # Get the translation
         name = str(dlg.generalTab.Trans.itemData(dlg.generalTab.Trans.currentIndex(), Qt.ItemDataRole.UserRole))
         setSetting('Translation', name)
@@ -1666,6 +2093,35 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # Display full filepath setting
         globals_.UseFullFilepath = dlg.generalTab.fullFileTitle.isChecked()
         setSetting('UseFullFilepath', globals_.UseFullFilepath)
+
+        # Draggable area tabs (Block D-c). Applied immediately rather than at
+        # the next restart: turning dragging off also drops any manual order the
+        # user had arranged, which they should see happen while the reason for
+        # it is still on screen.
+        # The shell settings live on the Interface tab, which is where new,
+        # not-yet-sorted preferences go. All applied at once rather than at the
+        # next restart: the point of each is seeing the layout it produces.
+        shell = dlg.interfaceTab
+
+        setSetting('TabsDraggable', shell.tabsDraggable.isChecked())
+        self.tabs.applySettings()
+
+        # Read fresh on every paste, so there is nothing to apply beyond the
+        # write itself.
+        setSetting('IncrementPastedIDs', shell.incrementPastedIDs.isChecked())
+
+        setSetting('SidebarSide', shell.sidebarSide.currentData())
+        self.PlaceSidebar()
+
+        setSetting('RailWidth', shell.railWidth.currentData())
+        if self.sidebar is not None:
+            self.sidebar.applyRailWidth()
+
+        setSetting('OverviewCorner', shell.overviewCorner.currentData())
+        setSetting('OverviewHeightPct', shell.overviewHeight.value())
+        setSetting('OverviewTranslucent', shell.overviewTranslucent.isChecked())
+        setSetting('OverviewOpacityPct', shell.overviewOpacity.value())
+        self.tabs.applyOverlaySettings()
 
         # Undo history limit setting. Qt only allows changing the limit of an
         # empty stack, so a non-empty stack picks the new value up on its next
@@ -2197,7 +2653,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
     # Zoom controls extracted to reggie.ui.zoom.ZoomController (Phase 2 — see
     # _docs/plan/REFACTORING_ANALYSIS.md). Thin delegators keep the QAction
     # wiring (self.HandleZoomIn, ...) and external self.ZoomTo() calls working.
-    # ZoomLevel / ZoomLevels stay window attributes (other code reads them).
+    # ZoomLevels (the steps) stays a window attribute; ZoomLevel (the current
+    # one) is a property forwarding to the active session since D-c.4.
     def HandleZoomIn(self, *, towardsCursor=False):
         return self._zoom.HandleZoomIn(towardsCursor=towardsCursor)
 
@@ -2242,6 +2699,33 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         globals_.Area.Metadata.setBinData('InLevelComments_A%d' % globals_.Area.areanum, b)
 
+    def showEvent(self, event):
+        """
+        Handler for the main window being shown (D-c.6)
+
+        The sidebar's saved splitter positions are restored here rather than in
+        the constructor: a splitter has no width until the window is laid out,
+        and restoring against a zero width would clamp every saved size to
+        nothing. Done once - a later show (un-minimising) must not undo a
+        division the user has since dragged.
+
+        **Deferred by a zero-length timer**, not run inline. The splitter still
+        has no useful width *during* the first showEvent - measured: the saved
+        width was silently dropped and the sidebar came back at its default,
+        which is exactly what Zement reported (2026-08-30). Posting it to the
+        event loop puts it after the first layout pass, which is the earliest
+        moment the arithmetic means anything.
+        """
+        super().showEvent(event)
+
+        if getattr(self, '_sidebarLayoutRestored', False):
+            return
+
+        self._sidebarLayoutRestored = True
+
+        if self.sidebar is not None:
+            QtCore.QTimer.singleShot(0, self.sidebar.restoreLayout)
+
     def closeEvent(self, event):
         """
         Handler for the main window close event
@@ -2259,8 +2743,13 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         # state: determines positions of docks
         # geometry: determines the main window position
-        setSetting('MainWindowState', self.saveState(0))
+        setSetting('MainWindowState', self.saveState(LAYOUT_VERSION))
         setSetting('MainWindowGeometry', self.saveGeometry())
+
+        # The sidebar is deliberately not a dock, so saveState does not cover
+        # it and its splitters have to be saved by hand (D-c.6).
+        if self.sidebar is not None:
+            self.sidebar.saveLayout()
 
         if hasattr(self, 'HelpBoxInstance'):
             self.HelpBoxInstance.close()
