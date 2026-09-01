@@ -597,6 +597,10 @@ class Sidebar(QtWidgets.QWidget):
 
         self.rail.currentRowChanged.connect(self._handleRailChanged)
 
+        # Watched for mouse presses, so `_clickRow` is the row that was
+        # highlighted *before* the click - see `_handleRailClicked`.
+        self.rail.viewport().installEventFilter(self)
+
         # And on a click, even when the row does not change. `currentRowChanged`
         # fires only on a *change*, which was enough while every entry had a
         # page of its own: clicking the current entry showed what was already
@@ -664,14 +668,13 @@ class Sidebar(QtWidgets.QWidget):
         # hand the highlight back rather than leaving it on a button.
         self._lastPageRow = None
 
-        # The row whose content is currently showing. Distinct from the rail's
-        # `currentRow`, which is only where the highlight sits: since D-d.2c
-        # four entries share the sections page, so the highlight can be on one
-        # while another's section is open. `_handleRailClicked` compares against
-        # this to tell "clicked the entry already showing" - a no-op - from
-        # "clicked the highlighted entry whose section is not up", which must
-        # open it.
-        self._activeRow = None
+        # The rail's current row at the moment the mouse went down, captured
+        # before any handler can move it. `_handleRailClicked` compares against
+        # it to tell "this click changed the row" - already handled by
+        # currentRowChanged - from "this click was on the row already
+        # highlighted", which is the case that signal never reports and which
+        # this handler exists for. See `_handleRailClicked` and `eventFilter`.
+        self._clickRow = None
 
         # The rail row currently running its activation callback, so a section
         # that callback opens knows which entry to highlight. Set and cleared
@@ -887,15 +890,14 @@ class Sidebar(QtWidgets.QWidget):
         if not (0 <= row < len(self._railPages)):
             return
 
+        # So the itemClicked that follows a *changing* click knows this one is
+        # already handled. See _handleRailClicked.
+        self._changedRow = row
+
         page = self._railPages[row]
 
         if page is not None:
             self._lastPageRow = row
-
-            # The row whose content is showing - which for a shared page is not
-            # the same thing as the highlight. Set before the action runs, so
-            # that a section opened by the action attributes itself here.
-            self._activeRow = row
 
             # Told which row asked, so `addSection` -> `showSections` puts the
             # highlight on this entry rather than on the first entry that
@@ -938,6 +940,20 @@ class Sidebar(QtWidgets.QWidget):
         finally:
             self._pendingOwnerRow = None
 
+    def eventFilter(self, obj, event):
+        """Note which row was highlighted when a rail click started.
+
+        The rail's own selection has already moved by the time `itemClicked`
+        arrives, and `currentRowChanged` may have fired again from inside the
+        activation it triggered - so neither can answer "did *this* click
+        change the row". The press can.
+        """
+        if (obj is self.rail.viewport()
+                and event.type() == QtCore.QEvent.Type.MouseButtonPress):
+            self._clickRow = self.rail.currentRow()
+
+        return super().eventFilter(obj, event)
+
     def _handleRailClicked(self, item):
         """A rail row was clicked, whether or not it was already current.
 
@@ -949,9 +965,23 @@ class Sidebar(QtWidgets.QWidget):
         if row < 0:
             return
 
-        # The changing case has already run through currentRowChanged - running
-        # it twice would open a section, then close and re-open it.
-        if row != self._activeRow:
+        # One click is one activation. When the click also *changes* the row,
+        # `currentRowChanged` has already handled it and arrives first, so
+        # running it again here would activate the entry twice - which for the
+        # undo history's toggle meant opening and immediately closing it, so
+        # the first click appeared to do nothing.
+        #
+        # The test is "did the row change *because of this click*", which is
+        # what `_clickRow` answers: the rail's current row as it was when the
+        # press landed, before any handler could move it.
+        #
+        # Recording it in `mousePressEvent` rather than remembering what
+        # `currentRowChanged` last saw, because that signal also fires from
+        # *inside* an activation - closing a section calls `showSections`,
+        # which moves the highlight - so a flag set there outlives the click
+        # that caused it and swallows the next one. That is why re-opening the
+        # undo history took two clicks after closing it.
+        if self._clickRow != row:
             return
 
         # Nor may re-clicking the entry that is *already showing* rebuild its

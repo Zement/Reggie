@@ -591,7 +591,14 @@ class ObjectPickerWidget(QtWidgets.QListView):
 
                 self.ritems.append(pm)
                 self.itemsize.append(QtCore.QSize(defs[i].width * 24 + 4, defs[i].height * 24 + 4))
-                if (idx == 0) and (i in globals_.ObjDesc):
+                # `or ()` because ObjDesc starts as None and only one code path
+                # fills it (LoadGameDef). An abort there - the user cancelling
+                # the "pick a Stage folder" prompt at boot - used to leave it
+                # None and crash here with "argument of type 'NoneType' is not
+                # iterable", before the window existed. LoadGameDef now loads it
+                # before that prompt; this is the belt to that braces, and costs
+                # a tooltip rather than the editor.
+                if (idx == 0) and (i in (globals_.ObjDesc or ())):
                     if isAnim:
                         self.tooltips.append(globals_.trans.string('Objects', 4, '[id]', i, '[desc]', globals_.ObjDesc[i]))
                     else:

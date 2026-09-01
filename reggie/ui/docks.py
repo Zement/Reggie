@@ -528,10 +528,13 @@ class DockBuilder:
         # -- Logs / Undo --------------------------------------------------
         # Selecting it shows the sections page and opens the undo history if it
         # is not already up, which is what makes the entry do something today.
+        # No `is_open` here, deliberately. That predicate exists to stop a
+        # click rebuilding a section that is already showing; this entry is a
+        # toggle, so a click while it is open is exactly the case that has to
+        # get through - it is the one that closes it.
         sidebar.addPage(icon('undo'), trans('MenuItems', 144),
                         sections=True,
-                        on_activate=self._showUndoHistory,
-                        is_open=showing('undoHistoryView'))
+                        on_activate=self._showUndoHistory)
 
         # -- Help ---------------------------------------------------------
         sidebar.addPage(icon('help'), trans('MenuItems', 88),
@@ -560,16 +563,16 @@ class DockBuilder:
         self.win.ShowHelpSection()
 
     def _showUndoHistory(self):
-        """Open the undo history section unless it is already up.
+        """Toggle the undo history section (Zement, 2026-09-01).
 
-        Not the menu's toggle: a rail entry that closed the panel when it is
-        already open would make selecting "Logs/Undo" *hide* the logs, which is
-        not what picking a category means.
+        A *toggle*, unlike the context entries, and the asymmetry is the point.
+        Clicking a context entry means "show me this instead of that", so
+        closing on a second click would leave slice 2 with nothing selected.
+        An always-open section has no "instead": it is either there or not, and
+        the rail entry is the switch. "Clicking on Undo History rail button
+        while the panel is open should *close* the panel."
         """
         if self.win.sidebar is None:
             return
 
-        existing = self.win.sidebar.sectionFor(
-            getattr(self.win, 'undoHistoryView', None))
-        if existing is None:
-            self.win.HandleShowUndoHistory()
+        self.win.HandleShowUndoHistory()

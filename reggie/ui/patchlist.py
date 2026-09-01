@@ -27,6 +27,20 @@ class PatchListWidget(QtWidgets.QWidget):
         self.list = QtWidgets.QListWidget(self)
         self.list.setAlternatingRowColors(True)
         self.list.itemActivated.connect(self._handleActivated)
+        self.list.currentItemChanged.connect(self._handleSelected)
+
+        # The same panel the Patch Manager shows, snapped to the bottom
+        # (Zement, 2026-09-01). Deliberately the same class rather than a
+        # second rendering of the same fields: the two would drift, and this
+        # one was itself salvaged from the old Change Game menu for exactly
+        # that reason.
+        #
+        # It describes the *selected* row, not the loaded patch - which is what
+        # makes it useful here, since deciding whether to switch means reading
+        # about a patch that is not loaded yet.
+        from reggie.patches.patch_manager_dialog import PatchInfoPanel
+
+        self.patchInfo = PatchInfoPanel(self)
 
         self.manageButton = QtWidgets.QPushButton(self)
         self.manageButton.clicked.connect(self._handleManage)
@@ -34,7 +48,11 @@ class PatchListWidget(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
+        # Only the list stretches: the info panel is a fixed-size description
+        # and the button is a button, so extra height goes to the thing that
+        # can use it.
         layout.addWidget(self.list, 1)
+        layout.addWidget(self.patchInfo, 0)
         layout.addWidget(self.manageButton, 0)
 
         self.retranslate()
@@ -86,6 +104,33 @@ class PatchListWidget(QtWidgets.QWidget):
                     self.list.setCurrentItem(item)
         finally:
             self.list.blockSignals(blocked)
+
+        # Signals were blocked above - a selection change during a rebuild is
+        # not the user picking a row - so the panel is filled explicitly rather
+        # than left empty until the first click.
+        self._handleSelected(self.list.currentItem())
+
+    def _handleSelected(self, item, _previous=None):
+        """Describe the selected patch in the panel below the list."""
+        if item is None:
+            self.patchInfo.clear()
+            return
+
+        folder = item.data(QtCore.Qt.ItemDataRole.UserRole)
+
+        # The custom path travels with the entry, because a patch installed
+        # through `PatchPath_` is not under the patches directory and building
+        # its definition without the path finds the wrong one - or nothing.
+        entry = next((e for e in patch_model().entries if e.folder == folder),
+                     None)
+        custom_path = entry.custom_path if entry is not None else None
+
+        try:
+            self.patchInfo.setPatch(folder, custom_path)
+        except Exception:
+            # A patch whose main.xml will not parse must not take the sidebar
+            # with it - the list still has to work for the others.
+            self.patchInfo.clear()
 
     # -- actions ---------------------------------------------------------
 

@@ -898,7 +898,24 @@ def LoadGameDef(name=None, dlg=None):
         if globals_.gamedef.custom and (setting('StageGamePath_' + globals_.gamedef.name) is None):
             # First-time usage of this globals_.gamedef. Have the
             # user pick a stage folder so we can load stages
-            # and tilesets from there
+            # and tilesets from there.
+            #
+            # **Every abort below has to leave the editor able to run.** The
+            # three `return False`s here skip the rest of this function, which
+            # is where the data files the UI treats as always-present get
+            # loaded - `ObjDesc` above all, which starts as None and is filled
+            # nowhere else. The palette then does `i in globals_.ObjDesc` and
+            # dies with "argument of type 'NoneType' is not iterable" before
+            # the window is even up, so the only way out is deleting
+            # settings.ini (Zement, 2026-09-01, on a ReggieCopy whose patch had
+            # no Stage path yet).
+            #
+            # Loaded before the prompt rather than in each abort: there is
+            # nothing patch-specific about it - `ts1_descriptions` is retail
+            # data - and doing it once here cannot be forgotten by a fourth
+            # abort added later.
+            LoadObjDescriptions()
+
             pressed_button = QtWidgets.QMessageBox.information(None,
                 globals_.trans.string('Gamedefs', 2),
                 globals_.trans.string('Gamedefs', 3, '[game]', globals_.gamedef.name),

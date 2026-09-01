@@ -771,10 +771,115 @@ class LevelTreeWidget(QtWidgets.QWidget):
         if root.isValid():
             self.view.expand(root)
 
+    # -- remembering what was open ---------------------------------------
+    #
+    # A context section is destroyed and re-created every time the user
+    # switches away and back, so a tree that kept its state only in the widget
+    # would come back fully collapsed and scrolled to the top - which is what
+    # it did (Zement, 2026-09-01: "When I change from Directory Listing to Game
+    # Patches and back, the tree is back to its default view, with all nodes
+    # contracted").
+    #
+    # Keeping the widget alive instead was the other option, and was rejected:
+    # it would make the directory listing the one section that is special, and
+    # the same problem would return for the next section with state. Saving and
+    # restoring is a few lines here and nothing anywhere else.
+    #
+    # Keyed by *label path* rather than by index. A QModelIndex is invalid the
+    # moment the model resets, and a row number means a different node once a
+    # patch switch changes the list - the labels are what the user was actually
+    # looking at.
+
+    def captureState(self):
+        """What is expanded, what is selected, and where the view is scrolled."""
+        expanded = []
+
+        def walk(parent):
+            for row in range(self.model.rowCount(parent)):
+                index = self.model.index(row, 0, parent)
+                if not self.view.isExpanded(index):
+                    continue
+                expanded.append(self._pathFor(index))
+                walk(index)
+
+        walk(QtCore.QModelIndex())
+
+        current = self.view.currentIndex()
+        return {
+            'expanded': expanded,
+            'current': self._pathFor(current) if current.isValid() else None,
+            'scroll': self.view.verticalScrollBar().value(),
+        }
+
+    def applyState(self, state):
+        """Put back what ``captureState`` recorded. Silent when it cannot.
+
+        Anything that has since disappeared - a level deleted, or a patch
+        switch that replaced the whole list - is simply skipped, so a stale
+        state degrades to the default view rather than failing.
+        """
+        if not state:
+            return
+
+        for path in state.get('expanded') or ():
+            index = self._indexFor(path)
+            if index is not None and index.isValid():
+                # Expanding is what triggers `fetchMore`, so a level restored
+                # this way pays its 11-44 ms exactly as it did the first time -
+                # and only for the levels that were actually open.
+                self.view.expand(index)
+
+        current = state.get('current')
+        if current:
+            index = self._indexFor(current)
+            if index is not None and index.isValid():
+                self.view.setCurrentIndex(index)
+
+        # After the expansions, or the scrollbar's range is still the collapsed
+        # tree's and the value is clamped to it.
+        scroll = state.get('scroll')
+        if scroll:
+            self.view.verticalScrollBar().setValue(int(scroll))
+
+    def _pathFor(self, index):
+        """The chain of labels from the root down to ``index``."""
+        path = []
+        while index.isValid():
+            node = index.internalPointer()
+            path.append(node.label if node is not None else '')
+            index = index.parent()
+        return tuple(reversed(path))
+
+    def _indexFor(self, path):
+        """The index at ``path``, or None if it is no longer there.
+
+        Walks down one level at a time, expanding nothing: `rowCount` is enough
+        to look, and expanding to search would defeat the laziness by loading
+        every level on the way.
+        """
+        index = QtCore.QModelIndex()
+
+        for label in path:
+            found = None
+            for row in range(self.model.rowCount(index)):
+                candidate = self.model.index(row, 0, index)
+                node = candidate.internalPointer()
+                if node is not None and node.label == label:
+                    found = candidate
+                    break
+
+            if found is None:
+                return None
+            index = found
+
+        return index
+
     def refresh(self):
         """Rebuild for the loaded patch, and re-open the patch node."""
+        state = self.captureState()
         self.model.refresh()
         self.expandPatch()
+        self.applyState(state)
 
     def refreshLoadedMarks(self):
         self.model.refreshLoadedMarks()

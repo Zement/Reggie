@@ -556,6 +556,18 @@ class MenuBuilder:
         hmenu = menubar.addMenu(globals_.trans.string('Menubar', 4))
         self.SetupHelpMenu(hmenu)
 
+        # Built, then hidden (Zement, 2026-09-01: "The Help file menu is now
+        # fully obsolete and should be removed - just hidden, as we learned
+        # from other file menu entries; their methods are still needed, and
+        # some also have hotkeys assigned").
+        #
+        # Built rather than skipped for two reasons: its actions keep their
+        # shortcuts, which only work while the action belongs to a live menu,
+        # and the sidebar's Help section *is* this menu - `helptree.py` renders
+        # whatever is in it, so not building it would empty the section that
+        # replaced it.
+        hmenu.menuAction().setVisible(False)
+
         # Registered by name so whole menus can be enabled or disabled as a
         # group (Block D-c), the way single actions already can. Keyed on the
         # untranslated names rather than the menu titles, which change with the

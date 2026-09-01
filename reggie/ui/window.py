@@ -716,11 +716,29 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if menu is None:
             return False
 
-        menu.menuAction().setEnabled(bool(enabled))
+        action = menu.menuAction()
+
+        # A hidden menu is not the user's to reach, so there is nothing to
+        # enable or disable (D-d.2c). Help is one: it is still built, because
+        # its actions keep their shortcuts and the sidebar's Help section
+        # renders this very menu - but it is not in the menu bar any more.
+        #
+        # Reported as False rather than silently "done", because Qt treats a
+        # hidden action as disabled: claiming success would mean SetMenusEnabled
+        # returning a name whose menu it did not actually enable.
+        if not action.isVisible():
+            return False
+
+        action.setEnabled(bool(enabled))
         return True
 
     def SetMenusEnabled(self, enabled, names=None):
-        """Enable or disable several menus at once. Defaults to all of them."""
+        """Enable or disable several menus at once.
+
+        Defaults to every menu the user can reach - which is not necessarily
+        every menu in the registry, since a hidden one is skipped. The return
+        value is the menus actually changed, so a caller can tell.
+        """
         menus = getattr(self, 'menus', {})
         wanted = list(menus) if names is None else list(names)
         return [name for name in wanted if self.SetMenuEnabled(name, enabled)]
@@ -1288,6 +1306,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
         from reggie.ui.leveltree import LevelTreeWidget
 
         self.levelTreeWidget = LevelTreeWidget(self)
+
+        # Put back what the last one had open. A context section is destroyed
+        # when the user switches to another, so without this the tree comes
+        # back collapsed and scrolled to the top every time - which is exactly
+        # what it did (Zement, 2026-09-01).
+        state = getattr(self, '_levelTreeState', None)
+        if state:
+            self.levelTreeWidget.applyState(state)
+
         self.levelTreeSection = self.sidebar.addSection(
             globals_.trans.string('MenuItems', 143),
             self.levelTreeWidget,
@@ -1407,8 +1434,22 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if self.sidebar is None:
             return
 
-        existing = self.sidebar.sectionFor(
-            getattr(self, 'levelTreeWidget', None))
+        widget = getattr(self, 'levelTreeWidget', None)
+
+        # Saved before the widget goes, so re-opening restores what was open
+        # rather than starting from a collapsed tree. Kept on the window rather
+        # than in settings: it describes this session's browsing, and a tree
+        # restored across a restart would be re-expanding levels the user may
+        # not want to wait for.
+        if widget is not None:
+            try:
+                self._levelTreeState = widget.captureState()
+            except Exception:
+                # A state that cannot be captured is worth losing; a section
+                # that cannot be closed is not.
+                self._levelTreeState = None
+
+        existing = self.sidebar.sectionFor(widget)
         if existing is not None:
             self.sidebar.removeSection(existing)
 
