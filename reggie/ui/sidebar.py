@@ -394,7 +394,7 @@ class _CollapsibleHost(QtWidgets.QWidget):
 
         return hint
 
-    def setDraggedHeight(self, height):
+    def setDraggedHeight(self, height, restored=False):
         """Set the height the user dragged this host to (D-d.3d).
 
         Straight into ``_defaultHeight`` as a plain pixel number, so a drag and
@@ -402,9 +402,13 @@ class _CollapsibleHost(QtWidgets.QWidget):
         disagree. It stops being a percentage in the process, which is right: a
         percentage says "this fraction of whatever the sidebar is", and someone
         who has just dragged a section to a size means that size.
+
+        ``restored=True`` puts a *remembered* height back without marking the
+        host as dragged - see `Sidebar.applySectionHeight` for why that matters.
         """
         self._defaultHeight = max(0, int(height))
-        self._dragged = True
+        if not restored:
+            self._dragged = True
         self.updateGeometry()
 
     def wasDragged(self):
@@ -575,6 +579,21 @@ class SectionGrip(QtWidgets.QWidget):
 
         self._pressY = event.globalPosition().y()
         self._startHeight = self.host.height()
+
+        # Freeze every host at the height it is showing, for the duration.
+        #
+        # Without this a drag only moved the *slack holder*, because that is the
+        # one host the layout is free to resize - everything else is pinned to
+        # its size hint, so asking a non-holder to grow changed a number nothing
+        # acted on (Zement, 2026-09-01: "when I try to resize the Game Patches
+        # panel via the splitter, at first it doesn't resize at all... this is
+        # not the case for the other panels"). Game Patches happened to be
+        # above the undo history, which was the holder; the panels that "worked"
+        # were the holder itself.
+        #
+        # Freezing is also what a splitter does: while you are dragging one
+        # boundary, the others stay where they are.
+        self.column.beginDrag()
         event.accept()
 
     def mouseMoveEvent(self, event):
@@ -582,13 +601,26 @@ class SectionGrip(QtWidgets.QWidget):
             return super().mouseMoveEvent(event)
 
         delta = event.globalPosition().y() - self._pressY
+
+        # A press with no real movement is a click, not a drag. Without this a
+        # stray click would stamp the host's current height as a chosen one and
+        # write it to settings, where it would then outrank the configured
+        # default for good.
+        if abs(delta) < 1:
+            return
+
         wanted = max(self.MIN_SECTION_HEIGHT, int(self._startHeight + delta))
 
         # Straight to the host's own default height, which is what the layout
         # gives it - so a drag and a configured height are the same mechanism
         # rather than two that can disagree.
         self.host.setDraggedHeight(wanted)
-        self.column.refreshLayout()
+
+        # `_rebuild`, not `refreshLayout`: the wanted height is enforced as a
+        # real minimum on each host (see `_rebuild`), and only that re-applies
+        # it. Refreshing the layout alone left the old minimum in place, so the
+        # host held its previous height however far the grip was dragged.
+        self.column.applyHeights()
         event.accept()
 
     def mouseReleaseEvent(self, event):
@@ -597,6 +629,7 @@ class SectionGrip(QtWidgets.QWidget):
 
         self._pressY = None
         self._startHeight = None
+        self.column.endDrag()
         self.column.sectionResized.emit()
         event.accept()
 
@@ -693,10 +726,30 @@ class SectionColumn(QtWidgets.QScrollArea):
             if widget is not None:
                 widget.setParent(None)
 
+        holder = self._slackHolder
+
         for host in self._hosts:
             host.setParent(self._body)
             self._layout.addWidget(host)
             host.setVisible(True)
+
+            # The height a host asks for has to be a *minimum*, not a hint.
+            #
+            # A QVBoxLayout squeezes a `Preferred` child to give a stretched
+            # sibling more, and a `Minimum` child's floor is its
+            # `minimumSizeHint`, not its `sizeHint` - so Game Patches sat at
+            # 357px against a 422px hint, its floor being 191. That is both of
+            # Zement's symptoms at once (2026-09-01): "the Game Patches panel
+            # doesn't seem to be 50% of the slice height", and dragging it did
+            # nothing until the drag had made up the 65px shortfall.
+            #
+            # So the wanted height is pushed in as a real minimum. The slack
+            # holder is the exception: it is the one host allowed to grow past
+            # what it asked for, which is what makes it the holder.
+            host.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Preferred,
+                QtWidgets.QSizePolicy.Policy.Expanding if host is holder
+                else QtWidgets.QSizePolicy.Policy.Fixed)
 
             grip = self._grips.get(host)
             if grip is None:
@@ -718,7 +771,7 @@ class SectionColumn(QtWidgets.QScrollArea):
         else:
             self._layout.addStretch(1)
 
-        self.refreshLayout()
+        self.applyHeights()
 
     # -- geometry --------------------------------------------------------
 
@@ -760,6 +813,16 @@ class SectionColumn(QtWidgets.QScrollArea):
         width = self.viewport().width()
         height = max(self._wantedHeight(), self.viewport().height())
         self._body.resize(width, height)
+
+        # Re-run the layout explicitly. `resize` only triggers it when the size
+        # actually changes, so a host whose *hint* changed inside an unchanged
+        # body kept its old height - which is why Game Patches ignored its
+        # configured 50% and then ignored the first part of every drag (Zement,
+        # 2026-09-01). `activate()` is the layout's own "do it now".
+        layout = self._body.layout()
+        if layout is not None:
+            layout.invalidate()
+            layout.activate()
 
     def refreshLayout(self):
         """Re-measure after the hosts' wanted heights change.
@@ -842,6 +905,49 @@ class SectionColumn(QtWidgets.QScrollArea):
         """
         self._slackHolder = host if host in self._hosts else None
         self._rebuild()
+
+    def applyHeights(self):
+        """Push each host's wanted height back in as its minimum, and re-lay.
+
+        The cheap half of `_rebuild`: the stack has not changed, only what its
+        members want. Used by a drag, which changes one wanted height per mouse
+        move and must not rebuild the whole column each time.
+        """
+        holder = self._slackHolder
+
+        for host in self._hosts:
+            if host is holder:
+                host.setMinimumHeight(0)
+                continue
+
+            host.setMinimumHeight(
+                host.sizeHint().height() if host.isExpanded()
+                else host.headerHeight())
+
+        self.refreshLayout()
+
+    def beginDrag(self):
+        """Pin every host at its shown height while one is being dragged.
+
+        Only the slack holder is free to resize under normal layout - every
+        other host is held at its size hint - so dragging a non-holder taller
+        changed a number nothing acted on. Recording each host's *current*
+        height as its wanted one puts them all on the same footing, and taking
+        the slack away means the space the dragged host claims comes out of the
+        column's total rather than being absorbed silently.
+        """
+        self._dragHolder = self._slackHolder
+
+        for host in self._hosts:
+            if host.isExpanded():
+                host.setDraggedHeight(host.height(), restored=True)
+
+        self.setSlackHolder(None)
+
+    def endDrag(self):
+        """Give the slack back to whichever host was holding it."""
+        holder, self._dragHolder = getattr(self, '_dragHolder', None), None
+        self.setSlackHolder(holder)
 
     def ensureVisible(self, host):
         """Scroll ``host`` into view, fully if it fits.
@@ -1499,15 +1605,8 @@ class Sidebar(QtWidgets.QWidget):
         if key is not None:
             host.setSectionKey(key)
 
-        # `Preferred`, so the layout gives the host its size hint and no more.
-        # `Expanding` - the default for a widget holding a scrolling list -
-        # would let every host grow to fill the column, which is the splitter
-        # behaviour D-d.3d replaced: the hosts would share the height again
-        # instead of keeping the one they asked for, and nothing would ever
-        # overflow enough to scroll. The one host that *should* grow is the
-        # slack holder, and `setSlackHolder` says so with layout stretch.
-        host.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
-                           QtWidgets.QSizePolicy.Policy.Preferred)
+        # The vertical policy is set by `SectionColumn._rebuild`, which is the
+        # one place that knows which host is currently absorbing slack.
 
         # A height the user dragged this section to in an earlier session, or
         # earlier in this one, wins over the configured default (D-d.3d).
@@ -2024,10 +2123,23 @@ class Sidebar(QtWidgets.QWidget):
         self._draggedHeights = clean
 
     def applySectionHeight(self, host):
-        """Give ``host`` its remembered height, if it has one."""
+        """Give ``host`` its remembered height, if it has one.
+
+        ``restored=True``, so the host does **not** count as dragged. That
+        distinction is the whole point: `saveSectionHeights` only writes heights
+        the user chose, and marking a restored one as dragged made a restore
+        indistinguishable from a drag - so the first stored value re-saved
+        itself on every launch, and the configured percentage could never be
+        reached again (Zement, 2026-09-01: "the Game Patches panel doesn't seem
+        to be 50% of the slice height").
+
+        Worse than it sounds, because the loop is self-sustaining: once any
+        height reached the file, restore -> mark dragged -> save -> restore kept
+        it there for good, and editing the percentage in the code did nothing.
+        """
         height = self._draggedHeights.get(host.sectionKey())
         if height:
-            host.setDraggedHeight(height)
+            host.setDraggedHeight(height, restored=True)
 
     def saveLayout(self):
         """Write the sidebar's own splitter positions to settings.

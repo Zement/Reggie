@@ -41,10 +41,10 @@ from reggie.ui.tooltabs import ToolTabHost
 TOOL_TAB_GROUP = '￿'
 
 #: How narrow a tab may be squeezed before the bar scrolls instead (D-d.3d).
-#: Wide enough for `01-01: 1` plus its close button, which is the longest label
-#: the editor generates on its own - a longer one elides, which is what elision
-#: is for.
-MIN_TAB_WIDTH = 90
+#: Wide enough for `01-01: Area 3` plus its close button, which is the longest
+#: label the editor generates on its own - a longer one elides, which is what
+#: elision is for. Was 90 while the label read `01-01: 3`.
+MIN_TAB_WIDTH = 120
 
 #: Matches the numbered stage names the sort orders by: 01-01, 03-C, W1-04 ...
 _LEVEL_ID = re.compile(r'^(?:W?(\d+))\s*-\s*(\d+|[A-Za-z]+)')
@@ -253,7 +253,13 @@ class MasterTabWidget(QtWidgets.QTabWidget):
 
         areas = getattr(session.level, 'areas', None) or ()
         if len(areas) > 1:
-            name = '%s: %d' % (name, session.area_num)
+            # "02-05: Area 3", not "02-05: 3" (Zement, 2026-09-01). The bare
+            # number read as part of the level's name on a narrow tab; the word
+            # costs five characters, and the tabs scroll now rather than
+            # shrinking, so those five characters no longer come out of every
+            # other tab's width.
+            name = '%s: %s' % (name, globals_.trans.string(
+                'AreaCombobox', 0, '[num]', session.area_num))
 
         return ('* ' + name) if session.dirty else name
 
