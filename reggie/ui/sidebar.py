@@ -702,6 +702,8 @@ class SectionColumn(QtWidgets.QScrollArea):
         self._hosts = []
         self._grips = {}
         self._slackHolder = None
+        #: True while a grip is being dragged - see `beginDrag`.
+        self._dragging = False
 
         self.setWidget(self._body)
         self._rebuild()
@@ -726,30 +728,14 @@ class SectionColumn(QtWidgets.QScrollArea):
             if widget is not None:
                 widget.setParent(None)
 
-        holder = self._slackHolder
-
         for host in self._hosts:
             host.setParent(self._body)
             self._layout.addWidget(host)
             host.setVisible(True)
 
-            # The height a host asks for has to be a *minimum*, not a hint.
-            #
-            # A QVBoxLayout squeezes a `Preferred` child to give a stretched
-            # sibling more, and a `Minimum` child's floor is its
-            # `minimumSizeHint`, not its `sizeHint` - so Game Patches sat at
-            # 357px against a 422px hint, its floor being 191. That is both of
-            # Zement's symptoms at once (2026-09-01): "the Game Patches panel
-            # doesn't seem to be 50% of the slice height", and dragging it did
-            # nothing until the drag had made up the 65px shortfall.
-            #
-            # So the wanted height is pushed in as a real minimum. The slack
-            # holder is the exception: it is the one host allowed to grow past
-            # what it asked for, which is what makes it the holder.
-            host.setSizePolicy(
-                QtWidgets.QSizePolicy.Policy.Preferred,
-                QtWidgets.QSizePolicy.Policy.Expanding if host is holder
-                else QtWidgets.QSizePolicy.Policy.Fixed)
+            # Heights and policies are `applyHeights`'s business, called at the
+            # end of this method - one place decides them, so a drag and a
+            # rebuild cannot disagree.
 
             grip = self._grips.get(host)
             if grip is None:
@@ -913,16 +899,24 @@ class SectionColumn(QtWidgets.QScrollArea):
         members want. Used by a drag, which changes one wanted height per mouse
         move and must not rebuild the whole column each time.
         """
-        holder = self._slackHolder
+        # While a drag is in progress every host is pinned, the holder
+        # included: each one has just been given its shown height, so there is
+        # no slack to absorb and letting the holder swallow the space the
+        # dragged host gives up would mean nothing visibly moved.
+        holder = None if self._dragging else self._slackHolder
 
         for host in self._hosts:
             if host is holder:
                 host.setMinimumHeight(0)
+                host.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
+                                   QtWidgets.QSizePolicy.Policy.Expanding)
                 continue
 
             host.setMinimumHeight(
                 host.sizeHint().height() if host.isExpanded()
                 else host.headerHeight())
+            host.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
+                               QtWidgets.QSizePolicy.Policy.Fixed)
 
         self.refreshLayout()
 
@@ -930,24 +924,41 @@ class SectionColumn(QtWidgets.QScrollArea):
         """Pin every host at its shown height while one is being dragged.
 
         Only the slack holder is free to resize under normal layout - every
-        other host is held at its size hint - so dragging a non-holder taller
-        changed a number nothing acted on. Recording each host's *current*
-        height as its wanted one puts them all on the same footing, and taking
-        the slack away means the space the dragged host claims comes out of the
-        column's total rather than being absorbed silently.
+        other host is held at its wanted height - so dragging a non-holder
+        taller changed a number nothing acted on. Recording each host's
+        *current* height as its wanted one puts them all on the same footing.
+
+        **No `_rebuild` here, and no `setSlackHolder`.** The first version
+        called `setSlackHolder(None)` from here, and every handle then froze
+        (Zement, 2026-09-01: "all handles now cannot be moved anymore").
+        `setSlackHolder` runs `_rebuild`, which takes every widget out of the
+        layout and puts it back - `setParent(None)` on each one - and doing
+        that to a widget's ancestors *while it is holding a mouse press* stops
+        the drag on a real windowing system.
+
+        Stated as the working explanation rather than a proven one: it could
+        not be reproduced under the offscreen platform, which has no native
+        grab to lose, so both the old headless test and a probe driving real
+        `sendEvent` calls passed against the broken build. What *is* certain is
+        that not rebuilding fixes it, and that rebuilding the whole column on
+        every mouse move was wrong regardless - it is a lot of work per frame
+        for a stack that has not changed.
+
+        The holder is left in place and simply stops absorbing: with every host
+        pinned to a real height, there is no slack for it to take.
         """
-        self._dragHolder = self._slackHolder
+        self._dragging = True
 
         for host in self._hosts:
             if host.isExpanded():
                 host.setDraggedHeight(host.height(), restored=True)
 
-        self.setSlackHolder(None)
+        self.applyHeights()
 
     def endDrag(self):
-        """Give the slack back to whichever host was holding it."""
-        holder, self._dragHolder = getattr(self, '_dragHolder', None), None
-        self.setSlackHolder(holder)
+        """Let the column go back to absorbing slack normally."""
+        self._dragging = False
+        self.applyHeights()
 
     def ensureVisible(self, host):
         """Scroll ``host`` into view, fully if it fits.
