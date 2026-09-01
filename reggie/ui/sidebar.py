@@ -215,10 +215,15 @@ class _CollapsibleHost(QtWidgets.QWidget):
         super().__init__(parent)
 
         self.hostTitle = title
+        #: The title this host was *created* with, which is what its remembered
+        #: height is keyed by. See `sectionKey`.
+        self._sectionKey = title
         self.hostWidget = widget
         self._expanded = True
         self._maxHeight = max_height
         self._defaultHeight = default_height
+        #: Set once the user drags this host's grip - see setDraggedHeight.
+        self._dragged = False
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -274,8 +279,32 @@ class _CollapsibleHost(QtWidgets.QWidget):
 
     # -- title -----------------------------------------------------------
 
+    def sectionKey(self):
+        """A stable name for this host, for remembering its height by (D-d.3d).
+
+        **Not `hostTitle`**, which is what a first version used and which the
+        undo history would have broken immediately: its title carries the level
+        and area ("Undo History - 01-01, Area 1"), so it changes on every area
+        switch and a height saved under one would never be found again.
+
+        The key given at construction, falling back to the first title when no
+        key was passed. `setTitle` deliberately does not touch it.
+        """
+        return self._sectionKey
+
+    def setSectionKey(self, key):
+        """Name this host's height key explicitly.
+
+        For a section whose *title* is not stable - the undo history's names the
+        level and area it is showing, so it changes on every switch.
+        """
+        self._sectionKey = str(key)
+
     def setTitle(self, title):
-        """Rename the host, keeping the fold arrow in step."""
+        """Rename the host, keeping the fold arrow in step.
+
+        The height key is *not* renamed with it - see `sectionKey`.
+        """
         self.hostTitle = title
         self.header.setText('%s  %s' % (self._ARROWS[int(self._expanded)],
                                         title))
@@ -364,6 +393,28 @@ class _CollapsibleHost(QtWidgets.QWidget):
             hint.setHeight(resolved)
 
         return hint
+
+    def setDraggedHeight(self, height):
+        """Set the height the user dragged this host to (D-d.3d).
+
+        Straight into ``_defaultHeight`` as a plain pixel number, so a drag and
+        a configured height are the *same* mechanism rather than two that can
+        disagree. It stops being a percentage in the process, which is right: a
+        percentage says "this fraction of whatever the sidebar is", and someone
+        who has just dragged a section to a size means that size.
+        """
+        self._defaultHeight = max(0, int(height))
+        self._dragged = True
+        self.updateGeometry()
+
+    def wasDragged(self):
+        """Whether this host's height came from the user rather than the code.
+
+        What decides if the height is worth saving. A section still at its
+        configured default has nothing to remember, and writing it would freeze
+        that default at whatever it resolved to on this screen.
+        """
+        return getattr(self, '_dragged', False)
 
     def refreshHeights(self):
         """Re-resolve percentage heights. Called when the sidebar is resized."""
@@ -478,6 +529,78 @@ class PanelHost(_CollapsibleHost):
         return False
 
 
+class SectionGrip(QtWidgets.QWidget):
+    """The drag handle under a section, for resizing it by hand (D-d.3d).
+
+    A splitter gave these for free, and losing them was the one thing the
+    scroll-area rewrite took away that was worth keeping (Zement, 2026-09-01:
+    "the gripper to *manually* resize the panels is now gone... please bring
+    back the gripper"). So they come back explicitly, and this time what the
+    user drags to is **remembered** - the splitter never saved section heights,
+    only slice 3's panel division, so a dragged column came back at its defaults
+    on the next launch.
+
+    Drawn as a splitter handle so it looks like the one it replaces, and it
+    carries the same resize cursor.
+    """
+
+    #: How thin a section may be dragged: its header, and a little to grab.
+    MIN_SECTION_HEIGHT = 40
+
+    def __init__(self, host, column):
+        super().__init__(column.body())
+
+        self.host = host
+        self.column = column
+        self._pressY = None
+        self._startHeight = None
+
+        self.setCursor(QtCore.Qt.CursorShape.SplitVCursor)
+        self.setFixedHeight(6)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                           QtWidgets.QSizePolicy.Policy.Fixed)
+
+    def paintEvent(self, event):
+        """Draw the platform's own splitter handle, so it looks native."""
+        painter = QtWidgets.QStylePainter(self)
+        option = QtWidgets.QStyleOptionFrame()
+        option.initFrom(self)
+        painter.drawPrimitive(
+            QtWidgets.QStyle.PrimitiveElement.PE_IndicatorDockWidgetResizeHandle,
+            option)
+
+    def mousePressEvent(self, event):
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            return super().mousePressEvent(event)
+
+        self._pressY = event.globalPosition().y()
+        self._startHeight = self.host.height()
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self._pressY is None:
+            return super().mouseMoveEvent(event)
+
+        delta = event.globalPosition().y() - self._pressY
+        wanted = max(self.MIN_SECTION_HEIGHT, int(self._startHeight + delta))
+
+        # Straight to the host's own default height, which is what the layout
+        # gives it - so a drag and a configured height are the same mechanism
+        # rather than two that can disagree.
+        self.host.setDraggedHeight(wanted)
+        self.column.refreshLayout()
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if self._pressY is None:
+            return super().mouseReleaseEvent(event)
+
+        self._pressY = None
+        self._startHeight = None
+        self.column.sectionResized.emit()
+        event.accept()
+
+
 class SectionColumn(QtWidgets.QScrollArea):
     """The vertical stack of sections in slice 2, which **scrolls** (D-d.3d).
 
@@ -502,12 +625,18 @@ class SectionColumn(QtWidgets.QScrollArea):
     and if it is shorter the bottom-most expanded host takes up the slack
     (Zement's choice, over leaving a visible gap).
 
-    Keeps a splitter-shaped surface - ``count``, ``widget``, ``indexOf``,
+    A `SectionGrip` sits under each host, so the heights are still draggable -
+    that is what a splitter gave for free, and it was worth keeping.
+
+    Keeps a splitter-shaped surface - ``count``, ``sectionAt``, ``indexOf``,
     ``insertWidget`` - because that is genuinely what the sidebar wants from it:
     an ordered stack addressed by position. The methods are not a shim for the
     splitter; they are the container's own vocabulary, and the splitter happened
     to share it.
     """
+
+    #: Emitted when the user finishes dragging a grip, so the sidebar can save.
+    sectionResized = QtCore.pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -533,12 +662,63 @@ class SectionColumn(QtWidgets.QScrollArea):
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(0)
 
-        # The tail stretch is what stops a short stack from spreading itself
-        # over the whole viewport. It is removed while a host is claiming the
-        # slack - see `_applySlack` on the sidebar.
-        self._layout.addStretch(1)
+        #: The hosts, in order. Kept as a list rather than read back out of the
+        #: layout, because the layout also holds a grip after each host and a
+        #: tail stretch - so "what is in the layout" and "what the sidebar put
+        #: here" stopped being the same question once the grips arrived.
+        self._hosts = []
+        self._grips = {}
+        self._slackHolder = None
 
         self.setWidget(self._body)
+        self._rebuild()
+
+    def body(self):
+        """The widget the hosts are laid out in. A grip parents itself here."""
+        return self._body
+
+    # -- building --------------------------------------------------------
+
+    def _rebuild(self):
+        """Lay the hosts out again, with a grip under each.
+
+        Rebuilt wholesale on every change rather than patched: the stack is a
+        handful of widgets, and the alternative is index arithmetic over a
+        layout holding two kinds of thing, which is exactly the sort of code
+        that goes subtly wrong when a section is inserted in the middle.
+        """
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+
+        for host in self._hosts:
+            host.setParent(self._body)
+            self._layout.addWidget(host)
+            host.setVisible(True)
+
+            grip = self._grips.get(host)
+            if grip is None:
+                grip = SectionGrip(host, self)
+                self._grips[host] = grip
+
+            grip.setParent(self._body)
+            self._layout.addWidget(grip)
+
+            # No point offering to resize a folded section: it is its header,
+            # and dragging it taller would only reveal a hidden body.
+            grip.setVisible(host.isExpanded())
+
+        # The tail stretch is what stops a short stack from spreading itself
+        # over the whole viewport. Left out when a host is claiming the slack.
+        holder = self._slackHolder
+        if holder is not None and holder in self._hosts:
+            self._layout.setStretchFactor(holder, 1)
+        else:
+            self._layout.addStretch(1)
+
+        self.refreshLayout()
 
     # -- geometry --------------------------------------------------------
 
@@ -553,9 +733,32 @@ class SectionColumn(QtWidgets.QScrollArea):
         super().resizeEvent(event)
         self._relayout()
 
+    def _wantedHeight(self):
+        """How tall the stack actually is, measured from the hosts.
+
+        **Not** `self._body.sizeHint()`, which was the first version and was
+        wrong: a layout holding a stretch item reports a hint far larger than
+        its contents (measured - two hosts wanting 675 + 506 px produced a hint
+        of 4158). The body then never shrank back, so folding a section freed
+        space that nothing could see.
+
+        Adding up the hosts and their grips is the honest measurement, and it is
+        a handful of integers.
+        """
+        total = 0
+        for host in self._hosts:
+            total += (host.sizeHint().height() if host.isExpanded()
+                      else host.headerHeight())
+
+            grip = self._grips.get(host)
+            if grip is not None and host.isExpanded():
+                total += grip.height()
+
+        return total
+
     def _relayout(self):
         width = self.viewport().width()
-        height = max(self._body.sizeHint().height(), self.viewport().height())
+        height = max(self._wantedHeight(), self.viewport().height())
         self._body.resize(width, height)
 
     def refreshLayout(self):
@@ -565,15 +768,13 @@ class SectionColumn(QtWidgets.QScrollArea):
         by a sidebar resize. With `setWidgetResizable(False)` nothing does this
         on its own - the body only changes size when told to.
         """
-        self._body.adjustSize()
         self._relayout()
 
     # -- the ordered-stack surface ---------------------------------------
 
     def count(self):
-        """How many hosts are stacked, ignoring the tail stretch."""
-        return sum(1 for i in range(self._layout.count())
-                   if self._layout.itemAt(i).widget() is not None)
+        """How many hosts are stacked."""
+        return len(self._hosts)
 
     def sectionAt(self, index):
         """The host at ``index``, or None.
@@ -583,34 +784,41 @@ class SectionColumn(QtWidgets.QScrollArea):
         it scrolls, and Qt calls that itself. Overriding it with a different
         signature broke the scroll area from the inside.
         """
-        hosts = self.hosts()
-        return hosts[index] if 0 <= index < len(hosts) else None
+        return self._hosts[index] if 0 <= index < len(self._hosts) else None
 
     def hosts(self):
         """Every host, top to bottom."""
-        found = []
-        for i in range(self._layout.count()):
-            item = self._layout.itemAt(i).widget()
-            if item is not None:
-                found.append(item)
-        return found
+        return list(self._hosts)
+
+    def gripFor(self, host):
+        """The drag handle under ``host``, or None."""
+        return self._grips.get(host)
 
     def indexOf(self, host):
         """``host``'s position, or -1. Matches QSplitter's contract."""
-        hosts = self.hosts()
-        return hosts.index(host) if host in hosts else -1
+        return self._hosts.index(host) if host in self._hosts else -1
 
     def insertWidget(self, index, host):
         """Put ``host`` at ``index``, moving it if it is already here."""
-        if self._layout.indexOf(host) != -1:
-            self._layout.removeWidget(host)
+        if host in self._hosts:
+            self._hosts.remove(host)
 
-        host.setParent(self._body)
-        self._layout.insertWidget(min(index, self.count()), host)
-        host.setVisible(True)
+        self._hosts.insert(min(index, len(self._hosts)), host)
+        self._rebuild()
 
     def removeWidget(self, host):
-        self._layout.removeWidget(host)
+        if host in self._hosts:
+            self._hosts.remove(host)
+
+        grip = self._grips.pop(host, None)
+        if grip is not None:
+            grip.setParent(None)
+            grip.deleteLater()
+
+        if self._slackHolder is host:
+            self._slackHolder = None
+
+        self._rebuild()
 
     def handleWidth(self):
         """Zero: a layout has no drag handles between its children.
@@ -632,18 +840,8 @@ class SectionColumn(QtWidgets.QScrollArea):
         Done with layout stretch rather than a computed height, so the layout
         keeps it right through every resize with nothing to keep in step.
         """
-        for host_widget in self.hosts():
-            self._layout.setStretchFactor(host_widget, 0)
-
-        tail = self._layout.itemAt(self._layout.count() - 1)
-        has_tail = tail is not None and tail.widget() is None
-
-        if host is not None and self._layout.indexOf(host) != -1:
-            self._layout.setStretchFactor(host, 1)
-            if has_tail:
-                self._layout.takeAt(self._layout.count() - 1)
-        elif not has_tail:
-            self._layout.addStretch(1)
+        self._slackHolder = host if host in self._hosts else None
+        self._rebuild()
 
     def ensureVisible(self, host):
         """Scroll ``host`` into view, fully if it fits.
@@ -651,7 +849,7 @@ class SectionColumn(QtWidgets.QScrollArea):
         Zement: "we should make certain that an activated panel moves into view
         and is fully visible".
         """
-        if host is not None and self._layout.indexOf(host) != -1:
+        if host is not None and host in self._hosts:
             self.ensureWidgetVisible(host)
 
 
@@ -842,6 +1040,14 @@ class Sidebar(QtWidgets.QWidget):
         # asked in different places and merging them would make every reader
         # decode an enum to ask one of them.
         self._sectionPinned = {}
+
+        #: title -> the height the user dragged that section to (D-d.3d). Kept
+        #: here as well as in settings so a section closed and re-opened within
+        #: one run comes back at the height it was given, not only across a
+        #: restart. Filled by restoreSectionHeights on the way up.
+        self._draggedHeights = {}
+
+        self.sections.sectionResized.connect(self.saveSectionHeights)
         self.pages.addWidget(self.sections)
 
         # Rail row -> page widget, and rail row -> callback. A row may have
@@ -1230,7 +1436,8 @@ class Sidebar(QtWidgets.QWidget):
 
     def addSection(self, title, widget, stretch=1, closable=True,
                    on_close=None, default_height=UNLIMITED,
-                   max_height=UNLIMITED, context=False, pinned=False):
+                   max_height=UNLIMITED, context=False, pinned=False,
+                   key=None):
         """Add a collapsible section to slice 2. Returns its ``SectionHost``.
 
         Sections stack vertically in a splitter, so several are visible at once
@@ -1285,6 +1492,13 @@ class Sidebar(QtWidgets.QWidget):
                            default_height=default_height,
                            max_height=max_height)
 
+        # ``key`` names the section for the purpose of remembering its dragged
+        # height, when its *title* is not stable enough to do it - the undo
+        # history's names the level and area it is showing, so it changes on
+        # every switch and a height saved under one would never be found again.
+        if key is not None:
+            host.setSectionKey(key)
+
         # `Preferred`, so the layout gives the host its size hint and no more.
         # `Expanding` - the default for a widget holding a scrolling list -
         # would let every host grow to fill the column, which is the splitter
@@ -1294,6 +1508,10 @@ class Sidebar(QtWidgets.QWidget):
         # slack holder, and `setSlackHolder` says so with layout stretch.
         host.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                            QtWidgets.QSizePolicy.Policy.Preferred)
+
+        # A height the user dragged this section to in an earlier session, or
+        # earlier in this one, wins over the configured default (D-d.3d).
+        self.applySectionHeight(host)
 
         if on_close is not None:
             host.closeRequested.connect(on_close)
@@ -1452,6 +1670,14 @@ class Sidebar(QtWidgets.QWidget):
             self._sections.pop(index)
             self._sectionContext.pop(host, None)
             self._sectionPinned.pop(host, None)
+
+            # Explicitly, since D-d.3d: a QSplitter dropped a child the moment
+            # it was unparented, but `SectionColumn` keeps its own ordered list
+            # and its grips, and neither notices a reparent. Left out, a closed
+            # section stayed in the column's idea of the stack and went on
+            # contributing its height to the scroll range.
+            self.sections.removeWidget(host)
+
             host.setParent(None)
             host.deleteLater()
 
@@ -1719,6 +1945,90 @@ class Sidebar(QtWidgets.QWidget):
 
     # -- remembering the layout ------------------------------------------
 
+    def saveSectionHeights(self):
+        """Remember what the user dragged each section to (D-d.3d).
+
+        **Keyed by title, not by position.** Sections come and go - the context
+        band replaces one with another every time the rail is clicked - so a
+        list of heights by index would hand the Directory Listing's height to
+        whatever happened to be in slot 1 next launch.
+
+        Only *dragged* heights are written. A section still at its configured
+        default has nothing worth remembering, and writing it would freeze the
+        default at whatever pixel value it resolved to on this screen - so
+        changing a percentage in the code would then have no effect on anyone
+        who had ever run the old one.
+
+        The splitter never saved these at all: `SidebarColumnSizes` is slice 3's
+        panel division, so a dragged column came back at its defaults on the
+        next launch. Zement asked for the grip back "which then also gets
+        remembered in settings.ini" - the remembering is new.
+        """
+        heights = dict(self._draggedHeights)
+
+        for host, _stretch in self._sections:
+            if host.wasDragged():
+                heights[host.sectionKey()] = int(host.height())
+
+        # Kept on the sidebar as well as in settings, so a section closed and
+        # re-opened within one run comes back at the height the user gave it
+        # rather than only across a restart.
+        self._draggedHeights = heights
+
+        if heights:
+            # `Title=300|Other=150`, not the dict itself. QSettings round-trips
+            # a dict as an opaque `@Variant(\0\0\0\b...)` blob, which would
+            # break the rule saveLayout states a few lines down and follows
+            # everywhere else: "stored as plain lists rather than Qt's opaque
+            # saveState blobs, so a settings file stays readable and a bad value
+            # can be corrected by hand". Zement edits these by hand, which is
+            # how this feature was asked for in the first place.
+            setSetting('SidebarSectionHeights', '|'.join(
+                '%s=%d' % (title, height)
+                for title, height in sorted(heights.items())))
+
+    def restoreSectionHeights(self):
+        """Read back what ``saveSectionHeights`` wrote."""
+        stored = setting('SidebarSectionHeights', None)
+
+        if isinstance(stored, str):
+            pairs = []
+            for chunk in stored.split('|'):
+                title, _sep, height = chunk.rpartition('=')
+                # rpartition, not partition: a section title may contain '=',
+                # and the height never does.
+                if title:
+                    pairs.append((title, height))
+        elif isinstance(stored, dict):
+            # A settings file written by the first build of this feature, which
+            # stored the dict directly. Read, then replaced by a readable string
+            # on the next save - no migration step needed.
+            pairs = list(stored.items())
+        else:
+            return
+
+        clean = {}
+        for title, height in pairs:
+            try:
+                value = int(height)
+            except (TypeError, ValueError):
+                continue
+
+            # A height taller than any sidebar is a settings file written on a
+            # much bigger screen, or edited by hand into nonsense. Dropped
+            # rather than clamped: the configured default is a better answer
+            # than an arbitrary ceiling.
+            if 0 < value <= 4000:
+                clean[str(title).strip()] = value
+
+        self._draggedHeights = clean
+
+    def applySectionHeight(self, host):
+        """Give ``host`` its remembered height, if it has one."""
+        height = self._draggedHeights.get(host.sectionKey())
+        if height:
+            host.setDraggedHeight(height)
+
     def saveLayout(self):
         """Write the sidebar's own splitter positions to settings.
 
@@ -1761,6 +2071,8 @@ class Sidebar(QtWidgets.QWidget):
 
         if slice_two > 0:
             setSetting('SidebarSliceTwoWidth', slice_two)
+
+        self.saveSectionHeights()
 
         window = self.win
         splitter = getattr(window, 'centralSplitter', None)
@@ -1972,6 +2284,9 @@ class Sidebar(QtWidgets.QWidget):
         trusted: a sidebar sized on a 4K screen must not be restored onto a
         laptop as a sidebar wider than the window.
         """
+        # First, so a section restored below already has its remembered height.
+        self.restoreSectionHeights()
+
         sizes = setting('SidebarColumnSizes', None)
         if sizes:
             try:

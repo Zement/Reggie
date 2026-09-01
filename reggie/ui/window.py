@@ -103,12 +103,38 @@ from reggie.ui.tabs import MasterTabWidget
 from reggie.ui.sidebar import Percent
 from reggie.ui.unsavedlist import dirty_entries, dirty_paths
 
-#: The undo history section's starting and maximum heights, as percentages of
-#: the sidebar (Zement, 2026-08-30). Relative rather than absolute because 400px
-#: was chosen on one machine and came out at 40% of a shorter sidebar - the same
-#: reasoning that put the level overview's size behind a percentage in D-c.4.
-#: Over 100 is allowed and means "taller than the sidebar", which scrolls.
-UNDO_SECTION_DEFAULT_HEIGHT = Percent(15)
+#: Every slice-2 section's starting height, as a percentage of the sidebar
+#: (Zement, 2026-09-01 - the numbers are his). Relative rather than absolute
+#: because 400px was chosen on one machine and came out at 40% of a shorter
+#: sidebar, the same reasoning that put the level overview's size behind a
+#: percentage in D-c.4.
+#:
+#: They deliberately add up to more than 100: the column scrolls since D-d.3d,
+#: so "70 + 25 + 50" means the stack is taller than the sidebar and the user
+#: scrolls it, not that everything is squeezed to fit.
+#:
+#: **In one place because they were in none.** Game Patches, the Directory
+#: Listing and Help had no default height at all before D-d.3d - they took
+#: whatever their contents asked for - so there was nothing to find and nothing
+#: to change (Zement: "I was unable to find them in the code, as I would have
+#: liked modifying them directly").
+SECTION_DEFAULT_HEIGHTS = {
+    'patches': Percent(50),
+    'directory': Percent(70),
+    'undo': Percent(25),
+    'help': Percent(40),
+    # Unchanged: this one is a short list of rows, not a view, and 120px is
+    # about four of them (Zement).
+    'unsaved': 120,
+
+    # Not built yet, listed so the next person adding one has a number rather
+    # than a decision (Zement, 2026-09-01).
+    'logs': Percent(40),
+    'collab': Percent(40),
+    'puzzle': Percent(70),
+}
+
+UNDO_SECTION_DEFAULT_HEIGHT = SECTION_DEFAULT_HEIGHTS['undo']
 UNDO_SECTION_MAX_HEIGHT = Percent(75)
 
 from reggie.ui import tooltabs
@@ -1378,6 +1404,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
             # more of what the user came for - the same reasoning that gives the
             # palette its stretch in slice 3.
             stretch=1,
+            default_height=SECTION_DEFAULT_HEIGHTS['directory'],
             on_close=self._closeDirectoryListing,
             context=True)
 
@@ -1512,6 +1539,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
             globals_.trans.string('MenuItems', 142),
             self.patchListWidget,
             stretch=1,
+            default_height=SECTION_DEFAULT_HEIGHTS['patches'],
             on_close=self._closeGamePatches,
             context=True)
 
@@ -1566,6 +1594,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
             globals_.trans.string('MenuItems', 88),
             self.helpTreeWidget,
             stretch=1,
+            default_height=SECTION_DEFAULT_HEIGHTS['help'],
             on_close=self._closeHelpSection,
             context=True)
 
@@ -1685,7 +1714,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 # height: it claims no share of the leftover space, and asks
                 # for enough room to read a few rows.
                 stretch=0,
-                default_height=120,
+                default_height=SECTION_DEFAULT_HEIGHTS['unsaved'],
                 # No X. Every other section is something the user opened, so
                 # closing it is undoing that; this one is not - it is the
                 # editor reporting a state, and it goes on its own the moment
@@ -2102,7 +2131,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
             # the user can drag away from, not a rule; the maximum stops a long
             # history from taking the whole sidebar.
             default_height=UNDO_SECTION_DEFAULT_HEIGHT,
-            max_height=UNDO_SECTION_MAX_HEIGHT)
+            max_height=UNDO_SECTION_MAX_HEIGHT,
+            # An explicit key, because this section's *title* names the level
+            # and area it is showing and so changes on every switch - a dragged
+            # height saved under one would never be found again (D-d.3d).
+            key='Undo History')
 
         self._SyncUndoHistoryAction(True)
 
