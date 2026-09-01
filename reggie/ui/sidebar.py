@@ -648,6 +648,13 @@ class Sidebar(QtWidgets.QWidget):
         # the `_sections` tuples, so the many places that unpack
         # `(host, stretch)` keep working.
         self._sectionContext = {}
+
+        # host -> is it pinned above both bands (D-d.3c). Same reasoning, and
+        # deliberately a second dict rather than one three-valued field: a
+        # section is pinned *or* context *or* neither, but the two questions are
+        # asked in different places and merging them would make every reader
+        # decode an enum to ask one of them.
+        self._sectionPinned = {}
         self.pages.addWidget(self.sections)
 
         # Rail row -> page widget, and rail row -> callback. A row may have
@@ -1036,7 +1043,7 @@ class Sidebar(QtWidgets.QWidget):
 
     def addSection(self, title, widget, stretch=1, closable=True,
                    on_close=None, default_height=UNLIMITED,
-                   max_height=UNLIMITED, context=False):
+                   max_height=UNLIMITED, context=False, pinned=False):
         """Add a collapsible section to slice 2. Returns its ``SectionHost``.
 
         Sections stack vertically in a splitter, so several are visible at once
@@ -1060,6 +1067,15 @@ class Sidebar(QtWidgets.QWidget):
           and survive every context switch, including having no context section
           open at all. The undo history is the one today; logs and the collab
           chat are planned.
+
+        ``pinned`` puts the section above *both* kinds and keeps it there
+        (D-d.3c). It is a third thing again: not something the user picks, but
+        something that appears because the editor's state calls for it - the
+        unsaved-levels list is the one today. A pinned section cannot be
+        expressed as ``context=True``, because that would make it mutually
+        exclusive with the directory listing it is meant to sit above; nor as a
+        plain always-open one, because those stack *below* the context section,
+        and a later context section would push a pinned one down.
 
         This replaced an accidental split where Game Patches was a rail *page*
         (a `QStackedWidget` entry) while the tree and the undo history were
@@ -1088,16 +1104,23 @@ class Sidebar(QtWidgets.QWidget):
             host.closeRequested.connect(lambda: self.removeSection(host))
 
         self._sectionContext[host] = bool(context)
+        self._sectionPinned[host] = bool(pinned)
 
-        # Context-sensitive sections go to the top, always-open ones below in
-        # the order they arrived. Since there is at most one context section,
-        # index 0 is the whole of "the top".
-        if context:
-            self.sections.insertWidget(0, host)
-            self._sections.insert(0, (host, stretch))
+        # Three bands, top to bottom: pinned, context, always-open. Pinned and
+        # context each hold at most one section today, so "the top of my band"
+        # is found by counting the sections in the bands above it rather than
+        # by sorting - which also keeps the always-open ones in their arrival
+        # order, the property that makes the column stable to look at.
+        if pinned:
+            position = 0
+        elif context:
+            position = sum(1 for h, _s in self._sections
+                           if self._sectionPinned.get(h))
         else:
-            self.sections.addWidget(host)
-            self._sections.append((host, stretch))
+            position = len(self._sections)
+
+        self.sections.insertWidget(position, host)
+        self._sections.insert(position, (host, stretch))
 
         host.toggled.connect(lambda _on: self._applySectionStretch())
         self._applySectionStretch()
@@ -1223,6 +1246,7 @@ class Sidebar(QtWidgets.QWidget):
 
             self._sections.pop(index)
             self._sectionContext.pop(host, None)
+            self._sectionPinned.pop(host, None)
             host.setParent(None)
             host.deleteLater()
 

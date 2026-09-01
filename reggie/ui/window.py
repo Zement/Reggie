@@ -101,6 +101,7 @@ from reggie.ui.docks import DockBuilder
 from reggie.ui.level_io import LevelIO
 from reggie.ui.tabs import MasterTabWidget
 from reggie.ui.sidebar import Percent
+from reggie.ui.unsavedlist import dirty_entries, dirty_paths
 
 #: The undo history section's starting and maximum heights, as percentages of
 #: the sidebar (Zement, 2026-08-30). Relative rather than absolute because 400px
@@ -1073,6 +1074,18 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if tabs is not None:
             tabs.refreshTitles()
 
+        # And the unsaved-levels section (D-d.3c), which lists the same dirty
+        # state the tab markers show. Hooked here for the same reason: this is
+        # the one place the editor already calls whenever that state may have
+        # moved, so the section cannot drift out of step with the tabs beside
+        # it. Guarded because UpdateTitle runs long before the sidebar exists.
+        try:
+            self.RefreshUnsavedLevels()
+        except Exception:
+            # A stale list is worth living with; a title that cannot be set is
+            # not, and neither is a failed save whose UpdateTitle threw.
+            pass
+
     def CheckDirty(self):
         """
         Checks if the level is unsaved and attempts to save it if so.
@@ -1624,6 +1637,204 @@ class ReggieWindow(QtWidgets.QMainWindow):
             # A stale tree is worse than none, but neither is worth failing a
             # patch switch or a level load over.
             pass
+
+    # -- the unsaved-levels section (Block D-d, phase D-d.3c) ------------
+
+    def RefreshUnsavedLevels(self):
+        """Show, hide or refill the unsaved-levels section.
+
+        Driven from ``UpdateTitle``, which is already "what the editor calls
+        whenever the dirty state may have moved" - the same hook the tab labels'
+        dirty markers use, and for the same reason. So this runs constantly,
+        including on paths with no sidebar, no manager and no session: every
+        step below is guarded, and the whole thing is a no-op when there is
+        nothing to describe.
+
+        "Hidden entirely when nothing is unsaved" (§6.5) is implemented as
+        *absent*, not hidden: an empty section still costs a header and a
+        divider in a column the user is short of, and the section is cheap to
+        rebuild.
+        """
+        sidebar = getattr(self, 'sidebar', None)
+        if sidebar is None:
+            return None
+
+        widget = getattr(self, 'unsavedLevelsWidget', None)
+
+        # §6.5's rule 4. A client that may not save must not be shown a list of
+        # things it cannot do - the same answer CheckDirty gives when it
+        # declines to prompt a client about work that is the host's to keep.
+        # Note what this does NOT do: it does not show the *host's* list on the
+        # client. Nothing on the wire carries the host's dirty state, and
+        # inventing a message for it belongs with the end-of-D-d collab work.
+        wanted = self._maySaveInSession() and bool(dirty_paths())
+
+        if not wanted:
+            if widget is not None:
+                self._closeUnsavedLevels()
+            return None
+
+        if widget is None:
+            from reggie.ui.unsavedlist import UnsavedLevelsWidget
+
+            self.unsavedLevelsWidget = UnsavedLevelsWidget(self)
+            self.unsavedLevelsSection = sidebar.addSection(
+                globals_.trans.string('MenuItems', 154),
+                self.unsavedLevelsWidget,
+                # A short list that should not eat the directory listing's
+                # height: it claims no share of the leftover space, and asks
+                # for enough room to read a few rows.
+                stretch=0,
+                default_height=120,
+                # No X. Every other section is something the user opened, so
+                # closing it is undoing that; this one is not - it is the
+                # editor reporting a state, and it goes on its own the moment
+                # that state does.
+                #
+                # It was closable at first, and the suite caught what that
+                # meant: `SetDirty` returns early when the level is *already*
+                # dirty, so after closing it by hand the section would not come
+                # back until the set of dirty files changed - which may be
+                # after the next save, or never. A button whose effect the
+                # editor silently undoes at an unpredictable later moment is
+                # worse than no button.
+                closable=False,
+                pinned=True)
+        else:
+            widget.refresh()
+
+        return self.unsavedLevelsSection
+
+    def _closeUnsavedLevels(self):
+        """Take the unsaved-levels section out of slice 2 and forget it.
+
+        Reached from ``RefreshUnsavedLevels`` alone - when the last file is
+        saved, or when a collab session takes the save authority away. The
+        section has no X of its own (see there), so there is no by-hand route.
+
+        Nothing is captured on the way out, unlike the directory listing: this
+        widget's contents are derived wholly from the manager and rebuild
+        identically next time, so there is no browsing state to lose.
+        """
+        sidebar = getattr(self, 'sidebar', None)
+        if sidebar is None:
+            return
+
+        existing = sidebar.sectionFor(getattr(self, 'unsavedLevelsWidget', None))
+        if existing is not None:
+            sidebar.removeSection(existing)
+
+        self.unsavedLevelsWidget = None
+        self.unsavedLevelsSection = None
+
+    def SaveLevelFile(self, file_path, session=None):
+        """Save one open file, whichever tab is in front.
+
+        **Activate, then save.** ``HandleSave`` reads ``globals_.Level`` and
+        ``self.fileSavePath``, and since D-d.3b both resolve through the *active
+        session* - so calling it without activating first would save whatever
+        tab happens to be current, under the name of the one that was asked for.
+
+        Parameterising ``HandleSave`` with a path was the alternative and was
+        rejected: the compression, padding, autosave, undo-clear and collab
+        steps all read the active session too, so it would not be one parameter
+        but a second save path over a second source of truth - and a second save
+        path is how areas got dropped before D-b.
+
+        The visible cost is that saving an entry brings its tab to the front.
+        That is left visible on purpose: it is the honest reflection of an
+        editor whose save acts on the level in front, and it is what the user
+        would do by hand. Restoring the previous tab afterwards would make Save
+        All flicker through every dirty file and would hide which file was
+        actually written.
+
+        ``session`` names *which* level when the path cannot. A level that has
+        never been saved has no path, so two new levels both answer ``None``
+        and ``sessions_for(None)`` finds neither - unsaved handles are not in
+        `_handles`, which is keyed by path (D-d.3b). Without it a New Level
+        listed correctly and then could not be saved from the list at all, and
+        Save All gave up on it without touching the other files (measured
+        2026-09-01). For a file that *has* a path the session is redundant, and
+        the path still wins - a row may have been saved under a new name since
+        it was built.
+
+        Saving a pathless level lands in ``HandleSave``, which delegates to
+        Save As for exactly this case. So the user gets the file dialog, which
+        is the only possible answer to "save a level with no name".
+        """
+        manager = globals_.get_session_manager()
+        if manager is None:
+            return False
+
+        if file_path:
+            sessions = manager.sessions_for(file_path)
+        elif session is not None and session in manager.sessions:
+            sessions = [session]
+        else:
+            # No path and no session: nothing to identify a level by.
+            return False
+
+        if not sessions:
+            # Closed, or saved, between the list being built and the row being
+            # double-clicked. Nothing to save, and nothing to report.
+            return False
+
+        # Already in front? For a named file any session on it will do, since
+        # they share the level a save writes. For a pathless one, only the
+        # session itself identifies it - `file_path == file_path` would be
+        # `None == None`, which is true of every unsaved level.
+        active = manager.active
+        if file_path:
+            in_front = active is not None and active.file_path == file_path
+        else:
+            in_front = active in sessions
+
+        if not in_front and not self.ActivateSession(sessions[0]):
+            return False
+
+        return bool(self._levelio.HandleSave())
+
+    def SaveAllDirtyLevels(self):
+        """Save every open file with unsaved work. Returns whether all of them
+        were written.
+
+        **The active file is saved last** when it is among the dirty ones, so
+        the user ends on the tab they started on. Saving in ``dirty_files()``
+        order would leave them on whichever file sorted last, which is an
+        arbitrary place to be put by a button that says "Save All".
+
+        Stops at the first failure rather than pressing on: a save that fails
+        has already shown the user a dialog, and continuing would stack more of
+        them on top of a question they have not answered. A new level counts
+        here: it reaches Save As, and cancelling that dialog is a refusal like
+        any other.
+
+        Works on ``(path, session)`` pairs rather than paths for the reason
+        ``SaveLevelFile`` takes a session - an unsaved level has no path to
+        name it by.
+        """
+        entries = dirty_entries()
+        if not entries:
+            return True
+
+        manager = globals_.get_session_manager()
+        active = manager.active if manager is not None else None
+
+        if active is not None:
+            handle = getattr(active, 'handle', None)
+            # By handle rather than by path, so an unsaved level in front is
+            # recognised as the active one too.
+            rest = [e for e in entries
+                    if getattr(e[1], 'handle', None) is not handle]
+            mine = [e for e in entries
+                    if getattr(e[1], 'handle', None) is handle]
+            entries = rest + mine
+
+        for path, session in entries:
+            if not self.SaveLevelFile(path, session):
+                return False
+
+        return True
 
     def HandleShowUndoHistory(self, checked=None):
         """

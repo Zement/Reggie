@@ -583,6 +583,11 @@ class ReggieTranslation:
                 149: 'Slot [num]: (none)',
                 150: 'Group unlisted levels',
                 151: 'Off: one flat, sorted list of every level file, ignoring the categories in levelnames.xml. On: levels the catalog does not name are collected under "Unlisted".',
+                # The unsaved-levels list (Block D-d, phase D-d.3c).
+                152: 'Save All',
+                153: 'Levels with unsaved changes. Double-click one to save it.',
+                154: 'Unsaved Levels',
+                155: 'Never saved - saving asks for a file name.',
             },
             'Objects': {
                 0: '[b]Tileset [tileset], object [obj]:[/b][br][width]x[height] on layer [layer]',
