@@ -86,10 +86,20 @@ class LevelIO:
 
     def HandleNewLevel(self):
         """
-        Create a new level
+        Create a new level, in a tab of its own.
+
+        **Additive since D-d.3b** (Zement, 2026-09-01: "with the tree design,
+        it might be better now to simply leave the active level untouched, and
+        create a new tab with the new level"). It replaced everything before,
+        which is what File -> New means in a single-document editor and stopped
+        being the right answer when the editor gained tabs: a new level is
+        something you want *as well as* what you have open, not instead of it.
+
+        No CheckDirty either, and for the same reason the tree's open path has
+        none: it asks whether unsaved work stands in the way of *replacing* the
+        workspace, and nothing is being replaced.
         """
-        if self.win.CheckDirty(): return
-        self.win.LoadLevel(None, False, 1)
+        self.win.LoadLevel(None, False, 1, add=True)
     def HandleOpenFromName(self):
         """
         Open a level using the level picker
@@ -590,7 +600,7 @@ class LevelIO:
 
         # Load the actual level
         if new:
-            self.win.newLevel()
+            self.win.newLevel(add=add)
         elif not same:
             # `name` rather than win.fileSavePath, for the reason above: the
             # session that would answer for this file does not exist yet.
@@ -678,7 +688,22 @@ class LevelIO:
         self.win.levelOverview.update()
 
         if new:
-            SetDirty()
+            # Deliberately *not* SetDirty() any more (Zement, 2026-09-01: "a new
+            # level should not open as [Unsaved], this is not needed for a new
+            # level").
+            #
+            # It marked a brand-new level dirty the moment it appeared, which
+            # predates the fork and had a defensible reading - an unsaved level
+            # is unsaved. But "dirty" in this editor means *edited since the
+            # last save*, and it drives the `*` on the tab, the title marker and
+            # the "save your work?" prompt. A level nobody has touched yet has
+            # nothing to lose, so all three were noise: the marker was on before
+            # any edit, and closing an untouched new level asked a question with
+            # no real answer.
+            #
+            # The first actual edit calls SetDirty through the undo stack like
+            # every other change, so nothing is lost by not pre-empting it.
+            pass
 
         elif not same:
             # Add the path to Recent Files
@@ -722,18 +747,34 @@ class LevelIO:
             controller.notifyLevelChanged()
         except Exception:
             pass
-    def newLevel(self):
-        # Create the new level object, and the session that owns it. Opening
-        # the session first means globals_.Level resolves while new() runs.
-        level = Level_NSMBW()
-
+    def newLevel(self, add=False):
         # `_fileSavePath`, not the property (D-d.3b). LoadLevel has already set
         # it to None for a new level, but the property resolves through the
         # *active* session - which is still the previous file until this call
         # replaces it. Reading the property here gave the new empty level the
         # old level's path, so it was no longer "untitled" and a later load of
         # that same path took the cheap area-change route instead of reloading.
-        session.open_level(level, self.win._fileSavePath, 1)
+        path = self.win._fileSavePath
+
+        if add:
+            # Session first, then the level - the same ordering LoadLevel_NSMBW
+            # uses when adding, and for the same reason: Level_NSMBW() runs
+            # new(), which publishes its default area through set_current_area,
+            # and that writes to whichever session is *active*. Constructing
+            # first would stamp the new level's area 1 over the tab the user
+            # was on.
+            session.add_level(None, path, 1)
+            level = Level_NSMBW()
+
+            manager = globals_.get_session_manager()
+            if manager is not None and manager.active is not None:
+                manager.active.handle.level = level
+        else:
+            # Create the new level object, and the session that owns it.
+            # Opening the session first means globals_.Level resolves while
+            # new() runs.
+            level = Level_NSMBW()
+            session.open_level(level, path, 1)
 
         # Load it
         level.new()

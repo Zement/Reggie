@@ -2542,8 +2542,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
     def LoadLevel(self, name, isFullPath, areaNum, add=False):
         return self._levelio.LoadLevel(name, isFullPath, areaNum, add=add)
 
-    def newLevel(self):
-        return self._levelio.newLevel()
+    def newLevel(self, add=False):
+        return self._levelio.newLevel(add=add)
 
     def LoadLevel_NSMBW(self, levelData, areaNum, add=False, file_path=None):
         return self._levelio.LoadLevel_NSMBW(levelData, areaNum, add=add,

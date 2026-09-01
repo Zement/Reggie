@@ -632,15 +632,33 @@ class SessionManager:
         handles' worth of undo history, and picking one to discard would throw
         away a user's edits without asking. The caller is better placed to
         decide - it knows whether the write actually happened.
-        """
-        if not old_path or not new_path or old_path == new_path:
-            return False
 
-        handle = self._handles.get(old_path)
-        if handle is None:
+        Also handles the case that is not really a rename: an **unsaved level
+        being saved for the first time**. Those have no ``_handles`` entry at
+        all, because None is not a path and two unsaved levels are two
+        different levels (see :meth:`open`) - so there is nothing to move, only
+        a handle to register under the name it has just been given. Passing
+        ``old_path=None`` asks for exactly that, against the active session.
+        """
+        if not new_path or old_path == new_path:
             return False
 
         if new_path in self._handles:
+            return False
+
+        # A first save: adopt the active session's handle under its new name.
+        if not old_path:
+            session = self._active
+            handle = session.handle if session is not None else None
+            if handle is None or handle.file_path is not None:
+                return False
+
+            handle.file_path = new_path
+            self._handles[new_path] = handle
+            return True
+
+        handle = self._handles.get(old_path)
+        if handle is None:
             return False
 
         del self._handles[old_path]
@@ -648,22 +666,60 @@ class SessionManager:
         self._handles[new_path] = handle
         return True
 
+    def _unsavedHandles(self):
+        """Handles for levels with no path yet - not in ``_handles``.
+
+        They are reached through the sessions holding them, which is the only
+        place they are recorded: `_handles` is keyed by path, and these have
+        none. Deliberately not a second registry - one would have to be kept in
+        step with session lifetimes, and a stale entry there would hand a new
+        level a handle whose level is gone.
+        """
+        seen = []
+        for session in self._sessions:
+            handle = session.handle
+            if handle.file_path is None and handle not in seen:
+                seen.append(handle)
+        return seen
+
     def open(self, level, file_path, area, area_num, activate=True):
         """Open an area as a new session, sharing the level if already open.
 
         Returns the existing session if this exact area is already open, so
         callers can use this as "show me this area" without checking first.
-        """
-        existing = self.find(file_path, area_num)
-        if existing is not None:
-            if activate:
-                self.activate(existing)
-            return existing
 
-        handle = self._handles.get(file_path)
+        **A ``file_path`` of None is not an identity** (D-d.3b). It means "not
+        saved anywhere yet", and two unsaved levels are two different levels -
+        so they must not share a handle the way two areas of one file do. With
+        the path as the key they collided: a second File -> New found the first
+        new level's handle and re-activated its tab instead of making one.
+
+        For an unsaved level the identity is therefore the **level object**.
+        Two areas of one unsaved level still share their handle - they are one
+        level, and `Level_NSMBW.save()` serialises every area in one pass, so
+        two handles over them would be two ideas of the same file.
+        """
+        if file_path is not None:
+            existing = self.find(file_path, area_num)
+            if existing is not None:
+                if activate:
+                    self.activate(existing)
+                return existing
+
+        if file_path is not None:
+            handle = self._handles.get(file_path)
+        else:
+            # Unsaved: match on the level object rather than on the path they
+            # all share (None). Without this, opening area 2 of a new level
+            # built it a second handle - and saving would then write one
+            # handle's idea of the file over the other's.
+            handle = next((h for h in self._unsavedHandles()
+                           if level is not None and h.level is level), None)
+
         if handle is None:
             handle = LevelHandle(level, file_path)
-            self._handles[file_path] = handle
+            if file_path is not None:
+                self._handles[file_path] = handle
 
         session = EditorSession(handle, area, area_num)
         self._sessions.append(session)
