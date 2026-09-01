@@ -403,9 +403,14 @@ class LevelIO:
         Save a level back to the archive, with a new filename, but does not store this filename
         """
         self.win.HandleSaveAs(True)
-    def LoadLevel(self, name, isFullPath, areaNum):
+    def LoadLevel(self, name, isFullPath, areaNum, add=False):
         """
         Load a level from NSMBW into the editor.
+
+        ``add`` opens the level **alongside** whatever is already open rather
+        than replacing it (D-d.3b). The directory listing passes it; every
+        other caller replaces, which is what File -> Open, New Level and a
+        patch switch all mean.
         """
         new = name is None
         same = False
@@ -437,7 +442,40 @@ class LevelIO:
             # fileSavePath survives every session being closed, so on its own it
             # would send a genuine re-open down the area-change branch, where
             # globals_.Level is None and there is nothing to change the area of.
-            same = (name == self.win.fileSavePath
+            #
+            # What "same" has to mean is *"is this file the one currently in
+            # front, with its level still loaded"* - because the branch it
+            # guards changes area within `globals_.Level`, and that is the
+            # active session's level.
+            #
+            # Both halves matter since D-d.3b, and each has drawn blood:
+            #
+            # - Comparing against `win.fileSavePath` (a property resolving
+            #   through the process-wide manager) let a *second* ReggieWindow
+            #   booting while the first one's sessions were open read the first
+            #   window's path, take this branch, and rebuild its palette from
+            #   the other window's scene items - "wrapped C/C++ object of type
+            #   ObjectItem has been deleted".
+            # - Comparing against `win._fileSavePath` alone is stale the other
+            #   way: activation moves the file in front without assigning it,
+            #   so opening a *different* file after switching tabs took this
+            #   branch and changed the area of whatever was active instead.
+            #
+            # Asking the active session is the question itself, with no cached
+            # answer to go stale. Falls back to the window's own value when
+            # there is no manager, which is how the pre-session path runs.
+            # The second-window case needs one more condition: the manager is
+            # process-wide, so a window that has not loaded anything yet must
+            # not adopt another window's session. `_fileSavePath` is per window
+            # and is None until this window loads something, which is exactly
+            # that test.
+            manager = globals_.get_session_manager()
+            active = manager.active if manager is not None else None
+            current_path = (active.file_path if active is not None
+                            else self.win._fileSavePath)
+
+            same = (name == current_path
+                    and self.win._fileSavePath is not None
                     and getattr(globals_, 'Level', None) is not None)
             
             # If we just discarded changes, force a full reload even if it's the same level
@@ -456,15 +494,21 @@ class LevelIO:
             # Get the data
             if not globals_.RestoredFromAutoSave:
 
-                # Set the filepath variables
+                # Set the filepath variables.
+                #
+                # Read back from `name`, not from `win.fileSavePath` (D-d.3b).
+                # That is a property resolving through the *active* session now,
+                # and the session for this file does not exist yet - so until it
+                # does, reading it answers with the file this load is replacing
+                # or joining, and this block would open the wrong archive.
                 self.win.fileSavePath = name
                 if globals_.UseFullFilepath:
-                    self.win.fileTitle = self.win.fileSavePath
+                    self.win.fileTitle = name
                 else:
-                    self.win.fileTitle = os.path.basename(self.win.fileSavePath)
+                    self.win.fileTitle = os.path.basename(name)
 
                 # Open the file
-                with open(self.win.fileSavePath, 'rb') as fileobj:
+                with open(name, 'rb') as fileobj:
                     levelData = fileobj.read()
 
                 # Decompress, if needed
@@ -508,14 +552,25 @@ class LevelIO:
         globals_.DirtyOverride += 1
 
         # First, clear out the existing level.
-        self.win.scene.clearSelection()
-        self.win.CurrentSelection = []
-        self.win.scene.clear()
+        #
+        # **Not when adding a file** (D-d.3b). Since D-c.1 each session owns its
+        # scene, so `win.scene` is the *active* session's - and while this was
+        # only ever reached after close_all() had emptied the manager, the scene
+        # being cleared was about to be discarded anyway. Adding a second file
+        # makes that no longer true: clearing here would destroy the first
+        # file's items while its sessions are still live, which is the "wrapped
+        # C/C++ object of type ObjectItem has been deleted" crash by another
+        # route. The new session arrives with an empty scene of its own, so
+        # there is nothing to clear for it either.
+        if not add:
+            self.win.scene.clearSelection()
+            self.win.CurrentSelection = []
+            self.win.scene.clear()
 
-        # Clear out all level-thing lists
-        for thingList in (self.win.spriteList, self.win.entranceList, self.win.locationList, self.win.pathList, self.win.commentList):
-            thingList.clear()
-            thingList.selectionModel().setCurrentIndex(QtCore.QModelIndex(), QtCore.QItemSelectionModel.SelectionFlag.Clear)
+            # Clear out all level-thing lists
+            for thingList in (self.win.spriteList, self.win.entranceList, self.win.locationList, self.win.pathList, self.win.commentList):
+                thingList.clear()
+                thingList.selectionModel().setCurrentIndex(QtCore.QModelIndex(), QtCore.QItemSelectionModel.SelectionFlag.Clear)
 
         # Reset these here, because if they are set after
         # creating the objects, they use the old values.
@@ -537,7 +592,10 @@ class LevelIO:
         if new:
             self.win.newLevel()
         elif not same:
-            self.win.LoadLevel_NSMBW(levelData, areaNum)
+            # `name` rather than win.fileSavePath, for the reason above: the
+            # session that would answer for this file does not exist yet.
+            self.win.LoadLevel_NSMBW(levelData, areaNum, add=add,
+                                     file_path=name if not new else None)
         else:
             # We have already loaded this area's data - it's stored as
             # AbstractAreas in the Level. This means we do not have to open and
@@ -668,7 +726,14 @@ class LevelIO:
         # Create the new level object, and the session that owns it. Opening
         # the session first means globals_.Level resolves while new() runs.
         level = Level_NSMBW()
-        session.open_level(level, self.win.fileSavePath, 1)
+
+        # `_fileSavePath`, not the property (D-d.3b). LoadLevel has already set
+        # it to None for a new level, but the property resolves through the
+        # *active* session - which is still the previous file until this call
+        # replaces it. Reading the property here gave the new empty level the
+        # old level's path, so it was no longer "untitled" and a later load of
+        # that same path took the cheap area-change route instead of reloading.
+        session.open_level(level, self.win._fileSavePath, 1)
 
         # Load it
         level.new()
@@ -693,14 +758,46 @@ class LevelIO:
                 self.win.qpt_palette.reset()
             except Exception as e:
                 print(f"[QPT] Warning: Could not reset QPT: {e}")
-    def LoadLevel_NSMBW(self, levelData, areaNum):
+    def LoadLevel_NSMBW(self, levelData, areaNum, add=False, file_path=None):
         """
         Performs all level-loading tasks specific to New Super Mario Bros. Wii levels.
         Do not call this directly - use LoadLevel instead!
+
+        ``add`` opens the level alongside what is open rather than replacing it
+        (D-d.3b). ``file_path`` names the file being loaded; it must be passed
+        when adding, because `win.fileSavePath` is now a property resolving
+        through the *active* session - which is still the previous file until
+        the new session exists.
         """
-        # Create the new level object, and the session that owns it
-        level = Level_NSMBW()
-        session.open_level(level, self.win.fileSavePath, areaNum)
+        path = self.win.fileSavePath if file_path is None else file_path
+
+        if add:
+            # **The session first, then the level** (D-d.3b).
+            #
+            # `Level_NSMBW()` runs new(), which publishes its default area
+            # through `set_current_area` - and that writes to whichever session
+            # is *active*. With open_level that was harmless: close_all() had
+            # already emptied the manager, so there was nothing to write over.
+            # Adding a file leaves the previous session active, so constructing
+            # the level first stamped area 1 over it - measured: two tabs both
+            # claiming "01-01: 1" after opening a second file, when one of them
+            # was area 2.
+            #
+            # Opening an empty session first gives those writes somewhere of
+            # their own to land. The same ordering `open_area` uses, for the
+            # same reason.
+            session.add_level(None, path, areaNum)
+            level = Level_NSMBW()
+
+            # The session was opened with no level, because the level could not
+            # exist yet. Bind them now that it does.
+            manager = globals_.get_session_manager()
+            if manager is not None and manager.active is not None:
+                manager.active.handle.level = level
+        else:
+            # Create the new level object, and the session that owns it
+            level = Level_NSMBW()
+            session.open_level(level, path, areaNum)
 
         # Load it
         if not level.load(levelData, areaNum):

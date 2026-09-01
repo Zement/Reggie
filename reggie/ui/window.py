@@ -228,6 +228,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # before the first level is opened - the window exists and is shown well
         # before any session does, and ~87 call sites read mainWindow.scene /
         # .view without checking.
+        # The same idea for the open file's path, and for the same reason it is
+        # needed early: `fileSavePath` is a property since D-d.3b, and it is
+        # read before any session exists.
+        self._fileSavePath = None
+
         self._fallbackScene = LevelScene(0, 0, 1024 * 24, 512 * 24, self)
         self._fallbackScene.setItemIndexMethod(QtWidgets.QGraphicsScene.ItemIndexMethod.NoIndex)
         self._fallbackScene.selectionChanged.connect(self.ChangeSelectionHandler)
@@ -465,6 +470,43 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """The active session, or None before one exists."""
         manager = globals_.get_session_manager()
         return manager.active if manager is not None else None
+
+    @property
+    def fileSavePath(self):
+        """The path of the file in front (D-d.3b).
+
+        A plain attribute until several files could be open at once, at which
+        point it stopped being merely a duplicate of the handle's path and
+        started being *wrong*: it named one file while the editor held several.
+        All ~50 read sites mean "the file in front", which is what this returns.
+
+        The duplication was already dangerous with one file. In D-d.3 a rename
+        applied to the manager but not to this attribute made the two disagree,
+        and re-opening the file then found no handle, loaded it again, and built
+        fresh scene items over a level whose old ones were still live - "wrapped
+        C/C++ object of type ObjectItem has been deleted". Resolving through the
+        session removes the second copy rather than keeping them in step.
+
+        Falls back to the window-owned value when there is no session: a new
+        unsaved level, boot before the first load, and the headless suites.
+        """
+        session = self._activeSession()
+        if session is None:
+            return self._fileSavePath
+        return session.file_path
+
+    @fileSavePath.setter
+    def fileSavePath(self, value):
+        # Only the fallback. Deliberately **not** a rename of the active
+        # session's handle, tempting as that is: assigning this does not always
+        # mean "the open file moved". `LoadLevel` assigns it while naming a file
+        # it is *about* to open, before that file's session exists - so a
+        # setter that renamed would re-key the previous file's handle to the
+        # incoming path and lose both.
+        #
+        # Save As is the one case that does mean a rename, and it says so, by
+        # calling `_RebindSessionsTo` explicitly after the write.
+        self._fileSavePath = value
 
     @property
     def ZoomLevel(self):
@@ -1421,11 +1463,16 @@ class ReggieWindow(QtWidgets.QMainWindow):
             if self.fileSavePath == file_path:
                 return bool(self.SwitchToArea(area_num))
 
-        # Case 3: not open at all.
-        if self.CheckDirty():
-            return False
-
-        return bool(self.LoadLevel(file_path, True, area_num))
+        # Case 3: not open at all - so open it *alongside* what is already
+        # there (D-d.3b). This is what the tree is for: "opening areas from
+        # different levels simultaneously is of course one of the main features
+        # we wanted to implement with the tree view" (Zement, 2026-09-01).
+        #
+        # No CheckDirty here, and that is the point rather than an omission.
+        # It asks "does unsaved work stand in the way of *replacing* what is
+        # open" - and nothing is being replaced. The other file stays open,
+        # with its edits, in its own tab.
+        return bool(self.LoadLevel(file_path, True, area_num, add=True))
 
     def ShowGamePatches(self):
         """Put the installed-patch list into sidebar slice 2 (D-d.2c).
@@ -2492,14 +2539,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
     def HandleSaveCopyAs(self):
         return self._levelio.HandleSaveCopyAs()
 
-    def LoadLevel(self, name, isFullPath, areaNum):
-        return self._levelio.LoadLevel(name, isFullPath, areaNum)
+    def LoadLevel(self, name, isFullPath, areaNum, add=False):
+        return self._levelio.LoadLevel(name, isFullPath, areaNum, add=add)
 
     def newLevel(self):
         return self._levelio.newLevel()
 
-    def LoadLevel_NSMBW(self, levelData, areaNum):
-        return self._levelio.LoadLevel_NSMBW(levelData, areaNum)
+    def LoadLevel_NSMBW(self, levelData, areaNum, add=False, file_path=None):
+        return self._levelio.LoadLevel_NSMBW(levelData, areaNum, add=add,
+                                             file_path=file_path)
 
     def HandleExit(self):
         """

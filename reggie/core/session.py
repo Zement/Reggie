@@ -36,32 +36,65 @@ def _globals():
 def open_level(level, file_path, area_num=1):
     """Replace the editor's open level with ``level``, as a session.
 
-    Closes every open session and opens one on the new level. That is still the
-    right behaviour after phase D-4: this is reached only when a *new*
-    ``Level_NSMBW`` has been constructed - a new level, or a file read from disk
-    - and every session open against the previous level refers to areas of a
-    level object that is being replaced wholesale.
+    Closes every open session and opens one on the new level. That is what
+    "open a level" means for New Level, a patch switch and File -> Open: the
+    workspace is replaced.
 
     Moving between areas of the level already open does not come through here;
     it goes to :func:`open_area`, which adds a session rather than replacing
-    them. Opening several *files* at once is the UI block's concern, since it
-    needs somewhere to show them.
+    them. Opening a *second file* alongside this one goes to :func:`add_level`.
 
     Returns the new session, or None when no manager is installed - the
     headless suites construct levels with no editor around them.
     """
+    return _open(level, file_path, area_num, replace=True)
+
+
+def add_level(level, file_path, area_num=1):
+    """Open ``level`` *alongside* whatever is already open (D-d.3b).
+
+    The counterpart to :func:`open_level` for a second file. The directory
+    listing is its caller and, for now, its only one - which is deliberate:
+    opening several files belongs to the UI that can show several, and leaves
+    File -> Open behaving the way a file menu behaves.
+
+    This was always the intent. `_handles` is keyed by path and has been a dict
+    since D-b.2, so the model could hold several files from the start; the one
+    thing preventing it was ``open_level`` closing everything, whose docstring
+    said the rest: "opening several files at once is the UI block's concern,
+    since it needs somewhere to show them." D-c built the tab bar and D-d.3
+    built the way to ask, so the premise expired and nothing had claimed the
+    job (Zement, 2026-09-01: "it opens that area, but *closes* all others from
+    the previous level").
+
+    Separate verbs rather than a ``replace=`` flag, so each caller states its
+    intent at the call site. A default would let existing callers keep the
+    destructive behaviour by omission, which is how a flag comes to mean
+    nothing.
+    """
+    return _open(level, file_path, area_num, replace=False)
+
+
+def _open(level, file_path, area_num, replace):
     from reggie.core import globals_
 
     manager = globals_.get_session_manager()
     if manager is None:
         return None
 
-    manager.close_all()
+    if replace:
+        manager.close_all()
 
     # `level.areas` may still be empty here: Level_NSMBW.__init__ runs new()
     # before any area is populated, and load() fills them in afterwards. The
     # area is attached by set_current_area as loading proceeds.
-    area = level.areas[area_num - 1] if len(level.areas) >= area_num else None
+    #
+    # `level` may also be None: adding a file opens the session *before*
+    # constructing the level, so the level's own construction has a session of
+    # its own to publish into rather than stamping over the previous one
+    # (D-d.3b). The caller binds it as soon as it exists.
+    areas = getattr(level, 'areas', None) or ()
+    area = areas[area_num - 1] if len(areas) >= area_num else None
 
     return manager.open(level, file_path, area, area_num)
 
