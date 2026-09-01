@@ -1306,6 +1306,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         from reggie.ui.leveltree import LevelTreeWidget
 
         self.levelTreeWidget = LevelTreeWidget(self)
+        self.levelTreeWidget.activated.connect(self.HandleTreeActivated)
 
         # Put back what the last one had open. A context section is destroyed
         # when the user switches to another, so without this the tree comes
@@ -1326,6 +1327,105 @@ class ReggieWindow(QtWidgets.QMainWindow):
             context=True)
 
         return self.levelTreeSection
+
+    def HandleTreeActivated(self, index):
+        """Open what was activated in the directory listing (Block D-d.3).
+
+        The tree's five node kinds divide into three answers:
+
+        - **area** - open or raise that area of that file.
+        - **level** - the same for area 1, which is what the old level picker
+          did and what activating a level has always meant.
+        - **patch, category, tileset** - nothing. A category is a heading, and
+          a tileset slot names a file this editor does not edit (that is Block
+          G's Puzzle Next). Expanding them is what they are for, and the view
+          already does that on its own.
+        """
+        if index is None or not index.isValid():
+            return False
+
+        from reggie.ui.leveltree import AREA, LEVEL
+
+        node = index.internalPointer()
+        if node is None or node.kind not in (LEVEL, AREA):
+            return False
+
+        area_num = node.area_num if node.kind == AREA else 1
+        return self.OpenLevelFromTree(node.file_path, node.file_name, area_num)
+
+    def OpenLevelFromTree(self, file_path, file_name, area_num=1):
+        """Open a file and area, reusing whatever is already open.
+
+        Split out from ``HandleTreeActivated`` so the work can be driven
+        without a QModelIndex - by a test, and by D-d.4's dialogs.
+
+        Three cases, cheapest first, matching plan §3.3:
+
+        1. that area is already open        -> activate its session
+        2. the file is open at another area -> ``SwitchToArea``, which adds a
+           session on the same ``LevelHandle``
+        3. the file is not open             -> ``LoadLevel``
+
+        **The collab hook is asked first, in every case that changes what this
+        editor shows.** A client proposes and the host's broadcast performs the
+        load; outside a session the hook returns True immediately. This is the
+        one guard that keeps a client from desynchronising, and a second load
+        path that skipped it would reintroduce the bug C-B3 phase 3d fixed -
+        which is exactly the risk a *new* way to open levels creates.
+        """
+        if not file_path:
+            return False
+
+        manager = globals_.get_session_manager()
+
+        # Case 1: already open at that area. Raising an existing tab shows the
+        # user's own unsaved work; re-loading would discard it, and there is
+        # nothing to propose because nothing about the session changes except
+        # which tab is in front.
+        if manager is not None:
+            existing = manager.find(file_path, area_num)
+            if existing is not None:
+                return bool(self.ActivateSession(existing))
+
+        # The wire carries level *names*, never paths - peers resolve them
+        # against their own stage folder - so the proposal is named from the
+        # node rather than from the path that follows it.
+        level_name = file_name or ''
+
+        if not self._levelio._ProposeCollabSwitch(level_name, area_num):
+            # A client whose host has not agreed. The host's broadcast will
+            # perform the load if it does agree, so there is nothing to do here
+            # but stop.
+            return False
+
+        # Case 2: this file is open, another area of it. Adding a session on
+        # the shared handle rather than re-reading the archive is what keeps
+        # the other areas' unsaved edits alive (phase D-4).
+        open_sessions = manager.sessions_for(file_path) if manager else []
+
+        if open_sessions:
+            if self.fileSavePath == file_path:
+                return bool(self.SwitchToArea(area_num))
+
+            # Open, but not as the file in front - so `SwitchToArea`, which
+            # works on whatever is active, would open an area of the wrong
+            # level. Activate one of this file's own sessions first; that puts
+            # its path in front, and the area switch is then a switch within
+            # the right file.
+            #
+            # Reloading instead is what the first version did, and it is not
+            # merely wasteful: the reload builds a second set of scene items
+            # over a level whose sessions are still live, and the editor dies
+            # with "wrapped C/C++ object of type ObjectItem has been deleted".
+            self.ActivateSession(open_sessions[0])
+            if self.fileSavePath == file_path:
+                return bool(self.SwitchToArea(area_num))
+
+        # Case 3: not open at all.
+        if self.CheckDirty():
+            return False
+
+        return bool(self.LoadLevel(file_path, True, area_num))
 
     def ShowGamePatches(self):
         """Put the installed-patch list into sidebar slice 2 (D-d.2c).

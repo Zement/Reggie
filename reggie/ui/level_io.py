@@ -291,6 +291,12 @@ class LevelIO:
         if fn == '':  # No filename given - abort
             return False
 
+        # Kept across the reassignment below, because the sessions are still
+        # keyed under it and the rename after a successful write needs both
+        # ends. Only meaningful when `copy` is False - a copy deliberately
+        # leaves the editor on the file it had open.
+        previous_path = self.win.fileSavePath
+
         if not copy:
             globals_.AutoSaveDirty = False
             # Save As writes every area too - see _ClearDirtyForSavedFile. The
@@ -336,6 +342,18 @@ class LevelIO:
             f.write(data)
 
         if not copy:
+            # The sessions are still keyed under the old path (Block D-d.3).
+            # A handle is keyed by path, so without this the manager believes
+            # they are on a file the editor is no longer editing: opening the
+            # *new* path would build a second handle over bytes already open -
+            # two undo stacks over one file - and opening the old one would
+            # find sessions for a file that may not exist any more.
+            #
+            # After the write, not before: a rename recorded for a save that
+            # then failed would leave the manager describing something that
+            # never happened.
+            self._RebindSessionsTo(previous_path, fn)
+
             setSetting('AutoSaveFilePath', fn)
             setSetting('AutoSaveFileData', 'x')
 
@@ -346,6 +364,40 @@ class LevelIO:
             self.win.undoStack.clear()
 
         return True
+
+    def _RebindSessionsTo(self, old_path, new_path):
+        """Move every session on ``old_path`` to ``new_path``. True if moved.
+
+        Save As leaves the editor working on the new file, so the manager has
+        to agree. Guarded rather than assumed: there is no manager in the
+        headless suites, and a refusal is a real answer here - the manager
+        declines when the new path is *already* open, because merging would
+        give one file two handles' worth of undo history and picking one to
+        discard would silently drop a user's edits.
+
+        A refusal is reported rather than raised. The bytes are on disk either
+        way, and losing a save because the bookkeeping could not be tidied is
+        the worse outcome; the sessions simply keep the path they had, which is
+        the pre-D-d.3 behaviour.
+
+        **`win.fileSavePath` must already be the new path when this runs.** The
+        two are one fact - which file the editor is working on - kept in two
+        places, and a rename applied to only one of them is worse than no
+        rename at all: the manager then holds sessions under a path the window
+        does not know about, so opening that file again finds no handle, loads
+        it a second time, and builds fresh scene items over a level whose old
+        items are still live ("wrapped C/C++ object of type ObjectItem has been
+        deleted"). HandleSaveAs assigns fileSavePath before the write and calls
+        this after it, so the order holds there.
+        """
+        manager = globals_.get_session_manager()
+        if manager is None:
+            return False
+
+        try:
+            return bool(manager.rename_file(old_path, new_path))
+        except Exception:
+            return False
     def HandleSaveCopyAs(self):
         """
         Save a level back to the archive, with a new filename, but does not store this filename

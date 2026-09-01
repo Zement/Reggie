@@ -579,6 +579,42 @@ class SessionManager:
 
     # -- mutation --------------------------------------------------------
 
+    def rename_file(self, old_path, new_path):
+        """Re-key an open file to a new path. True if anything moved.
+
+        Save As writes the level somewhere else and the editor carries on with
+        it - but a handle is keyed by path, so without this the manager still
+        believes the sessions are on the old file. The consequences are all the
+        same shape: opening the *new* path makes a second handle over bytes
+        already open, so two undo stacks edit one file; opening the *old* path
+        finds sessions for a file that may no longer exist.
+
+        Only the handle moves. Sessions read their path through it
+        (``EditorSession.file_path`` is a property on ``handle.file_path``), so
+        every session on the file follows with nothing to update - which is the
+        reason the handle owns the path in the first place.
+
+        Refuses when ``new_path`` is already open, and that refusal is the
+        point rather than a limitation: merging the two would give one file two
+        handles' worth of undo history, and picking one to discard would throw
+        away a user's edits without asking. The caller is better placed to
+        decide - it knows whether the write actually happened.
+        """
+        if not old_path or not new_path or old_path == new_path:
+            return False
+
+        handle = self._handles.get(old_path)
+        if handle is None:
+            return False
+
+        if new_path in self._handles:
+            return False
+
+        del self._handles[old_path]
+        handle.file_path = new_path
+        self._handles[new_path] = handle
+        return True
+
     def open(self, level, file_path, area, area_num, activate=True):
         """Open an area as a new session, sharing the level if already open.
 
