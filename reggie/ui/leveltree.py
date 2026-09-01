@@ -853,13 +853,27 @@ class LevelTreeWidget(QtWidgets.QWidget):
     def _indexFor(self, path):
         """The index at ``path``, or None if it is no longer there.
 
-        Walks down one level at a time, expanding nothing: `rowCount` is enough
-        to look, and expanding to search would defeat the laziness by loading
-        every level on the way.
+        Walks down one node at a time. A **level** has to be fetched before its
+        areas can be looked at: a level's children are read lazily, so until
+        then `rowCount` is 0 and the walk cannot see into it.
+
+        That is why area nodes alone were not restored (Zement, 2026-09-01:
+        "*Area* nodes are not remembered whether they are collapsed or
+        expanded... those are the only exception"). Expanding the *view* is not
+        enough either - Qt posts `fetchMore` to the event loop, so the rows are
+        still not there when the next step of this walk runs. The model is
+        asked directly instead.
+
+        The laziness is not lost: only levels actually on the path are fetched,
+        which is exactly the set the user had open. A path that names nothing
+        stops at the first missing label, having fetched only its ancestors.
         """
         index = QtCore.QModelIndex()
 
         for label in path:
+            if self.model.canFetchMore(index):
+                self.model.fetchMore(index)
+
             found = None
             for row in range(self.model.rowCount(index)):
                 candidate = self.model.index(row, 0, index)
