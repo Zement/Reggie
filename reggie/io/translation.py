@@ -587,7 +587,8 @@ class ReggieTranslation:
                 152: 'Save All',
                 153: 'Levels with unsaved changes. Double-click one to save it.',
                 154: 'Unsaved Levels',
-                155: 'Never saved - saving asks for a file name.',
+                155: 'Never saved - double-click to choose a file name.',
+                156: 'Nothing to save in bulk: a level that has never been saved needs a file name first.',
             },
             'Objects': {
                 0: '[b]Tileset [tileset], object [obj]:[/b][br][width]x[height] on layer [layer]',

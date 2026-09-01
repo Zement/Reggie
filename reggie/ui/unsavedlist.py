@@ -19,13 +19,27 @@ this list sits beside the tabs and the user reads the two together, so an entry
 that named the same file differently would cost more than it explained. The
 full path is the tooltip, and an unsaved new level shows the same "Untitled"
 its tab does.
+
+**A level that has never been saved is shown in red and skipped by Save All**
+(Zement, 2026-09-01). It has no file name to write to, so saving it can only
+stop and open the Save dialog - and a bulk action that asks a question per level
+is not a bulk action, quite apart from one cancelled dialog abandoning every
+file after it. Double-clicking such a row still saves it, through that dialog,
+which is the only possible answer to "save a level with no name".
 """
 
 import os
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from reggie.core import globals_
+
+
+#: Rows for levels that have never been saved. Not a theme colour: adding a key
+#: means touching every theme file, for one row in one list that is usually
+#: empty. This red is mid-toned on purpose so it reads on a light and a dark
+#: list alike, rather than the pure #f00 that vanishes on dark backgrounds.
+UNSAVED_NEW_COLOR = '#d02020'
 
 
 def dirty_paths():
@@ -189,11 +203,29 @@ class UnsavedLevelsWidget(QtWidgets.QWidget):
         for path, session in entries:
             item = QtWidgets.QListWidgetItem(label_for(path))
             item.setData(QtCore.Qt.ItemDataRole.UserRole, (path, session))
-            item.setToolTip(path or globals_.trans.string('MenuItems', 155))
+
+            if path:
+                item.setToolTip(path)
+            else:
+                # Red, and skipped by Save All (Zement, 2026-09-01). A level
+                # that has never been saved has no file name to write to, so
+                # bulk-saving it can only stop and ask - which is not what a
+                # button called "Save All" should do. It stays double-clickable,
+                # and that route opens the Save dialog as it should.
+                item.setToolTip(globals_.trans.string('MenuItems', 155))
+                item.setForeground(QtGui.QColor(UNSAVED_NEW_COLOR))
+
             self.list.addItem(item)
 
         self.list.verticalScrollBar().setValue(scroll)
-        self.saveAllButton.setEnabled(bool(entries))
+
+        # Disabled when every row is a never-saved level, since Save All skips
+        # those - a button that provably does nothing should say so rather than
+        # appear to work.
+        saveable = [e for e in entries if e[0]]
+        self.saveAllButton.setEnabled(bool(saveable))
+        self.saveAllButton.setToolTip(
+            '' if saveable else globals_.trans.string('MenuItems', 156))
 
         return bool(entries)
 

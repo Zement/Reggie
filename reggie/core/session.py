@@ -877,8 +877,18 @@ class SessionManager:
         session.dirty = dirty
 
     def dirty_files(self):
-        """Paths with at least one unsaved session."""
-        return sorted({s.file_path for s in self._sessions if s.dirty})
+        """Paths with at least one unsaved session.
+
+        A level that has never been saved appears as ``None``, and sorts
+        **after** the named ones - a plain `sorted()` raises here, because
+        `None` cannot be compared to a string. That was unreachable while a new
+        level was marked dirty the moment it was created and nothing asked for
+        the whole set at once; D-d.3c asks on every UpdateTitle, so a named
+        file and a new level both dirty made this throw (measured 2026-09-01).
+        """
+        paths = {s.file_path for s in self._sessions if s.dirty}
+        named = sorted(p for p in paths if p is not None)
+        return named + [None] if None in paths else named
 
     def clear_dirty_for_file(self, file_path):
         """Clear dirty on every session sharing a file.

@@ -139,11 +139,22 @@ class LevelIO:
             globals_.Dirty = False
             return
 
-        manager.clear_dirty_for_file(file_path)
+        cleared = manager.clear_dirty_for_file(file_path)
 
-        # The active session may be on another file entirely (Save As from a
-        # tab, with other files open), so clear it explicitly too.
-        globals_.Dirty = False
+        # `clear_dirty_for_file` finds nothing for a level that has never been
+        # saved: `_handles` is keyed by path and an unsaved handle is not in it,
+        # so `sessions_for(None)` is empty (D-d.3b). Clear the active session
+        # directly for that case alone.
+        #
+        # **Only for that case** (Zement, 2026-09-01). This used to be
+        # unconditional, "because the active session may be on another file
+        # entirely" - which is exactly backwards: when it *is* another file,
+        # that file has nothing to do with the save, and clearing it threw away
+        # a dirty marker for work still only in memory. When it is the same
+        # file, `clear_dirty_for_file` has already cleared it. So the line
+        # helped in no case and hurt in one.
+        if not cleared and not file_path:
+            globals_.Dirty = False
 
     def _ProposeCollabSwitch(self, level, area):
         """
@@ -557,8 +568,30 @@ class LevelIO:
                 # Turn off the autosave flag
                 globals_.RestoredFromAutoSave = False
 
-        # Turn the dirty flag off, and keep it that way
-        globals_.Dirty = False
+        # Keep the dirty flag off for the duration of the load: everything
+        # below fires the handlers a user edit would, and none of it is one.
+        #
+        # **Only the override, not `globals_.Dirty = False`** (Zement,
+        # 2026-09-01: "unsaved tabs lose their dirty flag if nearby tabs get
+        # opened, closed, saved, or other").
+        #
+        # `Dirty` is proxied onto the *active* session, and when adding a file
+        # the active session is still the previous one - the new session does
+        # not exist until `add_level` runs, ~270 lines below. So this wrote
+        # False over the tab the user had just been editing, and their unsaved
+        # work stopped being reported as unsaved. Measured: dirty 01-01, open
+        # 01-02 from the tree, and 01-01's flag is gone.
+        #
+        # Exactly the class of bug D-d.3b found with the area number, and for
+        # the same reason: a write to a proxied global lands on the outgoing
+        # session when the incoming one has not been made yet. The area case
+        # was caught because two tabs visibly claimed the same name; this one
+        # was invisible until D-d.3c put the dirty set on screen.
+        #
+        # Nothing is lost by dropping it. A new `EditorSession` is born with
+        # `dirty = False`, so the session being loaded into starts clean either
+        # way; and when *replacing*, `close_all()` disposes every session before
+        # the new one is made, so there was never a flag left to clear.
         globals_.DirtyOverride += 1
 
         # First, clear out the existing level.

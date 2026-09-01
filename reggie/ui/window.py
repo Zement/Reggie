@@ -1805,15 +1805,26 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         Stops at the first failure rather than pressing on: a save that fails
         has already shown the user a dialog, and continuing would stack more of
-        them on top of a question they have not answered. A new level counts
-        here: it reaches Save As, and cancelling that dialog is a refusal like
-        any other.
+        them on top of a question they have not answered.
+
+        **Levels that have never been saved are skipped** (Zement, 2026-09-01:
+        "those *have to go through* the Save dialog path once, so that a file
+        name and file path is chosen. If this hasn't happened yet, then we can't
+        bulk-save this level, and should simply skip it"). Right: a bulk action
+        that stops to ask a question per level is not a bulk action, and one
+        cancelled dialog would abandon the files after it. They stay reachable
+        by double-clicking the row, which opens the Save dialog as it should,
+        and the list marks them so it is visible why they were left.
+
+        Skipping them does **not** make this return False. Nothing failed -
+        there was simply nothing this action could do for them, which is what
+        "skip" means.
 
         Works on ``(path, session)`` pairs rather than paths for the reason
         ``SaveLevelFile`` takes a session - an unsaved level has no path to
         name it by.
         """
-        entries = dirty_entries()
+        entries = [e for e in dirty_entries() if e[0]]
         if not entries:
             return True
 
