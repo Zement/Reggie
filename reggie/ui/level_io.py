@@ -594,26 +594,42 @@ class LevelIO:
         # the new one is made, so there was never a flag left to clear.
         globals_.DirtyOverride += 1
 
-        # First, clear out the existing level.
+        # First, clear out the existing level. Two different things, and only
+        # one of them is skipped when adding - they were one block until this
+        # was found, which is the bug.
         #
-        # **Not when adding a file** (D-d.3b). Since D-c.1 each session owns its
-        # scene, so `win.scene` is the *active* session's - and while this was
-        # only ever reached after close_all() had emptied the manager, the scene
-        # being cleared was about to be discarded anyway. Adding a second file
-        # makes that no longer true: clearing here would destroy the first
-        # file's items while its sessions are still live, which is the "wrapped
-        # C/C++ object of type ObjectItem has been deleted" crash by another
-        # route. The new session arrives with an empty scene of its own, so
-        # there is nothing to clear for it either.
+        # **The scene is per session** (D-c.1), so `win.scene` is the *active*
+        # session's. Clearing it while adding a file would destroy the previous
+        # file's items with its sessions still live - the "wrapped C/C++ object
+        # of type ObjectItem has been deleted" crash by another route. The new
+        # session arrives with an empty scene of its own, so there is nothing to
+        # clear for it either.
         if not add:
             self.win.scene.clearSelection()
             self.win.CurrentSelection = []
             self.win.scene.clear()
 
-            # Clear out all level-thing lists
-            for thingList in (self.win.spriteList, self.win.entranceList, self.win.locationList, self.win.pathList, self.win.commentList):
-                thingList.clear()
-                thingList.selectionModel().setCurrentIndex(QtCore.QModelIndex(), QtCore.QItemSelectionModel.SelectionFlag.Clear)
+        # **The thing lists are still window-owned**, shared by every session
+        # and rebuilt from whichever area is in front. So they are cleared
+        # either way - skipping that appended the incoming area's rows to the
+        # outgoing one's, and the sprite/entrance/path/location lists showed
+        # both levels at once (Zement, 2026-09-02: "the lists are populated
+        # with a lot of duplicates... only one actually belongs to the active
+        # area", measured at 146 + 77 = 223 sprite rows).
+        #
+        # It only showed on the *first* open of a file, which is what made it
+        # look like a difference between clicking a level and clicking its area
+        # 1: every later activation goes through `ActivateSession`, which
+        # clears these lists itself. D-d.3b put both blocks behind one `add`
+        # guard because both were "clearing what is open"; they are not the
+        # same thing, and the scene's per-session-ness does not extend to them.
+        for thingList in (self.win.spriteList, self.win.entranceList,
+                          self.win.locationList, self.win.pathList,
+                          self.win.commentList):
+            thingList.clear()
+            thingList.selectionModel().setCurrentIndex(
+                QtCore.QModelIndex(),
+                QtCore.QItemSelectionModel.SelectionFlag.Clear)
 
         # Reset these here, because if they are set after
         # creating the objects, they use the old values.
