@@ -1824,7 +1824,18 @@ class ReggieWindow(QtWidgets.QMainWindow):
         ``SaveLevelFile`` takes a session - an unsaved level has no path to
         name it by.
         """
-        entries = [e for e in dirty_entries() if e[0]]
+        return self.SaveLevelFiles([e for e in dirty_entries() if e[0]])
+
+    def SaveLevelFiles(self, entries):
+        """Save each of ``entries``, the active file last.
+
+        The shared body of Save All and the Save button, which differ only in
+        which rows they are handed - every row, or the selected ones. Saving the
+        active file last is what leaves the user on the tab they started on
+        (D-d.3c); doing it in list order would put them on whichever row sorted
+        last, which is an arbitrary place for a button to leave them.
+        """
+        entries = list(entries or ())
         if not entries:
             return True
 
@@ -1845,6 +1856,201 @@ class ReggieWindow(QtWidgets.QMainWindow):
             if not self.SaveLevelFile(path, session):
                 return False
 
+        return True
+
+    # -- discarding (D-d.3d) ---------------------------------------------
+
+    def DiscardLevelFiles(self, entries, confirm=True):
+        """Throw away unsaved changes in each of ``entries``, after confirming.
+
+        **Reloads each file from disk** rather than merely clearing its dirty
+        flag (Zement's choice, 2026-09-01). That is what "discard my changes"
+        means everywhere else, and the alternative is worse than it looks: an
+        editor still showing edits it claims are saved, to be lost silently on
+        close. It costs a reload and clears that level's undo history, which is
+        the price of the operation being real rather than cosmetic.
+
+        A level that has **never been saved** is skipped: there is no file to
+        reload, so discarding it could only mean closing its tab, and a bulk
+        action should not close tabs. The buttons mark those rows and disable
+        themselves when they are all there is.
+
+        One confirmation for the whole set, naming how many. Not suppressible:
+        the action is unrecoverable and takes the undo stack with it, so a
+        "don't ask again" would turn that into one click. ``confirm=False`` is
+        for the headless suites, which have no one to answer a dialog.
+        """
+        entries = [e for e in (entries or ()) if e[0]]
+        if not entries:
+            # Nothing this action can act on - every row was a never-saved
+            # level, or there were no rows. Not a failure, the same way Save All
+            # skipping them is not: there was simply nothing to do. Returning
+            # False here would make "Discard All with only a new level open"
+            # look like an error to the caller.
+            return True
+
+        if confirm and not self._confirmDiscard(entries):
+            # The user said no. Reported as False so a caller can tell "nothing
+            # was discarded" from "everything was" - which is the one place the
+            # distinction matters, and is not the same question as whether
+            # anything went wrong.
+            return False
+
+        manager = globals_.get_session_manager()
+        if manager is None:
+            return False
+
+        # The paths, not the sessions: reloading replaces the sessions on a
+        # file, so a session captured now may not survive its own reload.
+        paths = []
+        for path, _session in entries:
+            if path not in paths:
+                paths.append(path)
+
+        # Where the user was, so they can be put back. Unlike saving, ordering
+        # is not enough here: a reload *always* activates the file it read, so
+        # discarding a file that was not in front would leave the user looking
+        # at it (measured 2026-09-01 - discard 01-02 from 01-01, and the editor
+        # ends up on 01-02). The path and area are remembered rather than the
+        # session, because a reloaded file's sessions are new objects.
+        active = manager.active
+        was = ((active.file_path, active.area_num)
+               if active is not None else None)
+
+        # The file in front last anyway, so the common case needs no restoring
+        # and the uncommon one has less to undo.
+        current = was[0] if was else None
+        if current in paths:
+            paths = [p for p in paths if p != current] + [current]
+
+        ok = True
+        for path in paths:
+            if not self.DiscardLevelFile(path):
+                ok = False
+
+        if was is not None:
+            survivor = manager.find(was[0], was[1])
+            if survivor is not None and manager.active is not survivor:
+                self.ActivateSession(survivor)
+
+        return ok
+
+    def DiscardAllDirtyLevels(self, confirm=True):
+        """Discard every dirty file, skipping levels that were never saved."""
+        return self.DiscardLevelFiles(
+            [e for e in dirty_entries() if e[0]], confirm=confirm)
+
+    def _confirmDiscard(self, entries):
+        """Ask once for the whole set. Returns whether to go ahead."""
+        names = []
+        for path, _session in entries:
+            label = os.path.basename(path or '')
+            if label not in names:
+                names.append(label)
+
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        box.setWindowTitle(globals_.trans.string('MenuItems', 161))
+        box.setText(globals_.trans.string(
+            'MenuItems', 162, '[count]', len(names)))
+        box.setInformativeText('%s\n\n%s' % (
+            '\n'.join('    ' + name for name in names),
+            globals_.trans.string('MenuItems', 163)))
+        box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Discard
+                               | QtWidgets.QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+
+        return box.exec() == QtWidgets.QMessageBox.StandardButton.Discard
+
+    def DiscardLevelFile(self, file_path):
+        """Reload one file from disk, throwing away its unsaved changes.
+
+        Activate-then-reload, the same shape as ``SaveLevelFile`` and for the
+        same reason: `LoadLevel` works on the session in front.
+
+        The areas that were open stay open. Reloading is done by re-opening each
+        of them, so a file with areas 1 and 3 showing comes back with areas 1
+        and 3 showing - discarding edits is not meant to rearrange the tabs.
+        """
+        if not file_path:
+            return False
+
+        manager = globals_.get_session_manager()
+        if manager is None:
+            return False
+
+        sessions = manager.sessions_for(file_path)
+        if not sessions:
+            return False
+
+        areas = sorted({s.area_num for s in sessions})
+        name = os.path.splitext(os.path.basename(file_path))[0]
+
+        # Refuse to leave the editor with nothing open. Zement's rule is that
+        # one area stays loaded at all times, and discarding the only open file
+        # would close its sessions before the reload could make new ones.
+        others = [s for s in manager.sessions if s.file_path != file_path]
+        if not others:
+            return self._discardOnlyOpenFile(file_path, areas)
+
+        # Clear dirty first, so nothing on the way through asks the user to save
+        # what they have just asked to throw away.
+        manager.clear_dirty_for_file(file_path)
+
+        # **Every** session on the file, so the handle is released. Keeping one
+        # would defeat the whole operation: `add_level` reuses the handle keyed
+        # by that path, so the freshly read level would be dropped in favour of
+        # the edited one still in memory.
+        globals_.DirtyOverride += 1
+        try:
+            for session in list(sessions):
+                manager.close(session)
+
+            self.ActivateSession(manager.active)
+
+            self.LoadLevel(file_path, True, areas[0], add=True)
+            for area_num in areas[1:]:
+                self.OpenLevelFromTree(file_path, name, area_num)
+        finally:
+            globals_.DirtyOverride -= 1
+
+        self.tabs.sync()
+        self.UpdateTitle()
+        self.RefreshDirectoryListing()
+        return True
+
+    def _discardOnlyOpenFile(self, file_path, areas):
+        """Discard the file when it is the only one open.
+
+        The sessions cannot be closed first - that would leave the editor with
+        no level at all, which Zement's rule forbids - so this reloads over them
+        with ``open_level`` instead, which closes them itself as part of putting
+        the fresh copy up. The extra areas are re-opened afterwards, as above.
+        """
+        manager = globals_.get_session_manager()
+        manager.clear_dirty_for_file(file_path)
+
+        name = os.path.splitext(os.path.basename(file_path))[0]
+
+        # `LoadLevel` skips the read when asked for the level it already has in
+        # front - which is the whole point here, so the skip has to be
+        # suppressed. This is the flag CheckDirty's own Discard button already
+        # sets for the same reason; without it the load takes the "same level"
+        # path and rebuilds the palette over items it has just destroyed
+        # ("wrapped C/C++ object of type ObjectItem has been deleted").
+        self.justDiscardedChanges = True
+
+        globals_.DirtyOverride += 1
+        try:
+            self.LoadLevel(file_path, True, areas[0])
+            for area_num in areas[1:]:
+                self.OpenLevelFromTree(file_path, name, area_num)
+        finally:
+            globals_.DirtyOverride -= 1
+
+        self.tabs.sync()
+        self.UpdateTitle()
+        self.RefreshDirectoryListing()
         return True
 
     def HandleShowUndoHistory(self, checked=None):

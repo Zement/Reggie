@@ -344,16 +344,24 @@ class _CollapsibleHost(QtWidgets.QWidget):
     def sizeHint(self):
         """Ask for the default height, when one was given.
 
-        This is what a splitter divides its space by, so a default height is
-        expressed as a size hint rather than as a fixed height - it is a
-        starting point the user can then drag away from, not a rule.
+        A layout gives a widget its size hint when it can, so since D-d.3d this
+        is the height the host actually gets rather than a number a splitter
+        divided space by. That is what `defaultHeight` always read as, and it is
+        what makes Zement's "70% + 40% should scroll" true: two hosts asking for
+        110% of the sidebar between them are 110% tall, and the column scrolls.
+
+        Folded, the header alone - so a folded host takes no more room than it
+        shows, which is what makes folding free space for its neighbours.
         """
         hint = super().sizeHint()
 
-        if self._expanded:
-            resolved = self._resolveHeight(self._defaultHeight)
-            if resolved is not None:
-                hint.setHeight(resolved)
+        if not self._expanded:
+            hint.setHeight(self.headerHeight())
+            return hint
+
+        resolved = self._resolveHeight(self._defaultHeight)
+        if resolved is not None:
+            hint.setHeight(resolved)
 
         return hint
 
@@ -468,6 +476,183 @@ class PanelHost(_CollapsibleHost):
     def isFloating(self):
         """Always False - a hosted panel is docked by construction."""
         return False
+
+
+class SectionColumn(QtWidgets.QScrollArea):
+    """The vertical stack of sections in slice 2, which **scrolls** (D-d.3d).
+
+    Was a `QSplitter` from D-c.6 until here, and that was the wrong container.
+    A splitter's entire job is to divide its extent among its children: every
+    child is always sized so the total exactly fills it. Right for two panes a
+    user drags between; wrong for a stack of panels that each want a natural
+    height. All three of Zement's layout bugs (2026-09-01) fell out of that one
+    choice:
+
+    - panels **shrank** rather than scrolling, because a splitter has no scroll
+      and so must make its contents fit
+    - **folding one freed no space**, because the folded host still held the
+      height the splitter had given it
+    - folding **all** of them collapsed the whole sidebar, because the cap that
+      handled that case set a *maximum height* on the stacked-widget page - and
+      since D-d.2b that page is a horizontal sibling of the rail, so capping its
+      height capped the sidebar's
+
+    So this is a scroll area over a plain vertical layout. Hosts keep the height
+    they ask for; if the stack is taller than the viewport there is a scrollbar,
+    and if it is shorter the bottom-most expanded host takes up the slack
+    (Zement's choice, over leaving a visible gap).
+
+    Keeps a splitter-shaped surface - ``count``, ``widget``, ``indexOf``,
+    ``insertWidget`` - because that is genuinely what the sidebar wants from it:
+    an ordered stack addressed by position. The methods are not a shim for the
+    splitter; they are the container's own vocabulary, and the splitter happened
+    to share it.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        # **Not** `setWidgetResizable(True)`. That stretches the inner widget to
+        # the viewport in *both* axes, so the stack could never be taller than
+        # the view and so could never scroll - measured: two hosts asking for
+        # 70% and 40% still came out at 591 + 253 = exactly the viewport.
+        #
+        # Instead the width is matched by hand in `resizeEvent` and the height
+        # is left to the layout, which is the whole point: the body is as tall
+        # as its hosts ask to be, and the scroll area scrolls when that is more
+        # than it can show.
+        self.setWidgetResizable(False)
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        self._body = QtWidgets.QWidget(self)
+        self._layout = QtWidgets.QVBoxLayout(self._body)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(0)
+
+        # The tail stretch is what stops a short stack from spreading itself
+        # over the whole viewport. It is removed while a host is claiming the
+        # slack - see `_applySlack` on the sidebar.
+        self._layout.addStretch(1)
+
+        self.setWidget(self._body)
+
+    # -- geometry --------------------------------------------------------
+
+    def resizeEvent(self, event):
+        """Keep the body as wide as the viewport, and as tall as it wants.
+
+        The half of `setWidgetResizable(True)` that is wanted here. Without the
+        width being matched the body sits at its own size hint and the sections
+        are narrower than the column; with the *height* matched too, nothing
+        could ever overflow and the column could not scroll.
+        """
+        super().resizeEvent(event)
+        self._relayout()
+
+    def _relayout(self):
+        width = self.viewport().width()
+        height = max(self._body.sizeHint().height(), self.viewport().height())
+        self._body.resize(width, height)
+
+    def refreshLayout(self):
+        """Re-measure after the hosts' wanted heights change.
+
+        A fold, an unfold, an added section, or a percentage height re-resolved
+        by a sidebar resize. With `setWidgetResizable(False)` nothing does this
+        on its own - the body only changes size when told to.
+        """
+        self._body.adjustSize()
+        self._relayout()
+
+    # -- the ordered-stack surface ---------------------------------------
+
+    def count(self):
+        """How many hosts are stacked, ignoring the tail stretch."""
+        return sum(1 for i in range(self._layout.count())
+                   if self._layout.itemAt(i).widget() is not None)
+
+    def sectionAt(self, index):
+        """The host at ``index``, or None.
+
+        **Not** ``widget(index)``, which is what a QSplitter calls this: a
+        QScrollArea already has a no-argument ``widget()`` returning the widget
+        it scrolls, and Qt calls that itself. Overriding it with a different
+        signature broke the scroll area from the inside.
+        """
+        hosts = self.hosts()
+        return hosts[index] if 0 <= index < len(hosts) else None
+
+    def hosts(self):
+        """Every host, top to bottom."""
+        found = []
+        for i in range(self._layout.count()):
+            item = self._layout.itemAt(i).widget()
+            if item is not None:
+                found.append(item)
+        return found
+
+    def indexOf(self, host):
+        """``host``'s position, or -1. Matches QSplitter's contract."""
+        hosts = self.hosts()
+        return hosts.index(host) if host in hosts else -1
+
+    def insertWidget(self, index, host):
+        """Put ``host`` at ``index``, moving it if it is already here."""
+        if self._layout.indexOf(host) != -1:
+            self._layout.removeWidget(host)
+
+        host.setParent(self._body)
+        self._layout.insertWidget(min(index, self.count()), host)
+        host.setVisible(True)
+
+    def removeWidget(self, host):
+        self._layout.removeWidget(host)
+
+    def handleWidth(self):
+        """Zero: a layout has no drag handles between its children.
+
+        Kept because the width arithmetic asks, and answering 0 is truer than
+        making every caller know which container is in use.
+        """
+        return 0
+
+    # -- slack -----------------------------------------------------------
+
+    def setSlackHolder(self, host):
+        """Give leftover space to ``host``, or to the tail stretch when None.
+
+        Zement, asked and answered 2026-09-01: when the stack is shorter than
+        the viewport, the bottom-most expanded panel absorbs what is left rather
+        than the column showing dead space under it.
+
+        Done with layout stretch rather than a computed height, so the layout
+        keeps it right through every resize with nothing to keep in step.
+        """
+        for host_widget in self.hosts():
+            self._layout.setStretchFactor(host_widget, 0)
+
+        tail = self._layout.itemAt(self._layout.count() - 1)
+        has_tail = tail is not None and tail.widget() is None
+
+        if host is not None and self._layout.indexOf(host) != -1:
+            self._layout.setStretchFactor(host, 1)
+            if has_tail:
+                self._layout.takeAt(self._layout.count() - 1)
+        elif not has_tail:
+            self._layout.addStretch(1)
+
+    def ensureVisible(self, host):
+        """Scroll ``host`` into view, fully if it fits.
+
+        Zement: "we should make certain that an activated panel moves into view
+        and is fully visible".
+        """
+        if host is not None and self._layout.indexOf(host) != -1:
+            self.ensureWidgetVisible(host)
 
 
 class _CentredIconDelegate(QtWidgets.QStyledItemDelegate):
@@ -630,18 +815,20 @@ class Sidebar(QtWidgets.QWidget):
                                  QtWidgets.QSizePolicy.Policy.Expanding)
         self.pages.setMinimumWidth(MIN_SLICE_TWO_WIDTH)
 
-        # Slice 2's default page is a splitter of collapsible sections rather
-        # than one widget per rail entry (Zement, 2026-08-30). The reason is
-        # what the content turns out to be: the undo history, the collab chat
+        # Slice 2's default page is a scrolling column of collapsible sections
+        # rather than one widget per rail entry (Zement, 2026-08-30). The reason
+        # is what the content turns out to be: the undo history, the collab chat
         # and the directory listing are all things a user wants *at the same
         # time*, sized to taste - which is the VS Code Explorer shape, not a
         # stack where reading one hides the others.
         #
+        # A `SectionColumn` since D-d.3d, a `QSplitter` before that - see that
+        # class for why the splitter was the wrong container and what it cost.
+        #
         # The stack stays underneath, because D-d may still want a genuinely
         # separate rail page for something that owns the whole slice. Sections
         # are simply what its first page holds.
-        self.sections = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
-        self.sections.setChildrenCollapsible(False)
+        self.sections = SectionColumn()
         self._sections = []
 
         # host -> is it context-sensitive. A dict rather than a third element in
@@ -1098,6 +1285,16 @@ class Sidebar(QtWidgets.QWidget):
                            default_height=default_height,
                            max_height=max_height)
 
+        # `Preferred`, so the layout gives the host its size hint and no more.
+        # `Expanding` - the default for a widget holding a scrolling list -
+        # would let every host grow to fill the column, which is the splitter
+        # behaviour D-d.3d replaced: the hosts would share the height again
+        # instead of keeping the one they asked for, and nothing would ever
+        # overflow enough to scroll. The one host that *should* grow is the
+        # slack holder, and `setSlackHolder` says so with layout stretch.
+        host.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
+                           QtWidgets.QSizePolicy.Policy.Preferred)
+
         if on_close is not None:
             host.closeRequested.connect(on_close)
         else:
@@ -1138,6 +1335,14 @@ class Sidebar(QtWidgets.QWidget):
         # Adding and removing change what slice 2 *is*; folding only changes how
         # much of itself it is showing.
         self._resizeColumn()
+
+        # Scroll the new section into view (D-d.3d). Zement: "we should make
+        # certain that an activated panel moves into view and is fully
+        # visible" - which only became possible to get wrong once the column
+        # could be taller than its viewport. Deferred a tick, because the
+        # layout has not placed the host yet and a scroll to where it is *not*
+        # would land somewhere arbitrary.
+        QtCore.QTimer.singleShot(0, lambda: self.sections.ensureVisible(host))
 
         return host
 
@@ -1264,44 +1469,35 @@ class Sidebar(QtWidgets.QWidget):
         return None
 
     def _applySectionStretch(self):
-        """Give the space to the expanded sections only.
+        """Decide which section, if any, absorbs the column's leftover space.
 
-        Re-applied after every fold rather than set once: a collapsed section
-        that kept its stretch would hold on to a share of the column and leave a
-        gap under its header, which is the thing folding is meant to remove.
+        Since D-d.3d the column is a scroll area rather than a splitter, so
+        there is no share-of-the-total to hand out: a host is as tall as it asks
+        to be, and folding one genuinely frees the space below it. What is left
+        to decide is only what happens when the stack is *shorter* than the
+        viewport, and the answer is the bottom-most expanded section (Zement,
+        2026-09-01) - so the column never shows dead space under the stack.
+
+        The old version divided splitter stretch between expanded sections, and
+        called `_capSliceTwo`. **Both are gone.** The cap put a maximum *height*
+        on `self.pages` when every section was folded - and since D-d.2b `pages`
+        is a horizontal sibling of the rail, so it capped the whole sidebar's
+        height and collapsed it to a strip (Zement, with a screenshot: "when all
+        panels of slice 2 are collapsed, the entire sidebar collapses to a very
+        small height"). Its own comment had concluded the cap was "cosmetic"
+        after D-d.2b; it was not, it was the bug.
         """
-        for index, (host, stretch) in enumerate(self._sections):
-            self.sections.setStretchFactor(
-                index, stretch if host.isExpanded() else 0)
+        holder = None
+        for host, _stretch in self._sections:
+            if host.isExpanded():
+                holder = host
 
-        self._capSliceTwo()
+        self.sections.setSlackHolder(holder)
 
-    def _capSliceTwo(self):
-        """Shrink slice 2 to its headers when every section in it is folded.
-
-        Written for the stacked layout, where slice 2 kept its share of the
-        *height* however small its sections folded to and the palette below
-        never saw the space released (Zement, 2026-08-30). Since D-d.2b slice 2
-        is its own column and can no longer take height from anything, so the
-        cap is now cosmetic: it stops a stack of folded headers from sitting in
-        a full-height empty column.
-
-        Still worth keeping, and still runs from `_applySectionStretch` - the
-        one place every fold, unfold, add and remove already passes through.
-        """
-        if not self._sections:
-            self.pages.setMaximumHeight(QtWidgets.QWIDGETSIZE_MAX)
-            return
-
-        if any(host.isExpanded() for host, _stretch in self._sections):
-            self.pages.setMaximumHeight(QtWidgets.QWIDGETSIZE_MAX)
-            return
-
-        # Every section folded: slice 2 is worth exactly its stack of headers,
-        # plus the splitter handles between them.
-        headers = sum(host.headerHeight() for host, _stretch in self._sections)
-        handles = self.sections.handleWidth() * max(0, len(self._sections) - 1)
-        self.pages.setMaximumHeight(headers + handles)
+        # The hosts' wanted heights have just changed - a fold, an unfold, or a
+        # section arriving. The scroll area does not re-measure on its own,
+        # since it is deliberately not `widgetResizable`.
+        self.sections.refreshLayout()
 
     def _handleColumnDragged(self, _pos, _index):
         """The user moved the column divider - stop recomputing it."""
@@ -1493,6 +1689,12 @@ class Sidebar(QtWidgets.QWidget):
 
         for host in self._panels:
             host.refreshHeights()
+
+        # A percentage is of the *sidebar's* height, so a resize changes every
+        # host's wanted height at once - and the column has to be re-measured
+        # against the new total or a stack that has just become too tall will
+        # not have grown a scrollbar (D-d.3d).
+        self.sections.refreshLayout()
 
         # And re-divide, because the splitter will not do it on its own: it
         # reads a size hint once and never looks again.

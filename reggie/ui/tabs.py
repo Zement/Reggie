@@ -40,6 +40,12 @@ from reggie.ui.tooltabs import ToolTabHost
 #: Sort key for a tab that is not a canvas - tool tabs go after every level.
 TOOL_TAB_GROUP = '￿'
 
+#: How narrow a tab may be squeezed before the bar scrolls instead (D-d.3d).
+#: Wide enough for `01-01: 1` plus its close button, which is the longest label
+#: the editor generates on its own - a longer one elides, which is what elision
+#: is for.
+MIN_TAB_WIDTH = 90
+
 #: Matches the numbered stage names the sort orders by: 01-01, 03-C, W1-04 ...
 _LEVEL_ID = re.compile(r'^(?:W?(\d+))\s*-\s*(\d+|[A-Za-z]+)')
 
@@ -94,6 +100,24 @@ class MasterTabWidget(QtWidgets.QTabWidget):
         self.setMovable(bool(setting('TabsDraggable', False)))
         self.setElideMode(QtCore.Qt.TextElideMode.ElideRight)
         self.setUsesScrollButtons(True)
+
+        # A floor under how narrow a tab may be squeezed (D-d.3d). Zement,
+        # 2026-09-01: "if there are too many tabs, the tabs shrink to fit the
+        # total width of the Master Container, instead of showing a scrollbar.
+        # This is a problem, as the tabs immediately become too small to read."
+        #
+        # `setUsesScrollButtons(True)` was already set and was not enough on its
+        # own: Qt only reaches for the scroll buttons once the tabs are at their
+        # *minimum* size, and with ElideRight and no minimum that is almost
+        # nothing - so the names became unreadable long before anything
+        # scrolled. Giving the bar a real minimum is what makes the scroll
+        # buttons the thing that happens instead of the shrinking.
+        #
+        # ElideRight stays: it is the right answer for one over-long name, and
+        # was only wrong as a substitute for scrolling.
+        self.tabBar().setMinimumWidth(0)
+        self.tabBar().setStyleSheet(
+            'QTabBar::tab { min-width: %dpx; }' % MIN_TAB_WIDTH)
 
         self.currentChanged.connect(self._handleCurrentChanged)
         self.tabCloseRequested.connect(self._handleCloseRequested)
