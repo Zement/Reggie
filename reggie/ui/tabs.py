@@ -79,6 +79,292 @@ def level_sort_key(file_path):
     return (0, world, (1, 0), rest.lower())
 
 
+class SubTabBar(QtWidgets.QWidget):
+    """The flyout row of an area's forms, under its tab (D-d.4b).
+
+    Zement drew two options, 2026-09-02: icons *behind* the tab label, or a
+    small bar below the tab. This is the second, and the reason is stronger than
+    preference. Icons in the label make a tab's width depend on how many forms
+    are open, so tabs would resize as forms come and go and the tab under the
+    pointer would move - the class of problem D-d.3d fixed with MIN_TAB_WIDTH,
+    reintroduced as a feature.
+
+    Three states, his:
+
+    ==========  ================================================  ==========
+    Viewing     this form is what the tab is showing              checked
+    Active      built and holding edits, canvas on show           bold
+    Inactive    no form of this kind for this area                plain
+    ==========  ================================================  ==========
+
+    Empty until a form exists, and hidden while empty, so an area nobody has
+    opened a form for looks exactly as it did before this phase.
+    """
+
+    #: The five, in the order the Level menu lists them. Icon names are the ones
+    #: the menu actions already use, so a theme that restyles the menu restyles
+    #: this with nothing to update.
+    ENTRIES = (
+        ('areasettings', 'area', 'AreaDlg'),
+        ('zonesettings', 'zones', 'ZonesDlg'),
+        ('backgrounds', 'background', 'BGDlg'),
+        ('cameraprofiles', 'camprofile', 'CamProfsDlg'),
+        ('levelinformation', 'info', 'InfoDlg'),
+    )
+
+    def __init__(self, stack):
+        super().__init__()
+
+        self.stack = stack
+        self.buttons = {}
+
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(2)
+
+        for key, icon, _title in self.ENTRIES:
+            button = QtWidgets.QToolButton(self)
+            button.setCheckable(True)
+            button.setAutoRaise(True)
+            button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+            button.clicked.connect(
+                lambda _checked=False, _k=key: self._activate(_k))
+
+            self.buttons[key] = button
+            layout.addWidget(button)
+
+        # The canvas button returns the tab to what it is named after. Its own
+        # entry rather than "click the pressed form again to close": a toggle
+        # that turns into a close button is two meanings on one control, and the
+        # canvas is not a form to be toggled off.
+        self.canvasButton = QtWidgets.QToolButton(self)
+        self.canvasButton.setCheckable(True)
+        self.canvasButton.setAutoRaise(True)
+        self.canvasButton.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.canvasButton.clicked.connect(self._showCanvas)
+        layout.insertWidget(0, self.canvasButton)
+
+        layout.addStretch(1)
+        self._loadIcons()
+
+    def _loadIcons(self):
+        """Icons and tooltips, resolved late.
+
+        The theme and the translations are loaded during boot, and a stack can
+        be built before either - the headless suites construct windows in
+        several orders. A bar with no icons is a usable bar; one that raised
+        during construction would take the tab with it.
+        """
+        from reggie.ui.ui import GetIcon
+
+        try:
+            self.canvasButton.setIcon(GetIcon('view'))
+            self.canvasButton.setToolTip(globals_.trans.string('MenuItems', 164))
+        except Exception:
+            self.canvasButton.setText('#')
+
+        for key, icon, title_key in self.ENTRIES:
+            button = self.buttons[key]
+            try:
+                button.setIcon(GetIcon(icon))
+                button.setToolTip(globals_.trans.string(title_key, 0))
+            except Exception:
+                button.setText(key[:1].upper())
+
+    # -- state ------------------------------------------------------------
+
+    def refresh(self):
+        """Redraw the three states, and hide the bar when there is nothing.
+
+        Called from every ``SessionPageStack`` method that can change what is
+        open or on show, which is what keeps the bar from needing anyone else to
+        remember it.
+        """
+        open_keys = set(self.stack.pageKeys())
+        current = self.stack.currentKey()
+
+        for key, button in self.buttons.items():
+            is_open = key in open_keys
+
+            button.setVisible(is_open)
+            button.setChecked(key == current)
+
+            font = button.font()
+            font.setBold(is_open and key != current)
+            button.setFont(font)
+
+        self.canvasButton.setChecked(current is None)
+
+        # Hidden while empty: an area with no forms open must look exactly as it
+        # did before this phase, rather than carrying a permanent empty strip.
+        self.setVisible(bool(open_keys))
+
+    # -- clicks -----------------------------------------------------------
+
+    def _activate(self, key):
+        if not self.stack.showPage(key):
+            # The button is only visible while its page exists, so this is the
+            # race rather than the normal path - refresh puts the bar back in
+            # step with what is actually open.
+            self.refresh()
+
+    def _showCanvas(self):
+        self.stack.showCanvas()
+
+
+class SessionPageStack:
+    """One session's tab content: its canvas, plus whatever forms it has open.
+
+    D-d.4 gave the five per-area forms a *binding* to their session; this gives
+    them a *place*. Before it, a form was a top-level tool tab and there was one
+    per kind, so opening Area Settings for area 2 replaced area 1's - throwing
+    away a form the user was filling in. Zement's correction, 2026-09-02: the
+    forms belong to the area, not to the editor.
+
+    The arrangement is a ``QStackedWidget`` whose **page 0 is always the
+    canvas**. That is what makes "close the form" have an obvious meaning and
+    removes any empty-tab state to design: there is always something under the
+    tab, and it is the thing the tab is named after.
+
+    Owns nothing. The canvas belongs to the session and each form belongs to its
+    own ``SessionBoundPage``; this holds the arrangement and can be dropped
+    without taking either with it.
+    """
+
+    def __init__(self, session, tabs):
+        self.session = session
+        self.tabs = tabs
+        self.pages = {}          # tool key -> the form widget
+
+        self._stack = QtWidgets.QStackedWidget()
+        self._stack.addWidget(session.view)
+
+        # The flyout lives *inside* the session's own content area rather than
+        # under the master tab bar as a whole. Same place on screen - directly
+        # below the tab - and it is per session by construction, so a bar can
+        # never show one area's forms while another area's tab is in front.
+        # Building it here would also be the wrong shape as a single shared bar:
+        # it would need rebuilding on every tab switch.
+        self._bar = SubTabBar(self)
+
+        self._container = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(self._container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._bar)
+        layout.addWidget(self._stack, 1)
+
+        self._bar.refresh()
+
+    # -- the container ---------------------------------------------------
+
+    def container(self):
+        return self._container
+
+    def bar(self):
+        return self._bar
+
+    def canvas(self):
+        return self._stack.widget(0)
+
+    def detach(self):
+        """Let go of the canvas without destroying it.
+
+        ``EditorSession.dispose`` deletes the view itself, and a container that
+        still parents it would be deleting a widget out from under the session.
+        So the canvas is un-parented back to nobody here, and the rest goes.
+        """
+        canvas = self.canvas()
+        if canvas is not None:
+            canvas.setParent(None)
+
+        # The forms are owned by their tool hosts, not by this - the same rule
+        # the collaboration window follows. Un-parent rather than delete, so a
+        # closing session cannot take a form's widget with it before its owner
+        # has finished with it.
+        for widget in self.pages.values():
+            if widget is not None:
+                widget.setParent(None)
+
+        self.pages.clear()
+
+        self._container.setParent(None)
+        self._container.deleteLater()
+
+    # -- forms -----------------------------------------------------------
+
+    def addPage(self, key, widget):
+        """Put a form into this session's stack and show it.
+
+        Replacing an existing form of the same kind *for this session* is
+        correct and is not the behaviour D-d.4b removes: one Area Settings form
+        per area is the rule, so asking again for the same area means "show me
+        the one I opened".
+        """
+        existing = self.pages.get(key)
+        if existing is not None and existing is not widget:
+            self.removePage(key)
+
+        if self._stack.indexOf(widget) == -1:
+            self._stack.addWidget(widget)
+
+        self.pages[key] = widget
+        self._stack.setCurrentWidget(widget)
+        self._bar.refresh()
+        return widget
+
+    def removePage(self, key):
+        """Take a form out and fall back to the canvas.
+
+        Returns the widget, still alive, so the caller decides its fate - the
+        forms are owned by their tool hosts, exactly as the collaboration window
+        is owned by its controller rather than by the tab showing it.
+        """
+        widget = self.pages.pop(key, None)
+        if widget is None:
+            return None
+
+        index = self._stack.indexOf(widget)
+        if index != -1:
+            self._stack.removeWidget(widget)
+
+        self.showCanvas()
+        self._bar.refresh()
+        return widget
+
+    def pageKeys(self):
+        return list(self.pages)
+
+    # -- what is on show -------------------------------------------------
+
+    def showCanvas(self):
+        self._stack.setCurrentIndex(0)
+        self._bar.refresh()
+
+    def showPage(self, key):
+        widget = self.pages.get(key)
+        if widget is None:
+            return False
+
+        self._stack.setCurrentWidget(widget)
+        self._bar.refresh()
+        return True
+
+    def currentKey(self):
+        """The key of the form on show, or None when the canvas is."""
+        current = self._stack.currentWidget()
+        if current is self.canvas():
+            return None
+
+        for key, widget in self.pages.items():
+            if widget is current:
+                return key
+        return None
+
+    def isShowingCanvas(self):
+        return self.currentKey() is None
+
+
 class MasterTabWidget(QtWidgets.QTabWidget):
     """The window's central widget: one tab per open session.
 
@@ -128,6 +414,72 @@ class MasterTabWidget(QtWidgets.QTabWidget):
         # clipped by it; positioned by _positionOverlay on every resize.
         self.overlay = None
         self.overlayMargin = 12
+
+        # session -> SessionPageStack (D-d.4b). A session's tab page is a stack
+        # whose page 0 is its canvas and whose other pages are that session's
+        # open forms, so a form can take the tab's content area without the tab
+        # itself moving or changing what it names.
+        self._stacks = {}
+
+    # -- the per-session page stack (D-d.4b) -----------------------------
+
+    def stackFor(self, session, create=True):
+        """The page stack behind a session's tab.
+
+        Built on demand and cached, because a session's canvas is itself built
+        on first access - asking for a stack must not be what forces a view into
+        existence for a session that has none yet.
+        """
+        stack = self._stacks.get(session)
+        if stack is not None or not create:
+            return stack
+
+        stack = SessionPageStack(session, self)
+        self._stacks[session] = stack
+        return stack
+
+    def pageFor(self, session):
+        """What to insert as this session's tab page.
+
+        One place, so the answer cannot differ between ``sync`` and the code
+        that later swaps a form in.
+        """
+        return self.stackFor(session).container()
+
+    def canvasAt(self, index):
+        """The canvas view shown by tab ``index``, or None for a tool tab.
+
+        The counterpart to ``sessionAt`` for callers that want the widget rather
+        than the session. Since D-d.4b the page is the session's stack, so
+        ``widget(index)`` is no longer the view - and "which canvas is this tab
+        showing" is a question worth being able to ask directly rather than by
+        reaching through two containers at each call site.
+        """
+        session = self.sessionAt(index)
+        if session is None:
+            return None
+
+        stack = self._stacks.get(session)
+        return stack.canvas() if stack is not None else None
+
+    def currentCanvas(self):
+        """The canvas of the tab in front, or None over a tool tab or a form."""
+        stack = self._stacks.get(self.sessionAt(self.currentIndex()))
+        if stack is None or not stack.isShowingCanvas():
+            return None
+        return stack.canvas()
+
+    def dropStackFor(self, session):
+        """Forget a closed session's stack.
+
+        Called from ``removeToolTab``'s sibling path in ``sync`` and from the
+        window when a session is disposed. The stack owns nothing but the
+        arrangement - the canvas belongs to the session and the forms to their
+        pages - so this drops a reference rather than destroying anything.
+        """
+        stack = self._stacks.pop(session, None)
+        if stack is not None:
+            stack.detach()
 
     # -- reading the tabs ------------------------------------------------
 
@@ -301,12 +653,16 @@ class MasterTabWidget(QtWidgets.QTabWidget):
                     # removeTab does not destroy the page - dispose() owns the
                     # view's lifetime - so this is safe whichever happens first.
                     self.removeTab(index)
+                    self.dropStackFor(session)
 
             for position, session in enumerate(wanted):
                 index = self.indexOfSession(session)
 
                 if index == -1:
-                    index = self.insertTab(position, session.view,
+                    # The page is the session's stack, not its view directly
+                    # (D-d.4b): a form takes the tab's content area without the
+                    # tab moving or changing what it names.
+                    index = self.insertTab(position, self.pageFor(session),
                                            self.tabTitleFor(session))
                     self.tabBar().setTabData(index, session)
                 elif index != position:

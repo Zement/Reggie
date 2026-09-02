@@ -363,7 +363,21 @@ class CanvasOverlay(QtWidgets.QFrame):
 
         rect = parent.rect()
 
-        page = parent.currentWidget() if hasattr(parent, 'currentWidget') else None
+        # Since D-d.4b a canvas tab's page is not the view: it is a container
+        # holding the area's flyout bar and a stack whose page 0 is the view.
+        # So the container is asked for the canvas rather than reached for
+        # through the widget tree - without that this fell back to the tab
+        # widget's full width and put the overlay back over the scrollbars,
+        # which is the 3-4px overlap this method exists to avoid.
+        page = None
+
+        current_canvas = getattr(parent, 'currentCanvas', None)
+        if current_canvas is not None:
+            page = current_canvas()
+
+        if page is None and hasattr(parent, 'currentWidget'):
+            page = parent.currentWidget()
+
         viewport = getattr(page, 'viewport', None)
         if viewport is not None:
             # Map the viewport into the container's coordinates: the page sits

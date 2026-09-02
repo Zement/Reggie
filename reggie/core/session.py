@@ -522,9 +522,20 @@ class EditorSession:
             if window is not None:
                 tabs = getattr(window, 'tabs', None)
                 if tabs is not None:
-                    index = tabs.indexOf(self._view)
+                    # By session, not by widget. Since D-d.4b the tab's page is
+                    # this session's page stack rather than its view, so
+                    # `indexOf(self._view)` returns -1 and the tab would be left
+                    # holding a widget about to be deleted underneath it - the
+                    # "wrapped C/C++ object has been deleted" family. The tab
+                    # data has always been the session, so asking by session is
+                    # both correct now and independent of what the page is next.
+                    index = tabs.indexOfSession(self)
                     if index != -1:
                         tabs.removeTab(index)
+
+                    dropper = getattr(tabs, 'dropStackFor', None)
+                    if dropper is not None:
+                        dropper(self)
                 elif window.centralWidget() is self._view:
                     window.takeCentralWidget()
 

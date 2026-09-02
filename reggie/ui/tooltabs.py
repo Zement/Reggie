@@ -279,16 +279,6 @@ class ToolTabManager(QtCore.QObject):
             callback = self._applyCallbacks.get(key)
             if callback is not None:
                 callback(host.dialog)
-        elif key in SESSION_PAGE_KEYS:
-            # A cancelled per-area form still has cleanup to do - the zone dialog
-            # previews live, so dismissing it has to repaint what it was
-            # previewing - and the binding has to be dropped either way. Told
-            # explicitly rather than left to the apply callback, because
-            # "cancelled" and "never confirmed" are the same thing to a page and
-            # must not be the same thing as "applied".
-            cancel = getattr(self.win, '_cancelSessionPage', None)
-            if cancel is not None:
-                cancel(key, host.dialog)
 
         # Remove the tab before closing the dialog: closing can run cleanup that
         # re-enters (the Patch Manager's temp-directory sweep touches the file
@@ -322,17 +312,12 @@ class ToolTabManager(QtCore.QObject):
         under construction - or a headless test with a stub window - does not
         have to have every handler in place before the manager exists.
         """
-        callbacks = {
+        # The five per-area forms are deliberately absent. They were tool tabs
+        # for one phase (D-d.4) and moved into their session's own page stack at
+        # D-d.4b, because one tab per *kind* meant asking for area 2's Area
+        # Settings threw away area 1's half-filled one. Their apply and cancel
+        # are routed by ReggieWindow._finishSessionForm now; the keys below stay
+        # in this module because that stack still identifies a form by one.
+        return {
             PREFERENCES: getattr(self.win, 'ApplyPreferences', None),
         }
-
-        # The five per-area forms (D-d.4) all apply the same way: through the
-        # binding that says *which session*, never against whatever is active.
-        # One callback per key rather than one shared one, because closeTool
-        # passes only the dialog and the page has to be found by key.
-        router = getattr(self.win, '_applySessionPage', None)
-        if router is not None:
-            for key in SESSION_PAGE_KEYS:
-                callbacks[key] = lambda dialog, _k=key: router(_k, dialog)
-
-        return callbacks

@@ -991,16 +991,33 @@ class ReggieWindow(QtWidgets.QMainWindow):
     # -- session-bound pages (D-d.4) ----------------------------------------
 
     def sessionPageFor(self, key):
-        """The ``SessionBoundPage`` behind an open tool tab, or None."""
-        return getattr(self, '_sessionPages', {}).get(key)
+        """The ``SessionBoundPage`` for a key on the active session, or None.
+
+        Kept for callers that mean "the form the user is looking at". Since
+        D-d.4b a form belongs to an area rather than to the editor, so the
+        session-aware ``sessionPageOn`` is the fuller question.
+        """
+        manager = globals_.get_session_manager()
+        return self.sessionPageOn(manager.active if manager else None, key)
+
+    def sessionPageOn(self, session, key):
+        """The ``SessionBoundPage`` of kind ``key`` open on ``session``."""
+        return getattr(self, '_sessionPages', {}).get((session, key))
 
     def OpenSessionPage(self, key, factory, title, apply_callback, session=None):
         """Open one of the five per-area forms, bound to ``session``.
 
-        The binding is the phase (D-d.4): the form applies to the session it was
-        opened for, whatever tab is in front when the user presses OK. See
+        The binding is D-d.4: the form applies to the session it was opened for,
+        whatever tab is in front when the user presses OK. See
         ``reggie.ui.sessionpages`` for why that is not the default and what goes
         wrong without it.
+
+        **One form per area** since D-d.4b, and it replaced one per *kind*.
+        Zement's correction, 2026-09-02: replacing area 1's half-filled Area
+        Settings because the user asked for area 2's throws away work, which is
+        not what reopening Preferences does and not what the shell's
+        one-tab-per-kind rule was ever about. The form goes into that session's
+        own page stack, under its own tab, reachable from the flyout bar.
 
         ``session`` defaults to the active one, which is what every menu entry
         means; the directory listing passes a node's session explicitly.
@@ -1033,10 +1050,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         from reggie.ui.sessionpages import SessionBoundPage
 
-        page = SessionBoundPage(self, session, apply_callback, key, title)
+        tabs = getattr(self, 'tabs', None)
+        stack = tabs.stackFor(session, create=False) if tabs is not None else None
 
-        tabs = getattr(self, 'toolTabs', None)
-        if tabs is None:
+        if stack is None:
+            # No shell, or a session with no tab yet. The modal path, unchanged
+            # from before D-d.4 - and the binding still applies it, so even here
+            # the values land on the session this was opened for rather than on
+            # whatever became active while the dialog was up.
+            page = SessionBoundPage(self, session, apply_callback, key, title)
             dialog = factory()
             if dialog is None:
                 return None
@@ -1045,24 +1067,84 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 page.applyNow(dialog)
             return None
 
-        # One page per kind, so this may be replacing another session's. Drop the
-        # old binding *before* closeTool runs, or its apply callback fires for a
-        # form the user never confirmed - a silent write, which is precisely what
-        # this phase exists to prevent.
         if not hasattr(self, '_sessionPages'):
             self._sessionPages = {}
 
-        self._sessionPages.pop(key, None)
-        if tabs.isOpen(key):
-            tabs.closeTool(key, apply=False)
+        # Asking again for a form this area already has means "show me the one I
+        # opened", exactly as it does for Preferences - the difference D-d.4b
+        # draws is between *this area's* form and *another* area's, and another
+        # area's is untouched here because the registry is keyed by both.
+        existing = self._sessionPages.get((session, key))
+        if existing is not None and stack.showPage(key):
+            return existing
 
-        host = tabs.openTool(key, factory, self._sessionPageTitle(title, session),
-                             owns=True)
-        if host is None:
+        dialog = factory()
+        if dialog is None:
             return None
 
-        self._sessionPages[key] = page
+        page = SessionBoundPage(self, session, apply_callback, key, title)
+        page.dialog = dialog
+
+        self._hostSessionForm(stack, key, dialog, page)
+        self._sessionPages[(session, key)] = page
+        return page
+
+    def _hostSessionForm(self, stack, key, dialog, page):
+        """Wrap a form and put it into its session's page stack.
+
+        Reuses ``ToolTabHost`` rather than reparenting the dialog directly,
+        because the hard part of hosting a QDialog as a page is already solved
+        there: it intercepts ``done``/``accept``/``reject`` - four dialogs by
+        four authors, none of which knows it is not modal - and it distinguishes
+        the confirming button from the dismissing one. That distinction is the
+        whole contract of a form that writes into a level.
+        """
+        from reggie.ui.tooltabs import ToolTabHost
+
+        host = ToolTabHost(key, dialog, owns_dialog=True)
+        host.closeRequested.connect(
+            lambda _key, confirmed, _s=stack, _k=key, _p=page:
+            self._finishSessionForm(_s, _k, _p, confirmed))
+
+        page.host = host
+        stack.addPage(key, host)
         return host
+
+    def _finishSessionForm(self, stack, key, page, confirmed):
+        """The user pressed OK or Cancel on a per-area form.
+
+        Applies only on the confirming button, and takes the form out either
+        way. The apply happens *before* the page is removed, because the apply
+        reads the dialog's widgets - which is the same ordering ``closeTool``
+        uses for Preferences, and for the same reason.
+        """
+        host = getattr(page, 'host', None)
+        dialog = getattr(host, 'dialog', None)
+
+        if confirmed and dialog is not None:
+            page.applyNow(dialog)
+        elif not confirmed:
+            self._cancelSessionForm(key)
+
+        self._sessionPages.pop((page.session, key), None)
+        stack.removePage(key)
+
+        if host is not None:
+            host.closeDialog()
+            host.setParent(None)
+            host.deleteLater()
+
+    def _cancelSessionForm(self, key):
+        """Whatever a dismissed form needs undoing.
+
+        Only the zone dialog has any: it previews its edits on the level
+        overview as the user types, so cancelling has to repaint what was being
+        previewed. That repaint was the ``exec() != Accepted`` branch of the old
+        handler and is the one thing that would have been silently lost when
+        these became pages.
+        """
+        if key == tooltabs.ZONE_SETTINGS:
+            self.levelOverview.update()
 
     def _sessionPageTitle(self, title, session):
         """``Area Settings (02-05: Area 3)`` - the binding, made visible.
@@ -1084,56 +1166,42 @@ class ReggieWindow(QtWidgets.QMainWindow):
         except Exception:
             return title
 
-    def _applySessionPage(self, key, dialog):
-        """Route a confirmed tool tab through its binding.
-
-        Registered with the tool-tab manager, which calls it when the *user*
-        confirmed - so a dismissed form reaches nothing, which is what Cancel
-        has to mean for a form that writes into a level.
-        """
-        page = self.sessionPageFor(key)
-        self._sessionPages.pop(key, None)
-
-        if page is not None:
-            page.applyNow(dialog)
-
-    def _cancelSessionPage(self, key, dialog):
-        """A per-area form was dismissed rather than confirmed.
-
-        Drops the binding, and runs whatever the form needs undoing. Only the
-        zone dialog has any: it previews its edits on the level overview as the
-        user types, so cancelling has to repaint what was being previewed. That
-        repaint was the ``exec() != Accepted`` branch of the old handler and is
-        the one thing that would have been silently lost in the move.
-        """
-        pages = getattr(self, '_sessionPages', None)
-        if pages is not None:
-            pages.pop(key, None)
-
-        if key == tooltabs.ZONE_SETTINGS:
-            self.levelOverview.update()
-
     def CloseSessionPagesFor(self, session):
-        """Close any page bound to a session that is going away.
+        """Close every form bound to a session that is going away.
 
         The one state this design must not permit is a page holding a disposed
         session: its area is a dead object, and applying would write into
         released memory or - worse, because it does not crash - into whatever is
         active instead.
+
+        Since D-d.4b a session's forms are pages of that session's own stack, so
+        dropping the stack would take them with it by parentage. Done explicitly
+        anyway, and *before* the stack goes, so each form's dialog gets its own
+        ``closeEvent`` rather than being deleted mid-cleanup - which is the
+        difference between "the Patch Manager sweeps its temp directories" and
+        "it does not".
         """
         pages = getattr(self, '_sessionPages', None)
         if not pages:
             return
 
-        tabs = getattr(self, 'toolTabs', None)
+        tabs = getattr(self, 'tabs', None)
+        stack = tabs.stackFor(session, create=False) if tabs is not None else None
 
-        for key, page in list(pages.items()):
-            if page.session is not session:
+        for (owner, key), page in list(pages.items()):
+            if owner is not session:
                 continue
 
-            pages.pop(key, None)
-            if tabs is not None and tabs.isOpen(key):
-                tabs.closeTool(key, apply=False)
+            pages.pop((owner, key), None)
+
+            if stack is not None:
+                stack.removePage(key)
+
+            host = getattr(page, 'host', None)
+            if host is not None:
+                host.closeDialog()
+                host.setParent(None)
+                host.deleteLater()
 
     def _RefillAreaComboBox(self):
         """Rebuild the area selector from the level actually open.
