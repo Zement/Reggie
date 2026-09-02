@@ -729,8 +729,24 @@ class SessionManager:
 
         return session
 
-    def activate(self, session):
-        """Make a session the active one. Returns the previously active one."""
+    def activate(self, session, notify=True):
+        """Make a session the active one. Returns the previously active one.
+
+        ``notify=False`` moves the *state* - ``globals_``'s proxied bindings,
+        spritelib's, this session's tilesets - and skips the three calls that
+        tell the rest of the editor about it: the undo menu, the canvas on
+        screen, and the toolbar. D-d.4's session-bound pages need the first half
+        and must not have the second: applying an Area Settings form for area 1
+        while the user is looking at area 2 would yank the canvas to area 1 and
+        back again.
+
+        One method with a flag rather than a second ``_bind_state_only``
+        alongside it, deliberately. A twin would be a second definition of what
+        activation means, and the two would drift - which is the exact shape of
+        both the D-d.3b area-number bug and the ``Dirty``-proxy bug. The flag
+        guards three calls and nothing else, so what it suppresses is readable
+        from here.
+        """
         if session is not None and session not in self._sessions:
             raise ValueError('cannot activate a session this manager does not own')
 
@@ -765,10 +781,16 @@ class SessionManager:
         if session is not None and session.tiles is not None:
             SLib.Tiles = session.tiles
 
+        # Everything below here is the *notify* half: three window callbacks
+        # that tell the editor the active session moved. Dropping the window
+        # reference is how `notify=False` suppresses all three at once - one
+        # place rather than three conditions, so a fourth callback added later
+        # is silenced by construction instead of by remembering to.
+        #
         # The undo/redo menu items follow the active session's stack. Guarded
         # because the manager exists before the window does during boot, and
         # the headless suites run with no window at all.
-        window = getattr(_globals(), 'mainWindow', None)
+        window = getattr(_globals(), 'mainWindow', None) if notify else None
         binder = getattr(window, 'BindUndoStack', None)
         if binder is not None and session is not None:
             binder(session.undo_stack)

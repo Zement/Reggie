@@ -967,6 +967,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if len(manager) <= 1:
             return False
 
+        # Before the session is disposed, not after: a page holding a disposed
+        # session is the one state D-d.4 must not permit, and this is the point
+        # every deliberate close passes through.
+        self.CloseSessionPagesFor(session)
+
         manager.close(session)
         self.tabs.sync()
 
@@ -982,6 +987,140 @@ class ReggieWindow(QtWidgets.QMainWindow):
             self.RefreshDirectoryListing()
 
         return True
+
+    # -- session-bound pages (D-d.4) ----------------------------------------
+
+    def sessionPageFor(self, key):
+        """The ``SessionBoundPage`` behind an open tool tab, or None."""
+        return getattr(self, '_sessionPages', {}).get(key)
+
+    def OpenSessionPage(self, key, factory, title, apply_callback, session=None):
+        """Open one of the five per-area forms, bound to ``session``.
+
+        The binding is the phase (D-d.4): the form applies to the session it was
+        opened for, whatever tab is in front when the user presses OK. See
+        ``reggie.ui.sessionpages`` for why that is not the default and what goes
+        wrong without it.
+
+        ``session`` defaults to the active one, which is what every menu entry
+        means; the directory listing passes a node's session explicitly.
+
+        **No shell, no tab.** The collab suites and several headless tests build
+        a window with no ``MasterTabWidget``, and a per-area dialog that required
+        one would fail all of them - so this falls back to ``exec()`` plus an
+        immediate apply, which is the behaviour these five had before this phase
+        and the same fallback ``showStatusWindow`` already uses.
+        """
+        manager = globals_.get_session_manager()
+        if session is None and manager is not None:
+            session = manager.active
+
+        if session is None:
+            return None
+
+        from reggie.ui.sessionpages import SessionBoundPage
+
+        page = SessionBoundPage(self, session, apply_callback, key, title)
+
+        tabs = getattr(self, 'toolTabs', None)
+        if tabs is None:
+            dialog = factory()
+            if dialog is None:
+                return None
+
+            if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+                page.applyNow(dialog)
+            return None
+
+        # One page per kind, so this may be replacing another session's. Drop the
+        # old binding *before* closeTool runs, or its apply callback fires for a
+        # form the user never confirmed - a silent write, which is precisely what
+        # this phase exists to prevent.
+        if not hasattr(self, '_sessionPages'):
+            self._sessionPages = {}
+
+        self._sessionPages.pop(key, None)
+        if tabs.isOpen(key):
+            tabs.closeTool(key, apply=False)
+
+        host = tabs.openTool(key, factory, self._sessionPageTitle(title, session),
+                             owns=True)
+        if host is None:
+            return None
+
+        self._sessionPages[key] = page
+        return host
+
+    def _sessionPageTitle(self, title, session):
+        """``Area Settings (02-05: Area 3)`` - the binding, made visible.
+
+        Reuses the tab widget's own ``tabTitleFor`` rather than formatting a
+        second time, so a page and the canvas it acts on always read as the same
+        thing - including the ``xx-xx: Area y`` form Zement asked for at D-d.3d,
+        and whatever it becomes next. Without this the binding is real but
+        invisible, and a user with two areas open has no way to tell which one an
+        open form belongs to.
+        """
+        tabs = getattr(self, 'tabs', None)
+        namer = getattr(tabs, 'tabTitleFor', None)
+        if namer is None:
+            return title
+
+        try:
+            return '%s (%s)' % (title, namer(session, dirty_marker=False))
+        except Exception:
+            return title
+
+    def _applySessionPage(self, key, dialog):
+        """Route a confirmed tool tab through its binding.
+
+        Registered with the tool-tab manager, which calls it when the *user*
+        confirmed - so a dismissed form reaches nothing, which is what Cancel
+        has to mean for a form that writes into a level.
+        """
+        page = self.sessionPageFor(key)
+        self._sessionPages.pop(key, None)
+
+        if page is not None:
+            page.applyNow(dialog)
+
+    def _cancelSessionPage(self, key, dialog):
+        """A per-area form was dismissed rather than confirmed.
+
+        Drops the binding, and runs whatever the form needs undoing. Only the
+        zone dialog has any: it previews its edits on the level overview as the
+        user types, so cancelling has to repaint what was being previewed. That
+        repaint was the ``exec() != Accepted`` branch of the old handler and is
+        the one thing that would have been silently lost in the move.
+        """
+        pages = getattr(self, '_sessionPages', None)
+        if pages is not None:
+            pages.pop(key, None)
+
+        if key == tooltabs.ZONE_SETTINGS:
+            self.levelOverview.update()
+
+    def CloseSessionPagesFor(self, session):
+        """Close any page bound to a session that is going away.
+
+        The one state this design must not permit is a page holding a disposed
+        session: its area is a dead object, and applying would write into
+        released memory or - worse, because it does not crash - into whatever is
+        active instead.
+        """
+        pages = getattr(self, '_sessionPages', None)
+        if not pages:
+            return
+
+        tabs = getattr(self, 'toolTabs', None)
+
+        for key, page in list(pages.items()):
+            if page.session is not session:
+                continue
+
+            pages.pop(key, None)
+            if tabs is not None and tabs.isOpen(key):
+                tabs.closeTool(key, apply=False)
 
     def _RefillAreaComboBox(self):
         """Rebuild the area selector from the level actually open.
@@ -1302,8 +1441,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
     def AboutBox(self):
         return self._windowActions.AboutBox()
 
-    def HandleInfo(self):
-        return self._windowActions.HandleInfo()
+    def HandleInfo(self, session=None):
+        return self._windowActions.HandleInfo(session=session)
 
     def HelpBox(self):
         return self._windowActions.HelpBox()
@@ -2033,6 +2172,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
         globals_.DirtyOverride += 1
         try:
             for session in list(sessions):
+                # A discard replaces every session on the file with a fresh one
+                # read from disk, so a page bound to any of them is bound to
+                # something about to be disposed (D-d.4).
+                self.CloseSessionPagesFor(session)
                 manager.close(session)
 
             self.ActivateSession(manager.active)
@@ -4645,14 +4788,28 @@ class ReggieWindow(QtWidgets.QMainWindow):
             except Exception as e:
                 print(f"[QPT] Warning: Could not reset QPT: {e}")
 
-    def HandleAreaOptions(self):
+    def HandleAreaOptions(self, session=None):
         """
         Pops up the options for Area Dialogue
-        """
-        dlg = deferred.AreaOptionsDialog()
-        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
 
+        A session-bound page since D-d.4: it applies to the area it was opened
+        for, not to whichever tab happens to be in front when OK is pressed.
+        """
+        return self.OpenSessionPage(
+            tooltabs.AREA_SETTINGS,
+            deferred.AreaOptionsDialog,
+            globals_.trans.string('AreaDlg', 0),
+            self._applyAreaOptions,
+            session=session)
+
+    def _applyAreaOptions(self, dlg):
+        """Everything the handler did after ``exec()`` returned.
+
+        Not one line of this changed when it moved (D-d.4). It goes on reading
+        ``globals_.Area``, ``self.undoStack`` and ``RefreshTilesetsFromArea()``
+        - and it is correct, because ``SessionBoundPage.applyNow`` has pointed
+        all three at the session this form was opened for.
+        """
         SetDirty()
 
         before = {attr: getattr(globals_.Area, attr) for attr in self._AREA_SETTINGS_ATTRS}
@@ -4699,17 +4856,25 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 before, after, globals_.trans.string('Undo', 51),
                 refresh_tilesets=True))
 
-    def HandleZones(self):
+    def HandleZones(self, session=None):
         """
         Pops up the options for Zone dialog
+
+        Session-bound since D-d.4, and the one of the five where a wrong binding
+        would *crash* rather than corrupt: the apply below moves ``ZoneItem``s
+        in and out of ``self.scene``, which is per session since D-c.1.
         """
         LoadZoneThemes()
 
-        dlg = deferred.ZonesDialog()
-        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            self.levelOverview.update()
-            return
+        return self.OpenSessionPage(
+            tooltabs.ZONE_SETTINGS,
+            deferred.ZonesDialog,
+            globals_.trans.string('ZonesDlg', 0),
+            self._applyZones,
+            session=session)
 
+    def _applyZones(self, dlg):
+        """Everything the handler did after ``exec()`` returned (D-d.4)."""
         SetDirty()
 
         zones_before = undo.snapshot_zones()
@@ -4789,14 +4954,21 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 zones_before, zones_after, globals_.trans.string('Undo', 50)))
 
     # Handles setting the backgrounds
-    def HandleBG(self):
+    def HandleBG(self, session=None):
         """
         Pops up the Background settings Dialog
-        """
-        dlg = deferred.BGDialog()
-        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
 
+        Session-bound since D-d.4.
+        """
+        return self.OpenSessionPage(
+            tooltabs.BACKGROUNDS,
+            deferred.BGDialog,
+            globals_.trans.string('BGDlg', 0),
+            self._applyBG,
+            session=session)
+
+    def _applyBG(self, dlg):
+        """Everything the handler did after ``exec()`` returned (D-d.4)."""
         SetDirty()
 
         zones_before = undo.snapshot_zones()
@@ -4921,12 +5093,17 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         DiagnosticToolDialog().exec()
 
-    def HandleCameraProfiles(self):
-        """Pops up the options for camera profiles"""
-        dlg = CameraProfilesDialog()
-        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
+    def HandleCameraProfiles(self, session=None):
+        """Pops up the options for camera profiles. Session-bound since D-d.4."""
+        return self.OpenSessionPage(
+            tooltabs.CAMERA_PROFILES,
+            CameraProfilesDialog,
+            globals_.trans.string('CamProfsDlg', 0),
+            self._applyCameraProfiles,
+            session=session)
 
+    def _applyCameraProfiles(self, dlg):
+        """Everything the handler did after ``exec()`` returned (D-d.4)."""
         camprofiles = []
         for row in range(dlg.list.count()):
             item = dlg.list.item(row)

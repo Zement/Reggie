@@ -40,33 +40,46 @@ class WindowActions:
         """
         AboutDialog().exec()
 
-    def HandleInfo(self):
+    def HandleInfo(self, session=None):
         """
         Records the Level Meta Information
+
+        Session-bound since D-d.4. The area-1 rule is unchanged: this is *level*
+        metadata rather than area data, so it is offered only where the dialog
+        was offered before.
         """
-        if globals_.Area.areanum == 1:
-            dlg = MetaInfoDialog()
-            if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-                from reggie.core import undo
-
-                before = undo.snapshot_metadata()
-
-                globals_.Area.Metadata.setStrData('Title', dlg.levelName.text())
-                globals_.Area.Metadata.setStrData('Author', dlg.Author.text())
-                globals_.Area.Metadata.setStrData('Group', dlg.Group.text())
-                globals_.Area.Metadata.setStrData('Website', dlg.Website.text())
-
-                SetDirty()
-
-                after = undo.snapshot_metadata()
-                if after != before and not undo.is_recording_blocked():
-                    self.win.undoStack.push(undo.MetadataCommand(
-                        before, after, globals_.trans.string('Undo', 54)))
-                return
-        else:
+        if globals_.Area.areanum != 1:
             dlg = QtWidgets.QMessageBox()
             dlg.setText(globals_.trans.string('InfoDlg', 14))
             dlg.exec()
+            return None
+
+        from reggie.ui import tooltabs
+
+        return self.win.OpenSessionPage(
+            tooltabs.LEVEL_INFORMATION,
+            MetaInfoDialog,
+            globals_.trans.string('InfoDlg', 0),
+            self._applyInfo,
+            session=session)
+
+    def _applyInfo(self, dlg):
+        """Everything the handler did after ``exec()`` returned (D-d.4)."""
+        from reggie.core import undo
+
+        before = undo.snapshot_metadata()
+
+        globals_.Area.Metadata.setStrData('Title', dlg.levelName.text())
+        globals_.Area.Metadata.setStrData('Author', dlg.Author.text())
+        globals_.Area.Metadata.setStrData('Group', dlg.Group.text())
+        globals_.Area.Metadata.setStrData('Website', dlg.Website.text())
+
+        SetDirty()
+
+        after = undo.snapshot_metadata()
+        if after != before and not undo.is_recording_blocked():
+            self.win.undoStack.push(undo.MetadataCommand(
+                before, after, globals_.trans.string('Undo', 54)))
 
     def HelpBox(self):
         """

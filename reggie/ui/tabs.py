@@ -246,7 +246,15 @@ class MasterTabWidget(QtWidgets.QTabWidget):
 
     # -- writing the tabs ------------------------------------------------
 
-    def tabTitleFor(self, session):
+    def tabTitleFor(self, session, dirty_marker=True):
+        """This session's tab label.
+
+        ``dirty_marker=False`` gives the name alone. D-d.4's session-bound pages
+        put this in *their* tab titles - "Area Settings (02-05: Area 3)" - to
+        make the binding visible, and there the marker would be a lie: a form's
+        tab is not itself unsaved, and it would go stale the moment the level was
+        saved from anywhere else, since nothing repaints a tool tab's title.
+        """
         name = os.path.splitext(os.path.basename(session.file_path or ''))[0]
         if not name:
             name = globals_.trans.string('WindowTitle', 0)
@@ -261,7 +269,7 @@ class MasterTabWidget(QtWidgets.QTabWidget):
             name = '%s: %s' % (name, globals_.trans.string(
                 'AreaCombobox', 0, '[num]', session.area_num))
 
-        return ('* ' + name) if session.dirty else name
+        return ('* ' + name) if (dirty_marker and session.dirty) else name
 
     def sync(self):
         """Make the tabs match the manager. The only path that touches them.

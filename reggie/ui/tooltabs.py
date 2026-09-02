@@ -61,6 +61,25 @@ PREFERENCES = 'preferences'
 PATCH_MANAGER = 'patchmanager'
 COLLABORATE = 'collaborate'
 
+#: The five per-area forms (D-d.4). One key each, so the shell's existing
+#: one-tab-per-kind rule gives **one Area Settings page at a time, not one per
+#: session** - asking for it on area 2 while area 1's page is open replaces it.
+#:
+#: A page per session was considered and rejected: four identically-named tabs
+#: with the user choosing between them by tab order. Replacing is also what
+#: Preferences and the Patch Manager already do when asked for twice, so it is
+#: the shell's established answer rather than a new one. Which session a page is
+#: bound to is put in its tab title instead - see ``ReggieWindow.OpenSessionPage``.
+AREA_SETTINGS = 'areasettings'
+ZONE_SETTINGS = 'zonesettings'
+BACKGROUNDS = 'backgrounds'
+CAMERA_PROFILES = 'cameraprofiles'
+LEVEL_INFORMATION = 'levelinformation'
+
+#: Every key above, for the teardown that closes a session's pages with it.
+SESSION_PAGE_KEYS = (AREA_SETTINGS, ZONE_SETTINGS, BACKGROUNDS,
+                     CAMERA_PROFILES, LEVEL_INFORMATION)
+
 #: The undo history was a tool tab in D-c.5 and moved to a sidebar section in
 #: D-c.6 - a full-width tab made you leave the level to reach a thing you use
 #: *while* looking at the level. The key is kept so a saved layout or a stale
@@ -260,6 +279,16 @@ class ToolTabManager(QtCore.QObject):
             callback = self._applyCallbacks.get(key)
             if callback is not None:
                 callback(host.dialog)
+        elif key in SESSION_PAGE_KEYS:
+            # A cancelled per-area form still has cleanup to do - the zone dialog
+            # previews live, so dismissing it has to repaint what it was
+            # previewing - and the binding has to be dropped either way. Told
+            # explicitly rather than left to the apply callback, because
+            # "cancelled" and "never confirmed" are the same thing to a page and
+            # must not be the same thing as "applied".
+            cancel = getattr(self.win, '_cancelSessionPage', None)
+            if cancel is not None:
+                cancel(key, host.dialog)
 
         # Remove the tab before closing the dialog: closing can run cleanup that
         # re-enters (the Patch Manager's temp-directory sweep touches the file
@@ -293,6 +322,17 @@ class ToolTabManager(QtCore.QObject):
         under construction - or a headless test with a stub window - does not
         have to have every handler in place before the manager exists.
         """
-        return {
+        callbacks = {
             PREFERENCES: getattr(self.win, 'ApplyPreferences', None),
         }
+
+        # The five per-area forms (D-d.4) all apply the same way: through the
+        # binding that says *which session*, never against whatever is active.
+        # One callback per key rather than one shared one, because closeTool
+        # passes only the dialog and the page has to be found by key.
+        router = getattr(self.win, '_applySessionPage', None)
+        if router is not None:
+            for key in SESSION_PAGE_KEYS:
+                callbacks[key] = lambda dialog, _k=key: router(_k, dialog)
+
+        return callbacks
