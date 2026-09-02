@@ -48,7 +48,21 @@ class MenuBuilder:
         if statustext is not None: act.setStatusTip(statustext)
         if toggle:
             act.setCheckable(True)
-        if function is not None: act.triggered.connect(function)
+        if function is not None:
+            # `triggered` carries a `checked` bool, which Qt passes as the first
+            # positional argument. Every handler that takes an optional first
+            # parameter therefore receives False from a menu or toolbar - which
+            # is how D-d.4's five per-area forms came to be opened with
+            # `session=False` and bound to a non-session (Zement, 2026-09-02).
+            #
+            # Dropped here, once, rather than defended in each handler: a
+            # handler that grows a parameter later cannot know it was wired to
+            # an action, and the next one to grow one would repeat the bug.
+            # Checkable actions still need the flag, so only those keep it.
+            if toggle:
+                act.triggered.connect(function)
+            else:
+                act.triggered.connect(lambda _checked=False, _f=function: _f())
 
         self.win.actions[shortname] = act
 

@@ -718,6 +718,21 @@ class LevelIO:
         # after the session has applied its permissions. Setting them directly
         # here is what re-enabled Backgrounds and the area actions for an Editor
         # client on every level load.
+        # Before the level-specific rules below, because it is the blanket one:
+        # every level action follows "is there a canvas in front".
+        #
+        # Needed here since D-d.3b. `add_level` opens the session *before* the
+        # level exists - deliberately, so the level's own construction has a
+        # session to publish into rather than stamping over the previous one -
+        # so `session.area` is still None when open() -> activate() reaches
+        # SyncToolbarContext, which reads that as "no canvas" and greys out
+        # every level action. Nothing re-synced afterwards, so they stayed dead
+        # until the next activation: opening a second tab, or leaving the tab
+        # and coming back, which is exactly what Zement observed fixing it
+        # (2026-09-02). Backgrounds was the one exception because the line
+        # below re-enables it on its own.
+        self.win.SyncToolbarContext()
+
         set_action_allowed('addarea', len(globals_.Level.areas) < 4)
         set_action_allowed('importarea', len(globals_.Level.areas) < 4)
         set_action_allowed('deletearea', len(globals_.Level.areas) > 1)

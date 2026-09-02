@@ -1012,7 +1012,20 @@ class ReggieWindow(QtWidgets.QMainWindow):
         and the same fallback ``showStatusWindow`` already uses.
         """
         manager = globals_.get_session_manager()
-        if session is None and manager is not None:
+
+        # Validated against the manager rather than merely checked for None.
+        # Every one of these five is wired to a QAction, and `triggered` passes
+        # its `checked` bool as the first positional argument - so the menu and
+        # the toolbar called this with `session=False`, which is not None, binds
+        # a page to a non-session, and then applies against whatever is active:
+        # the exact bug this phase exists to prevent, arriving through the one
+        # route none of the tests used (Zement, 2026-09-02). Fixed at the
+        # connection too, in menus.CreateAction; belt and braces, because this
+        # is the parameter that decides which area gets written.
+        if manager is None:
+            return None
+
+        if session not in manager.sessions:
             session = manager.active
 
         if session is None:
