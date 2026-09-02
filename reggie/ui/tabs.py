@@ -79,8 +79,15 @@ def level_sort_key(file_path):
     return (0, world, (1, 0), rest.lower())
 
 
-class SubTabBar(QtWidgets.QWidget):
-    """The flyout row of an area's forms, under its tab (D-d.4b).
+#: Background of a form button that is being looked at (D-d.4b). Amber rather
+#: than the palette's Highlight, because Highlight is also what a *checked*
+#: button uses and the two states have to be told apart at a glance. Zement,
+#: 2026-09-02: "maybe orange (color will be adjusted later)."
+VISITING_COLOUR = '#e08a1e'
+
+
+class SubTabBar(QtWidgets.QFrame):
+    """The floating bar of an area's forms (D-d.4b).
 
     Zement drew two options, 2026-09-02: icons *behind* the tab label, or a
     small bar below the tab. This is the second, and the reason is stronger than
@@ -89,16 +96,26 @@ class SubTabBar(QtWidgets.QWidget):
     pointer would move - the class of problem D-d.3d fixed with MIN_TAB_WIDTH,
     reintroduced as a feature.
 
-    Three states, his:
+    **It floats.** A full-width row in the layout took a strip of height from
+    the canvas for the life of the tab (Zement, 2026-09-02: "should float
+    on-top of the canvas, not influencing its size"). So it is a plain child
+    positioned by hand and raised above the page - the same shape ``CanvasOverlay``
+    takes for the level overview, and for the same reason: it costs no layout
+    space and is always where the canvas is.
 
-    ==========  ================================================  ==========
-    Viewing     this form is what the tab is showing              checked
-    Active      built and holding edits, canvas on show           bold
-    Inactive    no form of this kind for this area                plain
-    ==========  ================================================  ==========
+    **Always visible over its own tab**, all six buttons, whether or not a form
+    is open. An earlier version showed only the open ones, which made the bar
+    grow and shrink as forms came and went and gave a user with nothing open no
+    way in at all.
 
-    Empty until a form exists, and hidden while empty, so an area nobody has
-    opened a form for looks exactly as it did before this phase.
+    Three states, his, and each is a *background*, so they read from the icon
+    rather than from its label:
+
+    ==========  =============================================  ================
+    Unloaded    no form of this kind for this area yet         flat, toggled off
+    Loaded      built and holding edits, canvas on show        toggled on
+    Visiting    this form is what the tab is showing           amber
+    ==========  =============================================  ================
     """
 
     #: The five, in the order the Level menu lists them. Icon names are the ones
@@ -112,40 +129,52 @@ class SubTabBar(QtWidgets.QWidget):
         ('levelinformation', 'info', 'InfoDlg'),
     )
 
-    def __init__(self, stack):
-        super().__init__()
+    #: Distance from the top-left corner of the canvas.
+    MARGIN = 8
+
+    def __init__(self, stack, parent=None):
+        super().__init__(parent)
 
         self.stack = stack
         self.buttons = {}
 
+        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self.setAutoFillBackground(True)
+
         layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setContentsMargins(3, 3, 3, 3)
         layout.setSpacing(2)
 
-        for key, icon, _title in self.ENTRIES:
-            button = QtWidgets.QToolButton(self)
-            button.setCheckable(True)
-            button.setAutoRaise(True)
-            button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        # The canvas button returns the tab to what it is named after. Kept as a
+        # button rather than "click the tab again", which Zement offered as the
+        # alternative: a tab click already means "come to this area", and giving
+        # it a second meaning depending on what the area is showing is the kind
+        # of overload that is invisible until it surprises someone. A sixth icon
+        # is one more thing on screen and no more things to know.
+        self.canvasButton = self._makeButton()
+        self.canvasButton.clicked.connect(self._showCanvas)
+        layout.addWidget(self.canvasButton)
+
+        for key, _icon, _title in self.ENTRIES:
+            button = self._makeButton()
             button.clicked.connect(
                 lambda _checked=False, _k=key: self._activate(_k))
 
             self.buttons[key] = button
             layout.addWidget(button)
 
-        # The canvas button returns the tab to what it is named after. Its own
-        # entry rather than "click the pressed form again to close": a toggle
-        # that turns into a close button is two meanings on one control, and the
-        # canvas is not a form to be toggled off.
-        self.canvasButton = QtWidgets.QToolButton(self)
-        self.canvasButton.setCheckable(True)
-        self.canvasButton.setAutoRaise(True)
-        self.canvasButton.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
-        self.canvasButton.clicked.connect(self._showCanvas)
-        layout.insertWidget(0, self.canvasButton)
-
-        layout.addStretch(1)
+        # No stretch: the bar is sized by its buttons, not by its parent
+        # (Zement, 2026-09-02 - "the width should be restricted to what's needed
+        # by the buttons"). A stretch item here is what made it full width.
         self._loadIcons()
+        self.adjustSize()
+
+    def _makeButton(self):
+        button = QtWidgets.QToolButton(self)
+        button.setCheckable(True)
+        button.setAutoRaise(True)
+        button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        return button
 
     def _loadIcons(self):
         """Icons and tooltips, resolved late.
@@ -157,8 +186,13 @@ class SubTabBar(QtWidgets.QWidget):
         """
         from reggie.ui.ui import GetIcon
 
+        # `objects` is the palette's own icon, so the button that returns to the
+        # level is marked with the thing the level is made of. There is no
+        # `view` icon in the set - Zement noticed the canvas was the one sub-tab
+        # without one - and inventing art here would be worse than reusing the
+        # one that already means "the level".
         try:
-            self.canvasButton.setIcon(GetIcon('view'))
+            self.canvasButton.setIcon(GetIcon('objects'))
             self.canvasButton.setToolTip(globals_.trans.string('MenuItems', 164))
         except Exception:
             self.canvasButton.setText('#')
@@ -173,43 +207,119 @@ class SubTabBar(QtWidgets.QWidget):
 
     # -- state ------------------------------------------------------------
 
+    def stateOf(self, key):
+        """``'visiting'``, ``'loaded'`` or ``'unloaded'`` for one button.
+
+        The three states in one place, so the styling below and the suites
+        agree about what each means rather than each deciding for itself.
+        """
+        if self.stack.currentKey() == key:
+            return 'visiting'
+        return 'loaded' if key in self.stack.pages else 'unloaded'
+
     def refresh(self):
-        """Redraw the three states, and hide the bar when there is nothing.
+        """Redraw the three states.
 
         Called from every ``SessionPageStack`` method that can change what is
         open or on show, which is what keeps the bar from needing anyone else to
         remember it.
         """
-        open_keys = set(self.stack.pageKeys())
-        current = self.stack.currentKey()
-
         for key, button in self.buttons.items():
-            is_open = key in open_keys
+            state = self.stateOf(key)
 
-            button.setVisible(is_open)
-            button.setChecked(key == current)
+            # Every button is always shown (Zement, 2026-09-02): the bar is the
+            # way *in* to a form, so hiding the ones not yet opened hid the
+            # entrance. Only the background says what has been loaded.
+            button.setVisible(True)
+            button.setChecked(state != 'unloaded')
+            self._paint(button, state)
 
-            font = button.font()
-            font.setBold(is_open and key != current)
-            button.setFont(font)
+        showing_canvas = self.stack.isShowingCanvas()
+        self.canvasButton.setChecked(True)
+        self._paint(self.canvasButton,
+                    'visiting' if showing_canvas else 'loaded')
 
-        self.canvasButton.setChecked(current is None)
+        self.adjustSize()
+        self.reposition()
 
-        # Hidden while empty: an area with no forms open must look exactly as it
-        # did before this phase, rather than carrying a permanent empty strip.
-        self.setVisible(bool(open_keys))
+    @staticmethod
+    def _paint(button, state):
+        """One button's background, by state.
+
+        Only *visiting* needs painting. Unloaded and Loaded are the style's own
+        unchecked and checked appearances, which is the point of using a
+        checkable button for them: "toggled off" and "toggled on" then look the
+        way this platform's toggles look, rather than the way one colour choice
+        here guesses they should.
+
+        A stylesheet rather than a palette role, because ``QToolButton`` in
+        autoRaise mode paints its own background from the style for the checked
+        and hover cases, and a palette colour underneath it is simply not drawn.
+        The ``:checked`` selector is spelled out for that reason - without it
+        the style repaints over the amber the moment the button is checked,
+        which every visiting button is.
+        """
+        button.setStyleSheet(
+            'QToolButton, QToolButton:checked { background: %s; '
+            'border-radius: 3px; }' % VISITING_COLOUR
+            if state == 'visiting' else '')
+
+    # -- placement --------------------------------------------------------
+
+    def reposition(self):
+        """Sit in the top-left of the canvas, over it rather than above it."""
+        parent = self.parentWidget()
+        if parent is None:
+            return
+
+        self.move(self.MARGIN, self.MARGIN)
+        self.raise_()
 
     # -- clicks -----------------------------------------------------------
 
     def _activate(self, key):
-        if not self.stack.showPage(key):
-            # The button is only visible while its page exists, so this is the
-            # race rather than the normal path - refresh puts the bar back in
-            # step with what is actually open.
-            self.refresh()
+        """Show a form, opening it first if this area has not got one yet.
+
+        Because every button is always present, a click is "open it" as often
+        as it is "show it" - which is the point of showing them all, and is why
+        this asks the window rather than only the stack.
+        """
+        if self.stack.showPage(key):
+            return
+
+        window = getattr(globals_, 'mainWindow', None)
+        opener = getattr(window, 'OpenSessionPageByKey', None)
+        if opener is not None:
+            opener(self.stack.session, key)
+
+        self.refresh()
 
     def _showCanvas(self):
         self.stack.showCanvas()
+
+
+class _StackContainer(QtWidgets.QWidget):
+    """One area's tab page: its stack, with the flyout floating over it.
+
+    Exists only to keep the floating bar placed. A layout cannot do it - the
+    bar is deliberately *not* in one - so the container tells it where to sit
+    whenever its own geometry changes, which is the same arrangement
+    ``MasterTabWidget`` uses for the level overview.
+    """
+
+    def __init__(self, stack):
+        super().__init__()
+        self.stack = stack
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.stack.bar().reposition()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Nothing has useful geometry until the page is shown, so the first
+        # placement has to happen here rather than at construction.
+        self.stack.bar().reposition()
 
 
 class SessionPageStack:
@@ -236,25 +346,29 @@ class SessionPageStack:
         self.tabs = tabs
         self.pages = {}          # tool key -> the form widget
 
-        self._stack = QtWidgets.QStackedWidget()
+        self._container = _StackContainer(self)
+
+        self._stack = QtWidgets.QStackedWidget(self._container)
         self._stack.addWidget(session.view)
 
-        # The flyout lives *inside* the session's own content area rather than
-        # under the master tab bar as a whole. Same place on screen - directly
-        # below the tab - and it is per session by construction, so a bar can
-        # never show one area's forms while another area's tab is in front.
-        # Building it here would also be the wrong shape as a single shared bar:
-        # it would need rebuilding on every tab switch.
-        self._bar = SubTabBar(self)
-
-        self._container = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(self._container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self._bar)
-        layout.addWidget(self._stack, 1)
+        layout.addWidget(self._stack)
 
+        # The flyout lives *inside* the session's own content area rather than
+        # under the master tab bar as a whole. Same place on screen, and it is
+        # per session by construction, so a bar can never show one area's forms
+        # while another area's tab is in front - which a single shared bar would
+        # have to be rebuilt on every tab switch to avoid.
+        #
+        # A plain child rather than a row in the layout above, so it floats over
+        # the canvas instead of taking a strip of height from it for the life of
+        # the tab (Zement, 2026-09-02). Same shape CanvasOverlay takes, for the
+        # same reason.
+        self._bar = SubTabBar(self, self._container)
         self._bar.refresh()
+        self._bar.show()
 
     # -- the container ---------------------------------------------------
 
@@ -311,6 +425,7 @@ class SessionPageStack:
         self.pages[key] = widget
         self._stack.setCurrentWidget(widget)
         self._bar.refresh()
+        self._syncOverlay()
         return widget
 
     def removePage(self, key):
@@ -340,6 +455,7 @@ class SessionPageStack:
     def showCanvas(self):
         self._stack.setCurrentIndex(0)
         self._bar.refresh()
+        self._syncOverlay()
 
     def showPage(self, key):
         widget = self.pages.get(key)
@@ -348,7 +464,20 @@ class SessionPageStack:
 
         self._stack.setCurrentWidget(widget)
         self._bar.refresh()
+        self._syncOverlay()
         return True
+
+    def _syncOverlay(self):
+        """Take the level overview away over a form, and give it back.
+
+        The container owns that rule - it applies to tool tabs too - so this
+        asks rather than deciding. Guarded because a stack can outlive nothing
+        and predate everything: the headless suites build these in several
+        orders.
+        """
+        syncer = getattr(self.tabs, '_syncOverlayVisibility', None)
+        if syncer is not None:
+            syncer()
 
     def currentKey(self):
         """The key of the form on show, or None when the canvas is."""
@@ -873,16 +1002,22 @@ class MasterTabWidget(QtWidgets.QTabWidget):
         self.overlay.reposition()
 
     def _syncOverlayVisibility(self):
-        """Hide the level overview while a tool tab is in front.
+        """Hide the level overview while anything but a canvas is in front.
 
         Its own visibility setting still wins - the View menu's toggle must not
-        be undone by visiting Preferences - so this only takes it away over a
-        tool tab and gives it back over a canvas.
+        be undone by visiting Preferences - so this only takes it away and gives
+        it back, and never changes what the user asked for.
+
+        Two cases now. A tool tab has no level to summarise (D-c.5), and since
+        D-d.4b so does an area showing one of its forms: the overview would
+        float over a settings dialog describing a canvas nobody can see
+        (Zement, 2026-09-02). ``currentCanvas()`` answers both at once - it is
+        None over a tool tab and over a form alike.
         """
         if self.overlay is None:
             return
 
-        on_canvas = self.toolAt(self.currentIndex()) is None
+        on_canvas = self.currentCanvas() is not None
         self.overlay.setVisible(on_canvas and self.overlay.isEnabledByUser())
 
         if on_canvas:

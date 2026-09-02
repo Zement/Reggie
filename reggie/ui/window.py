@@ -1004,6 +1004,33 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """The ``SessionBoundPage`` of kind ``key`` open on ``session``."""
         return getattr(self, '_sessionPages', {}).get((session, key))
 
+    def OpenSessionPageByKey(self, session, key):
+        """Open one of the five forms on ``session``, chosen by its tool key.
+
+        The flyout bar's way in. It shows all five buttons whether or not the
+        area has that form yet (Zement, 2026-09-02 - hiding the unopened ones
+        hid the entrance), so a click has to be able to *open* one, and the bar
+        knows a key rather than a handler.
+
+        Routed through the same handlers the menu uses rather than duplicating
+        their factory-and-apply pairs here: two ways to open one form is two
+        places for the binding to be got wrong, which is the whole subject of
+        this phase.
+        """
+        handlers = {
+            tooltabs.AREA_SETTINGS: self.HandleAreaOptions,
+            tooltabs.ZONE_SETTINGS: self.HandleZones,
+            tooltabs.BACKGROUNDS: self.HandleBG,
+            tooltabs.CAMERA_PROFILES: self.HandleCameraProfiles,
+            tooltabs.LEVEL_INFORMATION: self.HandleInfo,
+        }
+
+        handler = handlers.get(key)
+        if handler is None:
+            return None
+
+        return handler(session=session)
+
     def OpenSessionPage(self, key, factory, title, apply_callback, session=None):
         """Open one of the five per-area forms, bound to ``session``.
 
