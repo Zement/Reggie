@@ -267,12 +267,37 @@ class SubTabBar(QtWidgets.QFrame):
     # -- placement --------------------------------------------------------
 
     def reposition(self):
-        """Sit in the top-left of the canvas, over it rather than above it."""
+        """Sit under this area's own tab, over the canvas rather than above it.
+
+        Left-aligned with the tab it belongs to (Zement, 2026-09-02), so the bar
+        reads as hanging from that tab rather than as a fixed decoration in the
+        page's corner - which matters once several tabs are open and each has
+        its own bar. Clamped to the page, so a tab scrolled far to the right
+        cannot push its bar off the edge; the ones near the border land as close
+        as they can get.
+        """
         parent = self.parentWidget()
         if parent is None:
             return
 
-        self.move(self.MARGIN, self.MARGIN)
+        x = self.MARGIN
+
+        tabs = self.stack.tabs
+        index = tabs.indexOfSession(self.stack.session) if tabs is not None else -1
+        if index != -1:
+            # Both offsets are measured against the *tab widget*, not mapped
+            # widget-to-widget. mapTo(parent) walks up through the central
+            # splitter, so it picks up the sidebar's width on the way and lands
+            # the bar hundreds of pixels to the right - measured at x=597 for
+            # the leftmost tab. Subtracting one offset from the other keeps the
+            # whole sum inside the container that owns both.
+            bar = tabs.tabBar()
+            tab_left = bar.mapTo(tabs, bar.tabRect(index).topLeft()).x()
+            page_left = parent.mapTo(tabs, QtCore.QPoint(0, 0)).x()
+
+            x = max(0, min(tab_left - page_left, parent.width() - self.width()))
+
+        self.move(x, self.MARGIN)
         self.raise_()
 
     # -- clicks -----------------------------------------------------------
@@ -425,8 +450,36 @@ class SessionPageStack:
         self.pages[key] = widget
         self._stack.setCurrentWidget(widget)
         self._bar.refresh()
+        self.insetPages()
         self._syncOverlay()
         return widget
+
+    def insetPages(self):
+        """Keep the forms clear of the floating bar.
+
+        The bar is allowed to overlap the *canvas* - it is a small strip over a
+        scrolling picture, and that is the point of floating it. It must not
+        overlap a **form**, where it would sit on top of a tab widget's own tabs
+        (Zement, 2026-09-02, image 1: "the flyout bar overlaps with all 5 forms
+        pages").
+
+        A top margin on each form rather than a shorter stack, so the canvas
+        keeps the full height it had before the bar existed and only the pages
+        that need the room give it up.
+        """
+        top = self._bar.sizeHint().height() + self._bar.MARGIN
+
+        for widget in self.pages.values():
+            if widget is None:
+                continue
+
+            layout = widget.layout()
+            if layout is None:
+                widget.setContentsMargins(0, top, 0, 0)
+                continue
+
+            left, _, right, bottom = layout.getContentsMargins()
+            layout.setContentsMargins(left, top, right, bottom)
 
     def removePage(self, key):
         """Take a form out and fall back to the canvas.
