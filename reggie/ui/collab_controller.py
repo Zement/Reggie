@@ -1139,6 +1139,8 @@ class CollabController(QtCore.QObject):
         # An always-open section, not a context one: a chat has to stay
         # readable while the user browses the directory listing, which is the
         # whole reason it left the tool tab.
+        from reggie.ui.window import section_heights
+
         sidebar.addSection(
             'Collaboration', window,
             # Its own handler, because the sidebar's default removal is not
@@ -1146,6 +1148,7 @@ class CollabController(QtCore.QObject):
             # header X must put the panel away and NOT end the session. Only
             # `leaveRequested` ends a session (Zement's brief, 2026-09-02).
             on_close=self._hideStatusSection,
+            **section_heights('collab'),
             key='Collaboration')
 
         return True

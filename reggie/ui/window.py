@@ -118,24 +118,49 @@ from reggie.ui.unsavedlist import dirty_entries, dirty_paths
 #: whatever their contents asked for - so there was nothing to find and nothing
 #: to change (Zement: "I was unable to find them in the code, as I would have
 #: liked modifying them directly").
-SECTION_DEFAULT_HEIGHTS = {
-    'patches': Percent(50),
-    'directory': Percent(70),
-    'undo': Percent(25),
-    'help': Percent(40),
-    # Unchanged: this one is a short list of rows, not a view, and 120px is
-    # about four of them (Zement).
-    'unsaved': 120,
+#: ``(minimum, default)`` per section, both as percentages of the sidebar.
+#:
+#: Zement's numbers, 2026-09-04. **No maximum**: every section he specified had
+#: its ceiling unset, and he drew the conclusion himself - "seeing that maximum
+#: height is always unset, we might change that for all panels and simply make
+#: the max height 100%". A ceiling nothing uses is a parameter to get wrong, and
+#: the honest cap is the one the scroll area already provides.
+#:
+#: **The minimum is the new one** and it is what the drag needed: without it
+#: every section shared one hard-coded floor, and a level tree, a chat roster
+#: and a row of checkboxes do not agree on what "too small to use" means.
+SECTION_HEIGHTS = {
+    #                    min           default
+    'patches':      (Percent(30), Percent(30)),
+    'directory':    (Percent(20), Percent(70)),
+    'help':         (Percent(15), Percent(30)),
+    'undo':         (Percent(15), Percent(30)),
+    'collab':       (Percent(40), Percent(50)),
+    'defaultprops': (Percent(30), Percent(30)),
+
+    # Kept in pixels: a short list of rows rather than a view, and its default
+    # is whatever four rows come to. Only the floor is a percentage.
+    'unsaved':      (Percent(15), 120),
 
     # Not built yet, listed so the next person adding one has a number rather
     # than a decision (Zement, 2026-09-01).
-    'logs': Percent(40),
-    'collab': Percent(40),
-    'puzzle': Percent(70),
+    'logs':         (Percent(15), Percent(40)),
+    'puzzle':       (Percent(20), Percent(70)),
 }
 
-UNDO_SECTION_DEFAULT_HEIGHT = SECTION_DEFAULT_HEIGHTS['undo']
-UNDO_SECTION_MAX_HEIGHT = Percent(75)
+
+def section_heights(key):
+    """``(min_height, default_height)`` for a section, as keyword arguments.
+
+    One lookup rather than two, so a section cannot be given one of its numbers
+    and not the other.
+    """
+    minimum, default = SECTION_HEIGHTS[key]
+    return {'min_height': minimum, 'default_height': default}
+
+
+#: Read by the suites, and by the undo history's own call site.
+UNDO_SECTION_DEFAULT_HEIGHT = SECTION_HEIGHTS['undo'][1]
 
 from reggie.ui import tooltabs
 from reggie.ui import focusgroups
@@ -396,12 +421,20 @@ class ReggieWindow(QtWidgets.QMainWindow):
         focusgroups.install(self)
         print("[INIT2] ✓ Focus groups installed")
 
-        # The directory listing (D-d.2), up by default: it is the block's main
-        # feature and the thing the sidebar exists for. Before the level load
-        # below, so the tree is there to mark it as loaded.
-        print("[INIT2] Opening directory listing...")
-        self.ShowDirectoryListing()
-        print("[INIT2] ✓ Directory listing opened")
+        # Game Patches, up by default (Zement, 2026-09-04). It was the directory
+        # listing, and the rail then disagreed with itself: the highlight sits
+        # on the *first* entry that owns the sections page, which is Game
+        # Patches, so booting with the tree open said "Game Patches" over a
+        # directory listing.
+        #
+        # Fixed by changing which one opens rather than which one highlights.
+        # The highlight is right for the entry it names; it was the content
+        # behind it that did not match, and Game Patches is also the honest
+        # first stop - which patch you are editing decides what the tree can
+        # even show.
+        print("[INIT2] Opening game patches...")
+        self.ShowGamePatches()
+        print("[INIT2] ✓ Game patches opened")
 
         # now get stuff ready
         loaded = False
@@ -1651,7 +1684,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
             # more of what the user came for - the same reasoning that gives the
             # palette its stretch in slice 3.
             stretch=1,
-            default_height=SECTION_DEFAULT_HEIGHTS['directory'],
+            **section_heights('directory'),
             on_close=self._closeDirectoryListing,
             context=True)
 
@@ -1786,7 +1819,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
             globals_.trans.string('MenuItems', 142),
             self.patchListWidget,
             stretch=1,
-            default_height=SECTION_DEFAULT_HEIGHTS['patches'],
+            **section_heights('patches'),
             on_close=self._closeGamePatches,
             context=True)
 
@@ -1841,7 +1874,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
             globals_.trans.string('MenuItems', 88),
             self.helpTreeWidget,
             stretch=1,
-            default_height=SECTION_DEFAULT_HEIGHTS['help'],
+            **section_heights('help'),
             on_close=self._closeHelpSection,
             context=True)
 
@@ -1961,7 +1994,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 # height: it claims no share of the leftover space, and asks
                 # for enough room to read a few rows.
                 stretch=0,
-                default_height=SECTION_DEFAULT_HEIGHTS['unsaved'],
+                **section_heights('unsaved'),
                 # No X. Every other section is something the user opened, so
                 # closing it is undoing that; this one is not - it is the
                 # editor reporting a state, and it goes on its own the moment
@@ -2378,11 +2411,10 @@ class ReggieWindow(QtWidgets.QMainWindow):
             # references in the same state the menu entry would, or the two
             # disagree about whether the section is up.
             on_close=self.HandleShowUndoHistory,
-            # Zement's numbers (2026-08-30). The default is a starting height
-            # the user can drag away from, not a rule; the maximum stops a long
-            # history from taking the whole sidebar.
-            default_height=UNDO_SECTION_DEFAULT_HEIGHT,
-            max_height=UNDO_SECTION_MAX_HEIGHT,
+            # Zement's numbers (2026-09-04). The maximum is gone with every
+            # other section's: the content scrolls inside its host now, so a
+            # long history cannot make its section grow in the first place.
+            **section_heights('undo'),
             # An explicit key, because this section's *title* names the level
             # and area it is showing and so changes on every switch - a dragged
             # height saved under one would never be found again (D-d.3d).
@@ -4584,6 +4616,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.defaultPropSection = self.sidebar.addSection(
             globals_.trans.string('Palette', 7), editor,
             on_close=self.HideDefaultProps,
+            **section_heights('defaultprops'),
             key='Default Properties')
 
     def HideDefaultProps(self):

@@ -183,6 +183,56 @@ class Percent(float):
         return int(round(available * float(self) / 100.0))
 
 
+class _HostScrollArea(QtWidgets.QScrollArea):
+    """A host's body: the content at its natural height, scrolled (D-d.6).
+
+    Zement's rule, 2026-09-04: *"No stretching of panels. If the content doesn't
+    fit in the panel's current height, always scroll, never stretch."*
+
+    Neither of `QScrollArea`'s two modes gives that on its own.
+
+    - ``setWidgetResizable(True)`` stretches the widget to the viewport in
+      **both** axes. The width is exactly what is wanted; the height is the bug
+      - dragged 300px taller, a tree measuring 215px became 691px, and the
+      checkbox row inside it grew with it.
+    - ``setWidgetResizable(False)`` leaves the widget at its size hint in both
+      axes, so it never fills the column's width and every section reads narrow.
+
+    So the width is matched by hand and the height is left alone. The same split
+    `SectionColumn` had to make one level up, for the same reason - which is why
+    this is a class rather than four lines at each call site.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.setWidgetResizable(False)
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+    def _fit(self):
+        """Widget as wide as the viewport, as tall as it asks to be."""
+        widget = self.widget()
+        if widget is None:
+            return
+
+        # The hint, not the current height: a widget already stretched once
+        # would otherwise keep that height forever, since its own hint is the
+        # only honest record of what it wants.
+        widget.resize(self.viewport().width(), widget.sizeHint().height())
+
+    def setWidget(self, widget):
+        super().setWidget(widget)
+        self._fit()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit()
+
+
 class _CollapsibleHost(QtWidgets.QWidget):
     """A title bar the user can click to fold, over one hosted widget.
 
@@ -211,7 +261,8 @@ class _CollapsibleHost(QtWidgets.QWidget):
     _ARROWS = ('▸', '▾')   # right-pointing, down-pointing
 
     def __init__(self, title, widget, parent=None, closable=False,
-                 default_height=UNLIMITED, max_height=UNLIMITED):
+                 default_height=UNLIMITED, max_height=UNLIMITED,
+                 min_height=UNLIMITED):
         super().__init__(parent)
 
         self.hostTitle = title
@@ -221,6 +272,13 @@ class _CollapsibleHost(QtWidgets.QWidget):
         self.hostWidget = widget
         self._expanded = True
         self._maxHeight = max_height
+        #: The floor, in the same units as the other two (D-d.6, Zement's ask:
+        #: "we need to introduce a min height, as not having one causes
+        #: problems"). Without it a grip could drag any section down to the
+        #: MIN_SECTION_HEIGHT constant - one size for every panel, whatever it
+        #: holds - and the tree, the roster and a checkbox row do not agree on
+        #: what "too small to use" means.
+        self._minHeight = min_height
         self._defaultHeight = default_height
         #: Set once the user drags this host's grip - see setDraggedHeight.
         self._dragged = False
@@ -267,7 +325,26 @@ class _CollapsibleHost(QtWidgets.QWidget):
         headerLayout.addWidget(self.closeButton, 0)
 
         layout.addWidget(self.headerRow)
-        layout.addWidget(widget)
+
+        # **The content scrolls; it never stretches** (Zement, 2026-09-04:
+        # "No stretching of panels. If the content doesn't fit in the panel's
+        # current height, always scroll, never stretch").
+        #
+        # Added directly, the widget was the layout's only expanding child, so
+        # the layout's only way to honour a host taller than the content was to
+        # stretch the content - a checkbox row growing to fill the space, a
+        # header dragged over its neighbour's body. And its only way to honour a
+        # shorter host was to squeeze it below what it needs.
+        #
+        # In a scroll area both stop being possible. The widget is always at the
+        # height it asks for; the viewport is whatever the host has to give, and
+        # a mismatch either way is a scrollbar rather than a distortion. This is
+        # what lets the rest of the height code be simple - there is no longer
+        # anything to negotiate.
+        self.bodyScroll = _HostScrollArea(self)
+        self.bodyScroll.setWidget(widget)
+
+        layout.addWidget(self.bodyScroll, 1)
 
         # The panel widget arrives hidden in some cases (the old docks set
         # setVisible(False) on the *dock*, leaving the widget itself shown).
@@ -392,6 +469,11 @@ class _CollapsibleHost(QtWidgets.QWidget):
         if resolved is not None:
             hint.setHeight(resolved)
 
+        # The floor wins over the default, and over a height dragged past it.
+        # Both arrive here as `_defaultHeight`, deliberately - one mechanism -
+        # so this is the one place that has to enforce it.
+        hint.setHeight(max(hint.height(), self.minHeight()))
+
         return hint
 
     def setDraggedHeight(self, height, restored=False):
@@ -444,7 +526,12 @@ class _CollapsibleHost(QtWidgets.QWidget):
             return
 
         self._expanded = expanded
-        self.hostWidget.setVisible(expanded)
+
+        # The **scroll area**, not the widget inside it: hiding the widget would
+        # leave an empty viewport standing where the body was, so a folded host
+        # would still cost its full height.
+        self.bodyScroll.setVisible(expanded)
+
         self.header.setChecked(expanded)
         self.header.setText('%s  %s' % (self._ARROWS[int(expanded)],
                                         self.hostTitle))
@@ -456,6 +543,20 @@ class _CollapsibleHost(QtWidgets.QWidget):
         """How tall this host is when folded - the header row alone."""
         return self.headerRow.sizeHint().height()
 
+    def minHeight(self):
+        """The floor for this host, in pixels, header included.
+
+        Never below the header plus something to grab: a section dragged to
+        nothing is one the user cannot get back except through the rail.
+        """
+        floor = SectionGrip.MIN_SECTION_HEIGHT
+
+        resolved = self._resolveHeight(self._minHeight)
+        if resolved is not None:
+            floor = max(floor, resolved)
+
+        return floor
+
 
 class SectionHost(_CollapsibleHost):
     """One collapsible section in slice 2 (Block D-c, phase D-c.6).
@@ -466,9 +567,11 @@ class SectionHost(_CollapsibleHost):
     """
 
     def __init__(self, title, widget, parent=None, closable=True,
-                 default_height=UNLIMITED, max_height=UNLIMITED):
+                 default_height=UNLIMITED, max_height=UNLIMITED,
+                 min_height=UNLIMITED):
         super().__init__(title, widget, parent, closable=closable,
-                         default_height=default_height, max_height=max_height)
+                         default_height=default_height, max_height=max_height,
+                         min_height=min_height)
 
     # Kept as aliases: the sections were written against these names before the
     # base class existed, and renaming call sites to prove a refactor happened
@@ -508,9 +611,11 @@ class PanelHost(_CollapsibleHost):
     visibilityChanged = QtCore.pyqtSignal(bool)
 
     def __init__(self, title, widget, parent=None,
-                 default_height=UNLIMITED, max_height=UNLIMITED):
+                 default_height=UNLIMITED, max_height=UNLIMITED,
+                 min_height=UNLIMITED):
         super().__init__(title, widget, parent, closable=False,
-                         default_height=default_height, max_height=max_height)
+                         default_height=default_height, max_height=max_height,
+                         min_height=min_height)
 
         super().setVisible(False)
 
@@ -565,10 +670,25 @@ class SectionGrip(QtWidgets.QWidget):
                            QtWidgets.QSizePolicy.Policy.Fixed)
 
     def paintEvent(self, event):
-        """Draw the platform's own splitter handle, so it looks native."""
+        """Draw the platform's own splitter handle, so it looks native.
+
+        A **QStyleOption with a horizontal state**, not a bare QStyleOptionFrame.
+        Without `State_Horizontal` the style draws the handle for a *vertical*
+        splitter - the three dots stacked upright - on a grip that divides top
+        from bottom (Zement, 2026-09-04: "handles are 3-dot vertical, but they
+        should be 6-dot horizontal"). Qt names the state after the splitter's
+        orientation, which is the opposite of the handle's, so a grip lying
+        across the column is the horizontal case.
+
+        The Collab panel's divider looked right because it belongs to a real
+        QSplitter, which sets this itself.
+        """
         painter = QtWidgets.QStylePainter(self)
-        option = QtWidgets.QStyleOptionFrame()
+
+        option = QtWidgets.QStyleOption()
         option.initFrom(self)
+        option.state |= QtWidgets.QStyle.StateFlag.State_Horizontal
+
         painter.drawPrimitive(
             QtWidgets.QStyle.PrimitiveElement.PE_IndicatorDockWidgetResizeHandle,
             option)
@@ -609,7 +729,10 @@ class SectionGrip(QtWidgets.QWidget):
         if abs(delta) < 1:
             return
 
-        wanted = max(self.MIN_SECTION_HEIGHT, int(self._startHeight + delta))
+        # The host's own floor, not one constant for all of them (D-d.6). A
+        # level tree, a chat roster and a row of checkboxes do not agree on what
+        # "too small to use" means, so each says so for itself.
+        wanted = max(self.host.minHeight(), int(self._startHeight + delta))
 
         # Straight to the host's own default height, which is what the layout
         # gives it - so a drag and a configured height are the same mechanism
@@ -1128,7 +1251,14 @@ class Sidebar(QtWidgets.QWidget):
         self.pages = QtWidgets.QStackedWidget(self)
         self.pages.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                  QtWidgets.QSizePolicy.Policy.Expanding)
-        self.pages.setMinimumWidth(MIN_SLICE_TWO_WIDTH)
+
+        # **No minimumWidth**, though MIN_SLICE_TWO_WIDTH is still the floor -
+        # it is enforced in `_handleSliceDragged` instead. A widget minimum and
+        # `setCollapsible(True)` contradict each other, and the minimum wins:
+        # with one set, a drag to the edge stopped dead at 180px and slice 2
+        # could not be closed by hand at all (measured, 2026-09-04 - the drag
+        # left the sizes untouched). Enforcing it in the handler keeps the floor
+        # for ordinary dragging while letting a drag that means *shut* land.
 
         # Slice 2's default page is a scrolling column of collapsible sections
         # rather than one widget per rail entry (Zement, 2026-08-30). The reason
@@ -1261,7 +1391,15 @@ class Sidebar(QtWidgets.QWidget):
         self._lastSliceWidth = None
 
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal, self)
-        self.splitter.setChildrenCollapsible(False)
+
+        # Collapsible **as a default**, then turned off per slice in
+        # `_layOutSlices`. Off for everything, slice 2 could not be dragged shut
+        # at all (Zement, 2026-09-04: "there used to be a way to drag the
+        # vertical handler of slice 2 so far to the left that it would collapse
+        # slice 2 totally... this does not work anymore"). On for everything,
+        # the rail could be dragged away, and the rail is the only way back to
+        # anything.
+        self.splitter.setChildrenCollapsible(True)
         self.splitter.splitterMoved.connect(self._handleSliceDragged)
 
         layout = QtWidgets.QHBoxLayout(self)
@@ -1302,6 +1440,12 @@ class Sidebar(QtWidgets.QWidget):
         # themselves are set by _resizeSlices and by the user's drag.
         for index, widget in enumerate(ordered):
             self.splitter.setStretchFactor(index, 0 if widget is self.rail else 1)
+
+            # Only slice 2 may be dragged shut (D-d.6). The rail is the only way
+            # back to anything, and slice 3 holds the property editors the
+            # canvas needs - "slice 3 can never be hidden, so we don't need to
+            # implement it the other way around" (Zement, 2026-09-04).
+            self.splitter.setCollapsible(index, widget is self.pages)
 
     @property
     def side(self):
@@ -1553,8 +1697,8 @@ class Sidebar(QtWidgets.QWidget):
 
     def addSection(self, title, widget, stretch=1, closable=True,
                    on_close=None, default_height=UNLIMITED,
-                   max_height=UNLIMITED, context=False, pinned=False,
-                   key=None):
+                   max_height=UNLIMITED, min_height=UNLIMITED,
+                   context=False, pinned=False, key=None):
         """Add a collapsible section to slice 2. Returns its ``SectionHost``.
 
         Sections stack vertically in a splitter, so several are visible at once
@@ -1607,7 +1751,8 @@ class Sidebar(QtWidgets.QWidget):
 
         host = SectionHost(title, widget, self.sections, closable=closable,
                            default_height=default_height,
-                           max_height=max_height)
+                           max_height=max_height,
+                           min_height=min_height)
 
         # ``key`` names the section for the purpose of remembering its dragged
         # height, when its *title* is not stable enough to do it - the undo
@@ -1709,6 +1854,14 @@ class Sidebar(QtWidgets.QWidget):
         if was_hidden and self.pages.isVisible():
             self._resizeColumn()
 
+        # A slice the user *collapsed* by dragging is visible and zero px wide,
+        # so `was_hidden` is False and nothing above gives it a width back. The
+        # rail has to be able to reopen it either way - a slice that can be
+        # dragged shut and not clicked open is a trap (D-d.6).
+        if self.pages.isVisible() and self.pages.width() == 0:
+            self._widthDragged = False
+            self._resizeColumn()
+
         row = owner_row if owner_row is not None else self._pendingOwnerRow
         if row is None or not (0 <= row < len(self._railPages)) \
                 or self._railPages[row] is not self.sections:
@@ -1793,13 +1946,24 @@ class Sidebar(QtWidgets.QWidget):
 
             self._applySectionStretch()
 
+            # Measured *before* the hide below. Hiding a splitter child lets the
+            # splitter re-divide at once, and with slice 2 gone the sidebar
+            # collapses to whatever slice 3 will accept - so by the time
+            # `_resizeColumn` runs, the width to give back has already been lost
+            # (measured: a 1269px sidebar was 304px before anything asked).
+            wanted = self.width() - (self._lastSliceWidth or 0) \
+                if self._sections == [] else None
+
             # "Empty means absent" applies to the *sections page*, not to slice
             # 2 as a whole (D-d.1). Removing the last section while a rail page
             # of its own is showing must not hide that page too.
             if self.pages.currentWidget() is self.sections:
                 self.pages.setVisible(bool(self._sections))
 
+            self._pendingWidth = wanted
             self._resizeColumn()
+            self._pendingWidth = None
+
             return widget
 
         return None
@@ -1852,8 +2016,47 @@ class Sidebar(QtWidgets.QWidget):
         self._widthDragged = True
 
         width = int(self.pages.width())
+
+        # The floor, enforced here rather than as a widget minimum (D-d.6). A
+        # drag that lands *below* half the floor is read as "close it" and
+        # snapped shut; anything above is read as a resize and held at the
+        # floor. Two meanings for one gesture, told apart by how far it went -
+        # which is what a collapsible splitter pane does natively, and what a
+        # widget minimum made impossible.
+        if 0 < width < MIN_SLICE_TWO_WIDTH:
+            if width < MIN_SLICE_TWO_WIDTH // 2:
+                self._collapseSliceTwo()
+                return
+
+            total = (self.splitter.width() - rail_width()
+                     - self.splitter.handleWidth() * 2)
+            if total > MIN_SLICE_TWO_WIDTH:
+                self._setSliceSizes(MIN_SLICE_TWO_WIDTH,
+                                    total - MIN_SLICE_TWO_WIDTH)
+            return
+
+        # Not recorded when it is zero: a collapsed slice has to remember the
+        # width it had, or the rail would reopen it at its floor.
         if width > 0:
             self._lastSliceWidth = width
+
+    def _collapseSliceTwo(self):
+        """Snap slice 2 shut, keeping the width it had for the way back."""
+        sizes = list(self.splitter.sizes())
+
+        pages = self.splitter.indexOf(self.pages)
+        column = self.splitter.indexOf(self.column)
+        if pages < 0 or column < 0:
+            return
+
+        sizes[column] += sizes[pages]
+        sizes[pages] = 0
+
+        blocked = self.splitter.blockSignals(True)
+        try:
+            self.splitter.setSizes(sizes)
+        finally:
+            self.splitter.blockSignals(blocked)
 
     def wantedSliceTwoHeight(self):
         """How tall slice 2 asks to be: the sum of what its sections want.
@@ -1899,9 +2102,23 @@ class Sidebar(QtWidgets.QWidget):
             return
 
         if not self._sections and not self.pages.isVisible():
-            # Nothing in slice 2, so there is nothing to divide: the splitter
-            # gives the whole width to the panels on its own.
+            # Nothing in slice 2, so there is nothing to divide - but the width
+            # it was using has to leave the sidebar rather than be handed to
+            # slice 3 (Zement, 2026-09-04: "slice 3 then takes up all the width
+            # of slice 2 and becomes much bigger... the width of the total
+            # sidebar should be reduced by the amount of slice 2").
+            #
+            # The inner splitter cannot do this: its whole job is to divide the
+            # width it is *given*, so a hidden child's share always goes to a
+            # sibling. Only the splitter the sidebar itself sits in can make the
+            # sidebar narrower, which is why this reaches outward.
+            self._shrinkBySliceTwo()
             return
+
+        # Slice 2 is back, so take its width back from the canvas first - the
+        # sidebar was narrowed when the last section closed, and dividing the
+        # narrowed width would give slice 2 its floor rather than what it had.
+        self._growBySliceTwo()
 
         total = self.splitter.width() - rail_width() - self.splitter.handleWidth() * 2
         if total <= 0:
@@ -1933,6 +2150,106 @@ class Sidebar(QtWidgets.QWidget):
             return
 
         self._setSliceSizes(wanted, total - wanted)
+
+    def _outerSplitter(self):
+        """The splitter the sidebar itself is a child of, or None.
+
+        Found by walking up rather than held as a reference: the sidebar is
+        moved between sides by re-inserting it (see `applySide`), and a stored
+        parent would be the one it had before the move.
+        """
+        parent = self.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QtWidgets.QSplitter) \
+                    and parent is not self.splitter:
+                return parent
+            parent = parent.parentWidget()
+        return None
+
+    #: How wide the sidebar was before slice 2 closed, so reopening can put it
+    #: back. Zero when slice 2 is open.
+    _widthBeforeClose = 0
+
+    #: Set by `removeSection` around its `_resizeColumn` call - the width the
+    #: sidebar should end at, measured before hiding slice 2 made it moot.
+    _pendingWidth = None
+
+    def _shrinkBySliceTwo(self):
+        """Give slice 2's width back to the canvas, not to slice 3.
+
+        Called when the last section closes. Without it the sidebar keeps the
+        width it had and slice 3 swells to fill the gap, so closing every panel
+        makes the level *no* bigger - the opposite of what closing them is for
+        (Zement, 2026-09-04).
+
+        The target comes from `_pendingWidth`, measured before slice 2 was
+        hidden. It cannot be measured here: hiding a splitter child lets the
+        splitter re-divide immediately, and with slice 2 gone the sidebar has
+        already collapsed to whatever slice 3 will accept - 1269px to 304px in
+        the case this was found on. Subtracting slice 2's width from *that*
+        would take it twice.
+        """
+        wanted = self._pendingWidth
+        if wanted is None or wanted <= 0:
+            return
+
+        current = self.width()
+        if self._setOuterWidth(wanted) and not self._widthBeforeClose:
+            self._widthBeforeClose = current
+
+    def _growBySliceTwo(self):
+        """Put back the width the sidebar had before slice 2 closed."""
+        if not self._widthBeforeClose:
+            return
+
+        self._setOuterWidth(self._widthBeforeClose)
+        self._widthBeforeClose = 0
+
+    def _setOuterWidth(self, width):
+        """Make the sidebar ``width`` px, taking the difference from the canvas.
+
+        Returns whether it happened. The inner splitter cannot do this: its job
+        is to divide the width it is *given*, so a hidden child's share always
+        goes to a sibling. Only the splitter the sidebar sits in can change how
+        wide the sidebar is.
+        """
+        outer = self._outerSplitter()
+        if outer is None:
+            return False
+
+        index = outer.indexOf(self)
+        if index < 0:
+            return False
+
+        sizes = list(outer.sizes())
+        if len(sizes) < 2:
+            return False
+
+        # The widest sibling, which is the canvas in every layout the editor
+        # builds. Named by width rather than by index because the sidebar can
+        # sit on either side, so "the other one" is not a fixed position.
+        others = [i for i in range(len(sizes)) if i != index]
+        target = max(others, key=lambda i: sizes[i])
+
+        delta = int(width) - sizes[index]
+        if delta == 0:
+            return False
+
+        # The canvas keeps its floor: a sidebar is never worth a level you
+        # cannot see.
+        if sizes[target] - delta < MIN_CANVAS_WIDTH:
+            return False
+
+        sizes[index] += delta
+        sizes[target] -= delta
+
+        blocked = outer.blockSignals(True)
+        try:
+            outer.setSizes(sizes)
+        finally:
+            outer.blockSignals(blocked)
+
+        return True
 
     def _setSliceSizes(self, slice_two, panels):
         """Apply a slice 2 / panels division, without it counting as a drag.

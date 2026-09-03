@@ -80,6 +80,12 @@ def _tr(numcode, *replacements):
     return text
 
 
+#: How short the chat half of the panel may be dragged: the entry row, the tab
+#: bar, and enough log to read a couple of lines. Below this the log is a slit
+#: and the panel is no longer a chat (Zement, 2026-09-04).
+MIN_CHAT_HEIGHT = 120
+
+
 _FALLBACKS = {
     0: 'Collaboration',
     1: 'Host a session',
@@ -751,6 +757,16 @@ class CollabStatusWindow(QtWidgets.QDialog):
         self.split.setStretchFactor(0, 0)
         self.split.setStretchFactor(1, 1)
         self.split.setChildrenCollapsible(False)
+
+        # A floor on each half, so neither can be dragged to a sliver (Zement,
+        # 2026-09-04: "participants and buttons min 20, chat min 20"). Taken
+        # from what each half actually needs rather than a fraction of the
+        # panel: the roster's floor is its header, its buttons and a couple of
+        # rows, and that is a real number the widgets can answer for themselves,
+        # where a percentage of a panel whose height the user is dragging is
+        # circular.
+        rosterPane.setMinimumHeight(rosterPane.sizeHint().height())
+        chatPane.setMinimumHeight(MIN_CHAT_HEIGHT)
 
         layout = QtWidgets.QVBoxLayout()
         layout.setContentsMargins(4, 4, 4, 4)
