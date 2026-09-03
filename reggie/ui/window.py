@@ -2480,6 +2480,32 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         self._collab.showSetupDialog()
 
+    def ShowCollaboration(self):
+        """The rail's Collaborate entry (D-d.5).
+
+        One entry, two meanings, decided by whether a session is running:
+
+        - **no session** - the host/join dialog, exactly as the menu entry does.
+          Nothing to show in a panel yet, and a panel that said "not connected"
+          would be a row of nothing taking a share of slice 2.
+        - **session running** - toggle the roster-and-chat section, the way the
+          Logs/Undo entry toggles the undo history. Toggling is right here for
+          the same reason: a rail entry for a panel that is already up should
+          put it away, and the session is untouched either way.
+
+        The controller is created lazily by HandleCollaborate, and deliberately
+        not created here: an entry that has never been used should not pull in
+        the collab package just to answer "is a session running?" - the answer
+        with no controller is no.
+        """
+        controller = getattr(self, '_collab', None)
+
+        if controller is None or not controller.is_active:
+            self.HandleCollaborate()
+            return
+
+        controller.toggleStatusPanel()
+
     # Cut/Copy/Paste + ReggieClip encode/decode/place extracted to
     # reggie.ui.clipboard.ClipboardController (Phase 2 — see
     # _docs/plan/REFACTORING_ANALYSIS.md). Thin delegators keep the QAction
@@ -3777,7 +3803,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.entranceEditorDock.setVisible(False)
         self.pathEditorDock.setVisible(False)
         self.locationEditorDock.setVisible(False)
-        self.defaultPropDock.setVisible(False)
+        self.HideDefaultProps()
 
         # state: determines positions of docks
         # geometry: determines the main window position
@@ -4337,7 +4363,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
             if 0 <= nt <= 3:
                 self.objPicker.ShowTileset(nt)
                 eval('self.objTS%dTab' % nt).setLayout(self.createObjectLayout)
-            self.defaultPropDock.setVisible(False)
+            self.HideDefaultProps()
 
         globals_.CurrentPaintType = nt
 
@@ -4463,7 +4489,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
             self.defaultPropButton.setEnabled(True)
         else:
             self.defaultPropButton.setEnabled(False)
-            self.defaultPropDock.setVisible(False)
+            self.HideDefaultProps()
             self.defaultDataEditor.update()
 
     def _onSpriteImageLoadingProgress(self, current, total):
@@ -4524,10 +4550,64 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.sprPicker.SetSearchString(text)
 
     def ShowDefaultProps(self):
+        """Open Default Properties as a sidebar section (D-d.5).
+
+        It was a floating QDockWidget, opened by a button under the sprite
+        picker. **Moved and not redesigned** (§3.7): the editor widget inside it
+        is unchanged, and only where it appears is different.
+
+        Below the undo history, as an always-open section. It is a *selection*
+        follower rather than a session-bound page, so D-d.4's one-per-area rule
+        does not apply - it always means "the sprite currently picked", which is
+        what the editor is for, and there is only ever one of those.
         """
-        Handles the Show Default Properties button being clicked
+        if self.sidebar is None:
+            # No shell: the dock is still there and still works.
+            self.defaultPropDock.setVisible(True)
+            return
+
+        editor = self.defaultDataEditor
+
+        existing = self.sidebar.sectionFor(editor)
+        if existing is not None:
+            self.sidebar.showSections()
+            return
+
+        # Out of the dock before into the section, or it would be a child of
+        # two parents - the dock keeps its pointer and would show an empty
+        # frame if the user ever floated it.
+        self.defaultPropDock.setVisible(False)
+        self.defaultPropDock.setWidget(None)
+
+        editor.setVisible(True)
+
+        self.defaultPropSection = self.sidebar.addSection(
+            globals_.trans.string('Palette', 7), editor,
+            on_close=self.HideDefaultProps,
+            key='Default Properties')
+
+    def HideDefaultProps(self):
+        """Put Default Properties away, from wherever it currently is.
+
+        Four callers, all meaning "there is nothing to show properties for any
+        more": the window closing, the object tab changing, and a sprite being
+        deselected. Written as one method because the dock and the section are
+        two answers to that and neither caller should have to know which.
         """
-        self.defaultPropDock.setVisible(True)
+        dock = getattr(self, 'defaultPropDock', None)
+        if dock is not None:
+            dock.setVisible(False)
+
+        sidebar = getattr(self, 'sidebar', None)
+        editor = getattr(self, 'defaultDataEditor', None)
+
+        if sidebar is None or editor is None:
+            return
+
+        host = sidebar.sectionFor(editor)
+        if host is not None:
+            sidebar.removeSection(host)
+            self.defaultPropSection = None
 
     def HandleSprPosChange(self, obj, oldx, oldy, x, y):
         """

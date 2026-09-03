@@ -536,6 +536,23 @@ class DockBuilder:
                         sections=True,
                         on_activate=self._showUndoHistory)
 
+        # -- Collaborate --------------------------------------------------
+        # One entry for both halves of collaboration (D-d.5): with no session
+        # running it opens the host/join dialog, and with one it opens the
+        # roster and chat. Zement ranked a single panel first (2026-09-02); one
+        # *entry* is what that preference is actually about, and it costs
+        # nothing, while one *panel* would mean reworking the join path's
+        # exec()/collectResult() handshake and the discovery thread's shutdown.
+        #
+        # No `is_open`, for the reason the undo entry has none: with a session
+        # running this is a toggle, and a click while the panel is up is exactly
+        # the case that has to get through.
+        # 'spritelist' is what the Collaborate menu action already uses, so the
+        # rail and the menu name the same thing with the same picture.
+        sidebar.addPage(icon('spritelist'), trans('MenuItems', 165),
+                        sections=True,
+                        on_activate=self._showCollaboration)
+
         # -- Help ---------------------------------------------------------
         sidebar.addPage(icon('help'), trans('MenuItems', 88),
                         sections=True,
@@ -561,6 +578,10 @@ class DockBuilder:
     def _showHelp(self):
         """Open the Help section unless it is already up (D-d.2c)."""
         self.win.ShowHelpSection()
+
+    def _showCollaboration(self):
+        """Open the collaboration panel, or the host/join dialog (D-d.5)."""
+        self.win.ShowCollaboration()
 
     def _showUndoHistory(self):
         """Toggle the undo history section (Zement, 2026-09-01).

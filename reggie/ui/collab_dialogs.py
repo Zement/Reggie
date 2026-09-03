@@ -109,6 +109,10 @@ _FALLBACKS = {
     25: 'Only from the Patch Manager',
     26: 'Only from the host (data files only)',
     27: 'Patch Manager, then the host (recommended)',
+    # D-d.5's two log tabs. 11 ('Chat') names the tab holding what people typed;
+    # 28 names the one holding everything in arrival order, which is what gets
+    # saved as the session's record.
+    28: 'Activity',
 }
 
 
@@ -611,10 +615,41 @@ class CollabStatusWindow(QtWidgets.QDialog):
         self._roster_entries = []
 
         self.roster = QtWidgets.QListWidget()
-        self.roster.setMinimumWidth(200)
 
+        # No minimum width since D-d.5. It was 200 for a 560px dialog; in a
+        # ~260px sidebar slice a floor that size forces a horizontal scrollbar
+        # on the whole column. The roster elides instead, and the busy detail
+        # that would be cut off is in the tooltip.
+        self.roster.setTextElideMode(QtCore.Qt.TextElideMode.ElideRight)
+        self.roster.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        # Two views of one conversation (D-d.5, Zement's brief 2026-09-02).
+        # `chatLog` holds **everything**, in arrival order; `userLog` holds only
+        # what people typed. The split is presentation - the distinction it
+        # splits on is already carried and already trustworthy, since the host
+        # stamps `kind` on every message and a client cannot forge it.
+        #
+        # The complete log is the one kept under the old name, deliberately.
+        # `_writeChatLog` reads `window.chatLog.toPlainText()` to save the
+        # session's record, and a split that quietly made that name mean "the
+        # half without the status messages" would lose half of what happened
+        # from every saved log, with nothing to notice it by.
         self.chatLog = QtWidgets.QTextEdit()
         self.chatLog.setReadOnly(True)
+
+        self.userLog = QtWidgets.QTextEdit()
+        self.userLog.setReadOnly(True)
+
+        self.logTabs = QtWidgets.QTabWidget()
+        self.logTabs.addTab(self.userLog, _tr(11))
+        self.logTabs.addTab(self.chatLog, _tr(28))
+        self.logTabs.setDocumentMode(True)
+
+        # Titles without the unread marker, to put back when a tab is read.
+        self._tabTitles = [self.logTabs.tabText(0), self.logTabs.tabText(1)]
+        self._unread = [False, False]
+        self.logTabs.currentChanged.connect(self._markTabRead)
 
         self.chatEntry = QtWidgets.QLineEdit()
         self.chatEntry.setMaxLength(protocol.MAX_CHAT_CHARS)
@@ -628,11 +663,12 @@ class CollabStatusWindow(QtWidgets.QDialog):
         entryRow.addWidget(sendButton)
 
         chatColumn = QtWidgets.QVBoxLayout()
-        chatColumn.addWidget(QtWidgets.QLabel(_tr(11)))
-        chatColumn.addWidget(self.chatLog)
+        chatColumn.setContentsMargins(0, 0, 0, 0)
+        chatColumn.addWidget(self.logTabs)
         chatColumn.addLayout(entryRow)
 
         rosterColumn = QtWidgets.QVBoxLayout()
+        rosterColumn.setContentsMargins(0, 0, 0, 0)
         rosterColumn.addWidget(QtWidgets.QLabel(_tr(10)))
         rosterColumn.addWidget(self.roster)
 
@@ -644,9 +680,21 @@ class CollabStatusWindow(QtWidgets.QDialog):
             self.banButton = QtWidgets.QPushButton(_tr(15))
             self.banButton.clicked.connect(self._ban)
 
-            rosterColumn.addWidget(self.roleButton)
-            rosterColumn.addWidget(self.kickButton)
-            rosterColumn.addWidget(self.banButton)
+            # One row rather than three stacked buttons (D-d.5). Stacked, the
+            # host controls took three rows of a ~260px column before the chat
+            # began; across, they are the width of a word each. They act on the
+            # roster selection, so they belong against the roster either way.
+            hostRow = QtWidgets.QHBoxLayout()
+            hostRow.setContentsMargins(0, 0, 0, 0)
+            for button in (self.roleButton, self.kickButton, self.banButton):
+                # Or the three at their natural widths overflow a narrow column
+                # and force a horizontal scrollbar on the whole sidebar.
+                button.setSizePolicy(
+                    QtWidgets.QSizePolicy.Policy.Ignored,
+                    QtWidgets.QSizePolicy.Policy.Fixed)
+                hostRow.addWidget(button)
+
+            rosterColumn.addLayout(hostRow)
 
             self.roster.currentRowChanged.connect(self._updateHostButtons)
             self._updateHostButtons(-1)
@@ -654,7 +702,8 @@ class CollabStatusWindow(QtWidgets.QDialog):
         # Session-level actions, separated from the per-participant controls
         # above because they act on the session rather than on whoever happens
         # to be selected.
-        rosterColumn.addSpacing(8)
+        sessionRow = QtWidgets.QHBoxLayout()
+        sessionRow.setContentsMargins(0, 0, 0, 0)
 
         if self.is_host:
             # The join code is otherwise unrecoverable: it is shown once when
@@ -663,19 +712,55 @@ class CollabStatusWindow(QtWidgets.QDialog):
             self.copyCodeButton = QtWidgets.QPushButton('Copy join code')
             self.copyCodeButton.clicked.connect(self._copyJoinCode)
             self.copyCodeButton.setEnabled(False)
-            rosterColumn.addWidget(self.copyCodeButton)
+            self.copyCodeButton.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Ignored,
+                QtWidgets.QSizePolicy.Policy.Fixed)
+            sessionRow.addWidget(self.copyCodeButton)
 
         self.leaveButton = QtWidgets.QPushButton(
             'End session' if self.is_host else 'Leave session')
         self.leaveButton.clicked.connect(self._leave)
-        rosterColumn.addWidget(self.leaveButton)
+        self.leaveButton.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                       QtWidgets.QSizePolicy.Policy.Fixed)
+        sessionRow.addWidget(self.leaveButton)
 
-        columns = QtWidgets.QHBoxLayout()
-        columns.addLayout(rosterColumn, 1)
-        columns.addLayout(chatColumn, 2)
+        rosterColumn.addLayout(sessionRow)
 
-        self.setLayout(columns)
-        self.resize(560, 320)
+        # Stacked, not side by side (Zement, 2026-09-02: "this is the only real
+        # UI change needed"). The two columns were written for a 560px dialog;
+        # in a ~260px sidebar slice they gave roughly 85px of roster beside
+        # 175px of chat, and neither is usable at that width. Stacked, each gets
+        # the full width and the user divides the height.
+        #
+        # A splitter rather than a plain layout, so that division is the user's:
+        # a session with eight participants wants a tall roster, one with two
+        # wants none of it. The sidebar section it sits in is itself in a
+        # splitter, which is the same bargain one level up.
+        rosterPane = QtWidgets.QWidget()
+        rosterPane.setLayout(rosterColumn)
+
+        chatPane = QtWidgets.QWidget()
+        chatPane.setLayout(chatColumn)
+
+        self.split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self.split.addWidget(rosterPane)
+        self.split.addWidget(chatPane)
+
+        # The chat takes the slack: it is the part that grows without limit,
+        # and a roster of three names does not want half the panel.
+        self.split.setStretchFactor(0, 0)
+        self.split.setStretchFactor(1, 1)
+        self.split.setChildrenCollapsible(False)
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.addWidget(self.split)
+
+        self.setLayout(layout)
+
+        # Still a usable free-floating dialog: a session can start before the
+        # shell exists, and the suites drive it with no sidebar at all.
+        self.resize(360, 480)
 
         # In a QDialog every QPushButton is auto-default, so Enter activates
         # whichever button holds focus as well as sending the chat line. That
@@ -784,16 +869,49 @@ class CollabStatusWindow(QtWidgets.QDialog):
         Appends a chat line. System notices are visually distinct from user
         messages - the host stamps `kind`, and a client cannot forge it, so this
         distinction is trustworthy rather than decorative.
+
+        Since D-d.5 it also decides *which tab* the line lands in. Everything
+        goes to the full log; only what a person typed goes to the Chat tab.
         """
         if kind == protocol.CHAT_KIND_SYSTEM:
-            self.chatLog.append('<i>%s</i>' % _escape(text))
-        elif nick:
-            self.chatLog.append('<b>%s:</b> %s' % (_escape(nick), _escape(text)))
+            self._append(self.chatLog, '<i>%s</i>' % _escape(text), 1)
+            return
+
+        if nick:
+            line = '<b>%s:</b> %s' % (_escape(nick), _escape(text))
         else:
-            self.chatLog.append(_escape(text))
+            line = _escape(text)
+
+        self._append(self.userLog, line, 0)
+        self._append(self.chatLog, line, 1)
 
     def appendStatus(self, text):
-        self.chatLog.append('<i>%s</i>' % _escape(text))
+        """A local notice - not from the session, so the full log only."""
+        self._append(self.chatLog, '<i>%s</i>' % _escape(text), 1)
+
+    def _append(self, widget, html, tab):
+        """Write one line, and mark its tab unread if it is not the one showing.
+
+        Without the marker a status message arriving while the user is reading
+        chat is invisible - the case Zement's brief called out when it asked for
+        the tabs (2026-09-02).
+        """
+        widget.append(html)
+
+        if self.logTabs.currentIndex() == tab:
+            return
+
+        if not self._unread[tab]:
+            self._unread[tab] = True
+            self.logTabs.setTabText(tab, self._tabTitles[tab] + ' *')
+
+    def _markTabRead(self, index):
+        if not (0 <= index < len(self._unread)):
+            return
+
+        if self._unread[index]:
+            self._unread[index] = False
+            self.logTabs.setTabText(index, self._tabTitles[index])
 
     # -- host actions -------------------------------------------------------
 

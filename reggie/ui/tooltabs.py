@@ -59,17 +59,21 @@ from PyQt6 import QtCore, QtWidgets
 #: user asking for it a second time means "show me the one I opened".
 PREFERENCES = 'preferences'
 PATCH_MANAGER = 'patchmanager'
+
+#: Kept, though nothing opens it any more: D-d.5 moved the collaboration roster
+#: and chat out of a tool tab and into a sidebar section, for the reason the
+#: undo history moved in D-c.6 - chatting is something you do *while* editing.
+#: The key stays so a teardown that closes it is still a defined no-op.
 COLLABORATE = 'collaborate'
 
-#: The five per-area forms (D-d.4). One key each, so the shell's existing
-#: one-tab-per-kind rule gives **one Area Settings page at a time, not one per
-#: session** - asking for it on area 2 while area 1's page is open replaces it.
+#: The five per-area forms (D-d.4). One key each, naming a *kind* of form; the
+#: page itself is bound to a session, so every open area has its own of each
+#: (D-d.4b). An earlier version really was one page per kind, replacing area
+#: 1's form when area 2 asked for one - which discarded whatever the user had
+#: typed into it, and was Zement's main design correction on the phase.
 #:
-#: A page per session was considered and rejected: four identically-named tabs
-#: with the user choosing between them by tab order. Replacing is also what
-#: Preferences and the Patch Manager already do when asked for twice, so it is
-#: the shell's established answer rather than a new one. Which session a page is
-#: bound to is put in its tab title instead - see ``ReggieWindow.OpenSessionPage``.
+#: Which session a page belongs to is in its tab title and in the flyout bar
+#: under its tab - see ``ReggieWindow.OpenSessionPage`` and ``tabs.SubTabBar``.
 AREA_SETTINGS = 'areasettings'
 ZONE_SETTINGS = 'zonesettings'
 BACKGROUNDS = 'backgrounds'

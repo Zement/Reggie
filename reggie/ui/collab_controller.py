@@ -874,10 +874,14 @@ class CollabController(QtCore.QObject):
         self.status_window = None
         window.setRoster([])
 
-        # Take the tab down first (D-c.5). The window is about to be deleted,
-        # and a tab still holding it would be a page over a destroyed widget -
-        # the exact shape of D-b's "wrapped C/C++ object has been deleted".
-        self._closeStatusTab()
+        # Take the placement down first (D-c.5, and still true of D-d.5's
+        # section). The window is about to be deleted, and anything still
+        # holding it would be a page over a destroyed widget - the exact shape
+        # of D-b's "wrapped C/C++ object has been deleted".
+        #
+        # Passed the window, because `self.status_window` was cleared four lines
+        # up and a section is found by the widget it holds.
+        self._closeStatusTab(window)
 
         window.close()
         window.deleteLater()
@@ -1019,13 +1023,18 @@ class CollabController(QtCore.QObject):
     # -- status window ------------------------------------------------------
 
     def showStatusWindow(self):
-        """Bring the roster and chat up - as a tool tab since D-c.5.
+        """Bring the roster and chat up - as a sidebar section since D-d.5.
 
         The controller still owns the window: it builds it, wires its callbacks,
         feeds it every roster and chat message, and closes it at teardown. What
         changed is only where it is shown. That split matters - a session's
         status display must not depend on the shell being in any particular
-        state, so the tab is asked for and the window works with or without one.
+        state, so a place is asked for and the window works with or without one.
+
+        It was a tool tab in D-c.5, and the move to slice 2 is the same argument
+        the undo history was moved on (Zement, 2026-08-30): chatting is
+        something you do *while* editing, and a full-width tab made you leave
+        the level to read a message.
         """
         if self.status_window is None:
             window = collab_dialogs.CollabStatusWindow(self.is_host, self.window)
@@ -1043,14 +1052,14 @@ class CollabController(QtCore.QObject):
             # showed it once, so a stale or missing one is a dead end.
             self.status_window.setJoinCode(self.join_code)
 
-        if self._showAsTab():
+        if self._showInShell():
             return
 
         self.status_window.show()
         self.status_window.raise_()
 
-    def _toolTabManager(self):
-        """The shell's tool-tab manager, or None if there is no shell.
+    def _sidebar(self):
+        """The window's sidebar, or None if there is no shell.
 
         Wrapped in a try rather than a plain getattr for two reasons, both real
         rather than theoretical. Teardown runs while a window may already be
@@ -1061,38 +1070,118 @@ class CollabController(QtCore.QObject):
         session should fail to tear down.
         """
         try:
-            return getattr(self.window, 'toolTabs', None)
+            return getattr(self.window, 'sidebar', None)
         except (AttributeError, RuntimeError):
             return None
 
-    def _closeStatusTab(self):
-        """Take the collaboration tool tab down, if there is one."""
-        manager = self._toolTabManager()
-        if manager is None:
+    def _closeStatusTab(self, window=None):
+        """Take the collaboration section down, if there is one.
+
+        Named for the tool tab it used to remove, and kept under that name
+        because it is called from teardown paths whose job is "remove the
+        placement before the widget dies" - which is what it still does.
+
+        ``window`` is passed explicitly by ``_closeStatusWindow``, which clears
+        ``self.status_window`` *before* calling this - deliberately, so a stale
+        roster cannot be seen and the next session builds a fresh window. The
+        tool-tab version closed by key and never noticed; a section is found by
+        the widget it holds, so reading the attribute here would find None and
+        leave the section standing over a widget about to be deleted.
+        """
+        sidebar = self._sidebar()
+        if sidebar is None:
             return
 
-        from reggie.ui import tooltabs
-        manager.closeTool(tooltabs.COLLABORATE, apply=False)
+        if window is None:
+            window = self.status_window
+        if window is None:
+            return
 
-    def _showAsTab(self):
-        """Put the status window in a tool tab. False if there is no shell.
+        try:
+            host = sidebar.sectionFor(window)
+        except RuntimeError:
+            return
+
+        if host is not None:
+            # The section is removed, but the widget it held is NOT deleted:
+            # SectionHost does not own it, the controller does, and the caller
+            # is about to close it deliberately.
+            sidebar.removeSection(host)
+
+    def _showInShell(self):
+        """Put the status window in a sidebar section. False if there is no shell.
 
         Falls back to a free-floating window rather than failing, because the
         collab layer is used headlessly by the test suites and must not require
-        a MasterTabWidget to exist.
+        a sidebar to exist - and because a session can be started before the
+        shell is finished being built.
+
+        One placement, not two. The tool tab was the D-c.5 answer and is gone
+        rather than kept as a fallback: two placements would mean a session
+        started early could end up with the window in a tab *and* a section,
+        one of them holding a widget the other reparented away.
         """
-        manager = self._toolTabManager()
-        if manager is None:
+        sidebar = self._sidebar()
+        if sidebar is None:
             return False
 
-        from reggie.ui import tooltabs
+        window = self.status_window
+        if window is None:
+            return False
 
-        # owns=False: this controller built the window and keeps it for the
-        # length of the session. Closing the tab must put it away, not destroy
-        # a widget the controller goes on feeding roster and chat messages.
-        return manager.openTool(tooltabs.COLLABORATE,
-                                lambda: self.status_window,
-                                'Collaboration', owns=False) is not None
+        existing = sidebar.sectionFor(window)
+        if existing is not None:
+            # Already up. Bring the column forward and raise the section rather
+            # than rebuilding it - the chat log is in that widget.
+            sidebar.showSections()
+            return True
+
+        # An always-open section, not a context one: a chat has to stay
+        # readable while the user browses the directory listing, which is the
+        # whole reason it left the tool tab.
+        sidebar.addSection(
+            'Collaboration', window,
+            # Its own handler, because the sidebar's default removal is not
+            # enough here and the obvious wrong thing is worse: closing the
+            # header X must put the panel away and NOT end the session. Only
+            # `leaveRequested` ends a session (Zement's brief, 2026-09-02).
+            on_close=self._hideStatusSection,
+            key='Collaboration')
+
+        return True
+
+    def toggleStatusPanel(self):
+        """Show the panel, or put it away if it is already up (D-d.5).
+
+        What the rail's Collaborate entry does while a session is running. Only
+        the *placement* toggles - the window itself lives as long as the
+        session, so nothing said or seen is lost by closing the panel.
+        """
+        sidebar = self._sidebar()
+        window = self.status_window
+
+        if sidebar is not None and window is not None \
+                and sidebar.sectionFor(window) is not None:
+            self._hideStatusSection()
+            return
+
+        self.showStatusWindow()
+
+    def _hideStatusSection(self):
+        """The section's X: put the panel away, leave the session running."""
+        sidebar = self._sidebar()
+        window = self.status_window
+
+        if sidebar is None or window is None:
+            return
+
+        host = sidebar.sectionFor(window)
+        if host is not None:
+            # removeSection unparents the widget rather than deleting it - its
+            # docstring names this window as the case it was written for - so
+            # the controller goes on feeding it roster and chat messages, and
+            # reopening shows everything that happened while it was away.
+            sidebar.removeSection(host)
 
     def _appendStatus(self, text):
         if self.status_window is not None:

@@ -597,6 +597,7 @@ class ReggieTranslation:
                 162: 'Discard unsaved changes in [count] level(s)?',
                 163: 'The levels will be reloaded from disk. This cannot be undone, and their undo history will be cleared.',
                 164: 'Back to the level',
+                165: 'Collaborate',
             },
             'Objects': {
                 0: '[b]Tileset [tileset], object [obj]:[/b][br][width]x[height] on layer [layer]',
