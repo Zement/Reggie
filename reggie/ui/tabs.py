@@ -34,7 +34,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from reggie.core import globals_
 from reggie.core.dirty import setting
-from reggie.ui.overlay import CanvasWidget
+from reggie.ui.overlay import CanvasWidget, OVERLAY_CORNER_RADIUS
 from reggie.ui.tooltabs import ToolTabHost
 
 
@@ -80,11 +80,15 @@ def level_sort_key(file_path):
     return (0, world, (1, 0), rest.lower())
 
 
-#: Background of a form button that is being looked at (D-d.4b). Amber rather
-#: than the palette's Highlight, because Highlight is also what a *checked*
-#: button uses and the two states have to be told apart at a glance. Zement,
-#: 2026-09-02: "maybe orange (color will be adjusted later)."
-VISITING_COLOUR = '#e08a1e'
+#: Background of a form button that is being looked at (D-d.4b). A colour of its
+#: own rather than the palette's Highlight, because Highlight is also what a
+#: *checked* button uses and the two states have to be told apart at a glance.
+#: Zement picked this yellow on 2026-09-03, replacing the placeholder amber.
+#:
+#: The hover shade is lighter(115), which on a colour already at full value can
+#: only raise the saturation - a small shift, but the pressed shade is a normal
+#: darker(115), so the three states still read apart.
+VISITING_COLOUR = '#f2ff00'
 
 
 class SubTabBar(CanvasWidget):
@@ -288,8 +292,8 @@ class SubTabBar(CanvasWidget):
         gone, which is the bug Zement saw (2026-09-03). Listing hover and
         pressed alongside is what hands the widget a background for every state
         it can be in. The ``:checked`` selector is there for the same reason:
-        without it the style repaints over the amber the moment the button is
-        checked, which every visiting button is.
+        without it the style repaints over the visiting colour the moment the
+        button is checked, which every visiting button is.
         """
         if state != 'visiting':
             button.setStyleSheet('')
@@ -297,11 +301,12 @@ class SubTabBar(CanvasWidget):
 
         button.setStyleSheet(
             'QToolButton { background: %(c)s; border: none; '
-            'border-radius: 3px; }'
+            'border-radius: %(r)dpx; }'
             'QToolButton:checked { background: %(c)s; }'
             'QToolButton:hover { background: %(h)s; }'
             'QToolButton:pressed { background: %(p)s; }'
             % {'c': VISITING_COLOUR,
+               'r': OVERLAY_CORNER_RADIUS,
                'h': QtGui.QColor(VISITING_COLOUR).lighter(115).name(),
                'p': QtGui.QColor(VISITING_COLOUR).darker(115).name()})
 

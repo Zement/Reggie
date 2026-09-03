@@ -46,6 +46,11 @@ MIN_HEIGHT_PCT = MIN_SIZE_PCT
 MAX_HEIGHT_PCT = MAX_SIZE_PCT
 DEFAULT_HEIGHT_PCT = DEFAULT_SIZE_PCT
 
+#: Corner radius of anything floating over the canvas, in pixels. Nearly square
+#: (Zement, 2026-09-03) - the flyout's buttons round to the same amount, so the
+#: bar and the things in it share one shape.
+OVERLAY_CORNER_RADIUS = 1
+
 #: Default opacity of the overlay's background, as a percentage.
 MIN_OPACITY_PCT = 5.0
 MAX_OPACITY_PCT = 100.0
@@ -97,6 +102,37 @@ def configured_opacity_pct():
 
     return _clamped_pct('OverviewOpacityPct', DEFAULT_OPACITY_PCT,
                         MIN_OPACITY_PCT, MAX_OPACITY_PCT)
+
+
+def canvas_overlay_colour():
+    """The background colour for anything floating over the level canvas.
+
+    Qt-native, not theme.color('bg'). The theme's `bg` is the *canvas* colour,
+    which is exactly what this must not match - against it the overview was
+    invisible (Zement, 2026-08-29). Taken from the running palette, so it
+    follows a light or dark theme with no setting of its own.
+
+    Midlight on a light theme rather than Mid: Mid reads as a shadow, and plain
+    Light would clash with the overview's own terrain depiction (Zement,
+    2026-09-03). Dark on a dark theme, since Midlight there is nearly black.
+
+    The light/dark question is answered by *the palette*, not by
+    QStyleHints.colorScheme(). colorScheme() reports what the operating system
+    is set to, and a style or platform theme can hand the application a palette
+    that disagrees; asking the palette whose colour is about to be read cannot.
+    It also needs Qt 6.5 and can answer Unknown.
+
+    Read once per widget, at construction. A theme switched while Reginald is
+    running leaves both callers stale until restart - acceptable while nothing
+    else in the program follows a live theme change either.
+    """
+    palette = QtWidgets.QApplication.instance().palette()
+
+    dark = palette.color(QtGui.QPalette.ColorRole.Window).lightness() < 128
+    role = (QtGui.QPalette.ColorRole.Dark if dark
+            else QtGui.QPalette.ColorRole.Midlight)
+
+    return palette.color(role)
 
 
 class _ResizeGrip(QtWidgets.QWidget):
@@ -218,11 +254,10 @@ class CanvasWidget(QtWidgets.QFrame):
         self.setAutoFillBackground(True)
 
         # A background of its own, so the widget is not invisible against the
-        # canvas - Zement's report, 2026-08-29. Qt-native rather than from the
-        # theme file: the theme's `bg` is the canvas colour, which is exactly
-        # what it must NOT match. Mid/Dark come from the running palette, so
-        # this follows a light or dark system theme without a setting.
-        self._baseColour = self.palette().color(QtGui.QPalette.ColorRole.Mid)
+        # canvas - Zement's report, 2026-08-29. Shared with the level overview
+        # so the two cannot drift apart; see canvas_overlay_colour().
+        self._baseColour = canvas_overlay_colour()
+
         self._hovered = False
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
 
@@ -285,7 +320,9 @@ class CanvasWidget(QtWidgets.QFrame):
             painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
             painter.setPen(QtCore.Qt.PenStyle.NoPen)
             painter.setBrush(self._backgroundBrush)
-            painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 4, 4)
+            painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1),
+                                    OVERLAY_CORNER_RADIUS,
+                                    OVERLAY_CORNER_RADIUS)
             painter.end()
 
         super().paintEvent(event)
