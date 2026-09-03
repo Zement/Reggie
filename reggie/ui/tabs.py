@@ -30,7 +30,7 @@ is how sort orders end up inconsistent.
 import os
 import re
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from reggie.core import globals_
 from reggie.core.dirty import setting
@@ -133,11 +133,23 @@ class SubTabBar(CanvasWidget):
     #: Distance from the top-left corner of the canvas.
     MARGIN = 8
 
+    #: The buttons paint their own backgrounds over the whole frame, so a
+    #: palette Window colour is never seen. CanvasWidget fills with a real
+    #: brush in paintEvent instead - see its docstring.
+    PAINTS_OWN_BACKGROUND = True
+
     def __init__(self, stack, parent=None):
         super().__init__(parent, margin=self.MARGIN)
 
         self.stack = stack
         self.buttons = {}
+
+        # No frame: the background is a rounded rect painted at the configured
+        # alpha, and a styled panel border around it would be drawn at full
+        # strength - a hard edge floating over the canvas with a faded fill
+        # inside it, which is what Zement saw when only the border appeared to
+        # respond to the setting (2026-09-03).
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(3, 3, 3, 3)
@@ -268,14 +280,30 @@ class SubTabBar(CanvasWidget):
         A stylesheet rather than a palette role, because ``QToolButton`` in
         autoRaise mode paints its own background from the style for the checked
         and hover cases, and a palette colour underneath it is simply not drawn.
-        The ``:checked`` selector is spelled out for that reason - without it
-        the style repaints over the amber the moment the button is checked,
-        which every visiting button is.
+
+        **Every state it claims, it must spell out.** A stylesheet takes over
+        the drawing of the property it names, so a rule that sets `background`
+        with no `:hover` of its own leaves Qt with nothing to paint on the way
+        *out* of a hover - the button keeps the hot look after the pointer has
+        gone, which is the bug Zement saw (2026-09-03). Listing hover and
+        pressed alongside is what hands the widget a background for every state
+        it can be in. The ``:checked`` selector is there for the same reason:
+        without it the style repaints over the amber the moment the button is
+        checked, which every visiting button is.
         """
+        if state != 'visiting':
+            button.setStyleSheet('')
+            return
+
         button.setStyleSheet(
-            'QToolButton, QToolButton:checked { background: %s; '
-            'border-radius: 3px; }' % VISITING_COLOUR
-            if state == 'visiting' else '')
+            'QToolButton { background: %(c)s; border: none; '
+            'border-radius: 3px; }'
+            'QToolButton:checked { background: %(c)s; }'
+            'QToolButton:hover { background: %(h)s; }'
+            'QToolButton:pressed { background: %(p)s; }'
+            % {'c': VISITING_COLOUR,
+               'h': QtGui.QColor(VISITING_COLOUR).lighter(115).name(),
+               'p': QtGui.QColor(VISITING_COLOUR).darker(115).name()})
 
     # -- placement --------------------------------------------------------
 

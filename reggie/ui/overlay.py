@@ -159,6 +159,26 @@ class _ResizeGrip(QtWidgets.QWidget):
             event.accept()
 
 
+def _canvasSiblings(parent):
+    """Every canvas overlay sharing a canvas with a child of ``parent``.
+
+    Searched from the **tab container** down rather than among ``parent``'s own
+    children, because the two kinds do not share a parent: the overview is a
+    child of the container, a sub-tab flyout of one page inside it. A search of
+    either one's siblings alone finds only itself.
+    """
+    top = parent
+    for _ in range(4):
+        if hasattr(top, 'currentCanvas'):
+            break
+        nxt = top.parentWidget()
+        if nxt is None:
+            break
+        top = nxt
+
+    return top.findChildren(CanvasWidget)
+
+
 class CanvasWidget(QtWidgets.QFrame):
     """Base for anything that floats over the canvas.
 
@@ -182,14 +202,17 @@ class CanvasWidget(QtWidgets.QFrame):
     hotkey info panel to replace the one QPT carries.
     """
 
-    #: Where this sits, for the stacking rule. Overlays that share a corner are
-    #: offset from each other rather than drawn on top of one another.
-    ANCHOR = 'topleft'
+    #: True for a subclass whose children paint over the palette's background -
+    #: the sub-tab flyout's buttons do. Those get their fill from ``paintEvent``
+    #: with a real brush instead, since a palette colour under an opaque child
+    #: is simply not visible.
+    PAINTS_OWN_BACKGROUND = False
 
     def __init__(self, parent, margin=12):
         super().__init__(parent)
 
         self.margin = margin
+        self._backgroundBrush = None
 
         self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
         self.setAutoFillBackground(True)
@@ -234,10 +257,38 @@ class CanvasWidget(QtWidgets.QFrame):
         # autoFillBackground alone does not arrange.
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground,
                           colour.alpha() < 255)
-        self.setAutoFillBackground(True)
 
+        # Palette-driven fill only where nothing else paints over it. A frame
+        # whose children draw their own backgrounds - the sub-tab flyout's
+        # buttons - hides the palette entirely, so those paint the brush
+        # themselves in paintEvent. Turning autoFill *off* there is what stops
+        # Qt filling the rect opaquely underneath (Zement, 2026-09-03: the
+        # opacity "seems to be applied to the icons or maybe the border, but
+        # not the background color").
+        self.setAutoFillBackground(not self.PAINTS_OWN_BACKGROUND)
+
+        self._backgroundBrush = QtGui.QBrush(colour)
         self._opacityApplied(255 if self._hovered else alpha)
         self.update()
+
+    def paintEvent(self, event):
+        """Fill the background at the configured alpha, then paint as usual.
+
+        A QBrush drawn here rather than a palette colour, for the reason the
+        level overview already had to solve once: the alpha has to land on the
+        *background* and nothing else. A palette Window colour is painted by
+        each child under its own content, so the icons faded and the background
+        did not - the opposite of what the setting means.
+        """
+        if self.PAINTS_OWN_BACKGROUND and self._backgroundBrush is not None:
+            painter = QtGui.QPainter(self)
+            painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(self._backgroundBrush)
+            painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 4, 4)
+            painter.end()
+
+        super().paintEvent(event)
 
     def _opacityApplied(self, alpha):
         """Hook for subclasses whose contents paint their own background."""
@@ -310,30 +361,53 @@ class CanvasWidget(QtWidgets.QFrame):
 
     # -- stacking --------------------------------------------------------
 
-    def cornerOffset(self, corner):
-        """How far down to start, to clear anything already in ``corner``.
+    def globalRect(self):
+        """This widget's geometry in screen coordinates.
 
-        The flyout bar and the overview are both drawn over the canvas, and the
-        overview's corner is a setting - so with it set to a *top* corner the
-        two collided (Zement, 2026-09-03). Rather than each knowing about the
-        other, an overlay asks what is already anchored where it wants to be.
+        Overlays over one canvas can have *different parents* - the overview is
+        a child of the tab container, a sub-tab flyout of one page inside it -
+        so their raw geometries are in different coordinate systems and
+        comparing them directly is meaningless. Everything that compares two
+        overlays goes through here.
+        """
+        return QtCore.QRect(self.mapToGlobal(QtCore.QPoint(0, 0)), self.size())
 
-        Only the vertical direction is offset. Two things side by side in one
-        corner would each be somewhere unpredictable; stacked, the one that was
-        there first keeps its place.
+    def topOverlap(self, band):
+        """How far down to start, to clear anything already inside ``band``.
+
+        ``band`` is where this overlay wants to sit, in **screen** coordinates.
+        Anything else floating over the canvas that would intersect it pushes
+        the answer down past its own bottom edge.
+
+        Rectangles rather than corner names, and that distinction is the fix for
+        Zement's 2026-09-03 report that top-right still collided. The first
+        version asked "is anything anchored in *my* corner", and the flyout's
+        anchor is the top **left** - so a top-right overview matched nothing and
+        moved not at all. But the flyout is not really cornered: it follows its
+        own tab along the top edge, so with enough tabs open it reaches the
+        right-hand side too, which is exactly the case he photographed. What
+        matters is whether the two would overlap, and only a rectangle can say.
+
+        Only the vertical direction is offset. Two things side by side would
+        each be somewhere unpredictable; stacked, the one that was there first
+        keeps its place.
         """
         parent = self.parentWidget()
         if parent is None:
             return 0
 
         offset = 0
-        for sibling in parent.findChildren(CanvasWidget):
+        for sibling in _canvasSiblings(parent):
             if sibling is self or not sibling.isVisible():
                 continue
-            if sibling.ANCHOR != corner or sibling.stacksBelow(self):
+            if sibling.stacksBelow(self):
                 continue
 
-            offset = max(offset, sibling.height() + sibling.margin)
+            rect = sibling.globalRect()
+            if not rect.intersects(band):
+                continue
+
+            offset = max(offset, rect.bottom() - band.top() + 1 + sibling.margin)
 
         return offset
 
@@ -387,11 +461,6 @@ class CanvasOverlay(CanvasWidget):
         self.grip = _ResizeGrip(self)
         self.grip.show()
         self.grip.raise_()
-
-    @property
-    def ANCHOR(self):
-        """The overview's corner is a setting, so its anchor is not fixed."""
-        return self._corner
 
     def stacksBelow(self, other):
         """The overview yields; the flyout is pinned to its tab and cannot."""
@@ -514,14 +583,23 @@ class CanvasOverlay(CanvasWidget):
         right = area.right() - size.width() - margin + 1
         bottom = area.bottom() - size.height() - margin + 1
 
-        # Start below anything already anchored in this corner - the sub-tab
-        # flyout, when the overview is set to a top corner (Zement, 2026-09-03).
-        # Only the top corners can collide: the flyout hangs from the tab bar,
-        # so it is always at the top.
-        if 'top' in self._corner:
-            top += self.cornerOffset(self._corner)
-
         x = left if 'left' in self._corner else max(left, right)
+
+        # Start below anything that would overlap where this wants to sit - the
+        # sub-tab flyout, when the overview is in a top corner (Zement,
+        # 2026-09-03). Only the top corners can collide: the flyout hangs from
+        # the tab bar, so it is always along the top edge.
+        #
+        # Asked with the rectangle this would occupy, not with a corner name.
+        # The flyout follows its own tab horizontally, so it is not in a corner
+        # at all - with enough tabs open it reaches the right-hand side, which
+        # is the case a corner-name test missed entirely.
+        if 'top' in self._corner:
+            parent = self.parentWidget()
+            band = QtCore.QRect(
+                parent.mapToGlobal(QtCore.QPoint(int(x), int(top))), size)
+            top += self.topOverlap(band)
+
         y = top if 'top' in self._corner else max(top, bottom)
 
         self.move(int(x), int(y))
