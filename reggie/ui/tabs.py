@@ -34,6 +34,7 @@ from PyQt6 import QtCore, QtWidgets
 
 from reggie.core import globals_
 from reggie.core.dirty import setting
+from reggie.ui.overlay import CanvasWidget
 from reggie.ui.tooltabs import ToolTabHost
 
 
@@ -86,7 +87,7 @@ def level_sort_key(file_path):
 VISITING_COLOUR = '#e08a1e'
 
 
-class SubTabBar(QtWidgets.QFrame):
+class SubTabBar(CanvasWidget):
     """The floating bar of an area's forms (D-d.4b).
 
     Zement drew two options, 2026-09-02: icons *behind* the tab label, or a
@@ -133,13 +134,10 @@ class SubTabBar(QtWidgets.QFrame):
     MARGIN = 8
 
     def __init__(self, stack, parent=None):
-        super().__init__(parent)
+        super().__init__(parent, margin=self.MARGIN)
 
         self.stack = stack
         self.buttons = {}
-
-        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
-        self.setAutoFillBackground(True)
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(3, 3, 3, 3)
@@ -168,6 +166,21 @@ class SubTabBar(QtWidgets.QFrame):
         # by the buttons"). A stretch item here is what made it full width.
         self._loadIcons()
         self.adjustSize()
+
+        # The overview's opacity setting governs both of these now (Zement,
+        # 2026-09-03): they are two things floating over the same canvas, and
+        # one of them being solid while the other faded reads as a mistake
+        # rather than a choice.
+        self._applyOpacity()
+
+    def applySettings(self):
+        """Re-read the shared canvas-overlay settings.
+
+        Called from the same place the overview is told, so a change in
+        Preferences reaches both without the caller knowing there are two.
+        """
+        self._applyOpacity()
+        self.reposition()
 
     def _makeButton(self):
         button = QtWidgets.QToolButton(self)
@@ -272,15 +285,27 @@ class SubTabBar(QtWidgets.QFrame):
         Left-aligned with the tab it belongs to (Zement, 2026-09-02), so the bar
         reads as hanging from that tab rather than as a fixed decoration in the
         page's corner - which matters once several tabs are open and each has
-        its own bar. Clamped to the page, so a tab scrolled far to the right
-        cannot push its bar off the edge; the ones near the border land as close
-        as they can get.
+        its own bar.
+
+        Held inside the canvas *viewport* by one margin on each side (Zement,
+        2026-09-03). The margin matters at both ends and for different reasons:
+        the first tab sits flush against the window edge, where an aligned bar
+        looks unfinished rather than deliberate; the last one would otherwise
+        land on the view's own scrollbar, which is what the viewport rectangle
+        exists to keep clear of.
         """
         parent = self.parentWidget()
         if parent is None:
             return
 
-        x = self.MARGIN
+        area = self._availableRect()
+        if area.width() <= 0:
+            area = parent.rect()
+
+        left_limit = area.left() + self.margin
+        right_limit = area.right() - self.width() - self.margin + 1
+
+        x = left_limit
 
         tabs = self.stack.tabs
         index = tabs.indexOfSession(self.stack.session) if tabs is not None else -1
@@ -295,9 +320,12 @@ class SubTabBar(QtWidgets.QFrame):
             tab_left = bar.mapTo(tabs, bar.tabRect(index).topLeft()).x()
             page_left = parent.mapTo(tabs, QtCore.QPoint(0, 0)).x()
 
-            x = max(0, min(tab_left - page_left, parent.width() - self.width()))
+            x = tab_left - page_left
 
-        self.move(x, self.MARGIN)
+        # max() last, so a viewport too narrow for the bar leaves it at the left
+        # margin rather than off the left edge.
+        self.move(int(max(left_limit, min(x, right_limit))),
+                  area.top() + self.margin)
         self.raise_()
 
     # -- clicks -----------------------------------------------------------
@@ -467,7 +495,7 @@ class SessionPageStack:
         keeps the full height it had before the bar existed and only the pages
         that need the room give it up.
         """
-        top = self._bar.sizeHint().height() + self._bar.MARGIN
+        top = self._bar.sizeHint().height() + 2 * self._bar.margin
 
         for widget in self.pages.values():
             if widget is None:
@@ -1077,7 +1105,19 @@ class MasterTabWidget(QtWidgets.QTabWidget):
             self._positionOverlay()
 
     def applyOverlaySettings(self):
-        """Re-read the overlay's corner and size settings."""
+        """Re-read the settings shared by everything floating over the canvas.
+
+        Two things now, not one: the level overview and every area's sub-tab
+        flyout. The opacity setting governs both (Zement, 2026-09-03) - one
+        solid while the other is faded reads as a mistake rather than a choice -
+        so one call reaches both and the caller need not know there are two.
+
+        The bars are told first. The overview starts below whatever shares its
+        corner, so it has to measure a bar that has already taken its new size.
+        """
+        for stack in self._stacks.values():
+            stack.bar().applySettings()
+
         if self.overlay is not None:
             self.overlay.applySettings()
 
