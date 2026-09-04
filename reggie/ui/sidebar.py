@@ -716,19 +716,17 @@ class SectionGrip(QtWidgets.QWidget):
         self._pressY = event.globalPosition().y()
         self._startHeight = self.host.height()
 
-        # Freeze every host at the height it is showing, for the duration.
+        # Freeze every host at the height it is showing, for the duration -
+        # what a splitter does natively: while you drag one boundary, the others
+        # stay where they are.
         #
-        # Without this a drag only moved the *slack holder*, because that is the
-        # one host the layout is free to resize - everything else is pinned to
-        # its size hint, so asking a non-holder to grow changed a number nothing
-        # acted on (Zement, 2026-09-01: "when I try to resize the Game Patches
-        # panel via the splitter, at first it doesn't resize at all... this is
-        # not the case for the other panels"). Game Patches happened to be
-        # above the undo history, which was the holder; the panels that "worked"
-        # were the holder itself.
-        #
-        # Freezing is also what a splitter does: while you are dragging one
-        # boundary, the others stay where they are.
+        # It mattered more when one host was free to expand and the rest were
+        # pinned, because then a drag on any *other* host changed a number
+        # nothing acted on (Zement, 2026-09-01: "when I try to resize the Game
+        # Patches panel via the splitter, at first it doesn't resize at all").
+        # Every host is pinned now, so this is no longer load-bearing - kept
+        # because recording the shown height is still what makes a drag start
+        # from where the user sees the boundary rather than from a stale hint.
         self.column.beginDrag()
         event.accept()
 
@@ -794,8 +792,15 @@ class SectionColumn(QtWidgets.QScrollArea):
 
     So this is a scroll area over a plain vertical layout. Hosts keep the height
     they ask for; if the stack is taller than the viewport there is a scrollbar,
-    and if it is shorter the bottom-most expanded host takes up the slack
-    (Zement's choice, over leaving a visible gap).
+    and if it is shorter the leftover falls to a tail stretch at the bottom.
+
+    That last part was the other way round until D-d.6 - the bottom-most host
+    absorbed the slack, chosen over leaving a visible gap. It stopped working
+    once a host's content could fill the host itself: the last section was given
+    the leftover height *and* grew into it, so it always reached the bottom of
+    the sidebar whatever its configured default said. Zement reversed the choice
+    on seeing that (2026-09-04), and an accordion wants it this way anyway - a
+    panel's height means the same thing wherever it sits in the stack.
 
     A `SectionGrip` sits under each host, so the heights are still draggable -
     that is what a splitter gave for free, and it was worth keeping.
@@ -840,7 +845,6 @@ class SectionColumn(QtWidgets.QScrollArea):
         #: here" stopped being the same question once the grips arrived.
         self._hosts = []
         self._grips = {}
-        self._slackHolder = None
         #: True while a grip is being dragged - see `beginDrag`.
         self._dragging = False
 
@@ -888,13 +892,12 @@ class SectionColumn(QtWidgets.QScrollArea):
             # and dragging it taller would only reveal a hidden body.
             grip.setVisible(host.isExpanded())
 
-        # The tail stretch is what stops a short stack from spreading itself
-        # over the whole viewport. Left out when a host is claiming the slack.
-        holder = self._slackHolder
-        if holder is not None and holder in self._hosts:
-            self._layout.setStretchFactor(holder, 1)
-        else:
-            self._layout.addStretch(1)
+        # The tail stretch takes whatever the stack does not, so every section
+        # is the height it asked for and any leftover falls to the bottom.
+        # Always, since D-d.6: a section used to be able to claim it instead,
+        # and the last one then reached the bottom of the sidebar however short
+        # its configured default was - see `Sidebar._applySectionStretch`.
+        self._layout.addStretch(1)
 
         self.applyHeights()
 
@@ -1003,9 +1006,6 @@ class SectionColumn(QtWidgets.QScrollArea):
             grip.setParent(None)
             grip.deleteLater()
 
-        if self._slackHolder is host:
-            self._slackHolder = None
-
         self._rebuild()
 
     def handleWidth(self):
@@ -1016,41 +1016,22 @@ class SectionColumn(QtWidgets.QScrollArea):
         """
         return 0
 
-    # -- slack -----------------------------------------------------------
-
-    def setSlackHolder(self, host):
-        """Give leftover space to ``host``, or to the tail stretch when None.
-
-        Zement, asked and answered 2026-09-01: when the stack is shorter than
-        the viewport, the bottom-most expanded panel absorbs what is left rather
-        than the column showing dead space under it.
-
-        Done with layout stretch rather than a computed height, so the layout
-        keeps it right through every resize with nothing to keep in step.
-        """
-        self._slackHolder = host if host in self._hosts else None
-        self._rebuild()
-
     def applyHeights(self):
-        """Push each host's wanted height back in as its minimum, and re-lay.
+        """Pin each host at the height it asks for, and re-lay.
 
         The cheap half of `_rebuild`: the stack has not changed, only what its
         members want. Used by a drag, which changes one wanted height per mouse
         move and must not rebuild the whole column each time.
+
+        Every host, with no exception. One of them used to be free to expand -
+        the "slack holder", which absorbed whatever the stack did not fill - and
+        that stopped making sense once a host's content could fill the host
+        itself: the last section was then given the leftover height *and* grew
+        into it, reaching the bottom of the sidebar however short its configured
+        default was (Zement, 2026-09-04). The leftover goes to the tail stretch
+        now, so a section's height means the same thing wherever it sits.
         """
-        # While a drag is in progress every host is pinned, the holder
-        # included: each one has just been given its shown height, so there is
-        # no slack to absorb and letting the holder swallow the space the
-        # dragged host gives up would mean nothing visibly moved.
-        holder = None if self._dragging else self._slackHolder
-
         for host in self._hosts:
-            if host is holder:
-                host.setMinimumHeight(0)
-                host.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
-                                   QtWidgets.QSizePolicy.Policy.Expanding)
-                continue
-
             host.setMinimumHeight(
                 host.sizeHint().height() if host.isExpanded()
                 else host.headerHeight())
@@ -1060,20 +1041,17 @@ class SectionColumn(QtWidgets.QScrollArea):
         self.refreshLayout()
 
     def beginDrag(self):
-        """Pin every host at its shown height while one is being dragged.
+        """Record every host's shown height as its wanted one, for the drag.
 
-        Only the slack holder is free to resize under normal layout - every
-        other host is held at its wanted height - so dragging a non-holder
-        taller changed a number nothing acted on. Recording each host's
-        *current* height as its wanted one puts them all on the same footing.
+        So a drag starts from the boundary the user can see rather than from a
+        size hint that may not have been applied yet.
 
-        **No `_rebuild` here, and no `setSlackHolder`.** The first version
-        called `setSlackHolder(None)` from here, and every handle then froze
-        (Zement, 2026-09-01: "all handles now cannot be moved anymore").
-        `setSlackHolder` runs `_rebuild`, which takes every widget out of the
-        layout and puts it back - `setParent(None)` on each one - and doing
-        that to a widget's ancestors *while it is holding a mouse press* stops
-        the drag on a real windowing system.
+        **No `_rebuild` here.** An earlier version called one from this method,
+        and every handle then froze (Zement, 2026-09-01: "all handles now cannot
+        be moved anymore"). `_rebuild` takes every widget out of the layout and
+        puts it back - `setParent(None)` on each - and doing that to a widget's
+        ancestors *while it is holding a mouse press* stops the drag on a real
+        windowing system.
 
         Stated as the working explanation rather than a proven one: it could
         not be reproduced under the offscreen platform, which has no native
@@ -1082,9 +1060,6 @@ class SectionColumn(QtWidgets.QScrollArea):
         that not rebuilding fixes it, and that rebuilding the whole column on
         every mouse move was wrong regardless - it is a lot of work per frame
         for a stack that has not changed.
-
-        The holder is left in place and simply stops absorbing: with every host
-        pinned to a real height, there is no slack for it to take.
         """
         self._dragging = True
 
@@ -1095,7 +1070,7 @@ class SectionColumn(QtWidgets.QScrollArea):
         self.applyHeights()
 
     def endDrag(self):
-        """Let the column go back to absorbing slack normally."""
+        """The drag is over; heights go back to being read from the hosts."""
         self._dragging = False
         self.applyHeights()
 
@@ -1326,6 +1301,7 @@ class Sidebar(QtWidgets.QWidget):
         # any of them belongs to. Used to stop a click on the showing entry
         # rebuilding its section (D-d.2c).
         self._railOwns = []
+        self._railToggles = []
 
         # The last row that actually selected a page, so an action entry can
         # hand the highlight back rather than leaving it on a button.
@@ -1508,7 +1484,7 @@ class Sidebar(QtWidgets.QWidget):
             self.rail.item(row).setSizeHint(size)
 
     def addPage(self, icon, title, widget=None, on_activate=None,
-                sections=False, is_open=None):
+                sections=False, is_open=None, toggles=False):
         """Add a rail entry, and say what selecting it does.
 
         Three kinds of entry, because D-d needs all three (phase D-d.1):
@@ -1528,11 +1504,22 @@ class Sidebar(QtWidgets.QWidget):
         page and do something when picked.
 
         ``is_open`` is an optional predicate answering "is this entry's own
-        section the one currently showing?". Clicking an entry whose section is
-        already up is then a no-op rather than a rebuild, which matters because
-        a context section is re-created on open - rebuilding would discard the
-        tree's scroll position, its expanded levels and the user's selection.
-        Only the owner can answer it; the sidebar sees an anonymous list.
+        section the one currently showing?". Only the owner can answer it; the
+        sidebar sees an anonymous list. It does **two** jobs:
+
+        - a click on an entry whose section is already up is a no-op rather than
+          a rebuild, which matters because a context section is re-created on
+          open - rebuilding would discard the tree's scroll position, its
+          expanded levels and the user's selection
+        - the highlight follows the panels, so closing one moves it off that
+          entry (D-d.6, `syncRailHighlight`)
+
+        ``toggles=True`` asks for the second without the first. A toggle entry
+        *needs* the already-open click to get through - it is the one that
+        closes the panel - but still has to say whether its panel is up, or the
+        highlight cannot follow it. Before this the two were one flag, so the
+        undo history had to give up answering at all, and its entry stayed lit
+        over a panel it had just closed (Zement, 2026-09-04).
         """
         item = QtWidgets.QListWidgetItem(self.rail)
         if icon is not None:
@@ -1557,6 +1544,10 @@ class Sidebar(QtWidgets.QWidget):
         self._railPages.append(page)
         self._railActions.append(on_activate)
         self._railOwns.append(is_open)
+
+        # Whether a click on this entry while its section is up should still
+        # reach the handler. True for a toggle, whose whole job that click is.
+        self._railToggles.append(bool(toggles))
 
         if self.rail.currentRow() < 0 and page is not None:
             self.rail.setCurrentRow(self.rail.count() - 1)
@@ -1667,10 +1658,56 @@ class Sidebar(QtWidgets.QWidget):
         # levels and the user's selection for no gain. Only an entry whose
         # section is not up has anything to do here - which is exactly the case
         # the bug left unreachable.
-        if self._sectionOwned(row):
+        if self._sectionOwned(row) and not self._railToggle(row):
             return
 
         self._handleRailChanged(row)
+
+    def syncRailHighlight(self):
+        """Move the highlight off an entry whose panel is no longer open (D-d.6).
+
+        Zement's rule, 2026-09-04: *"always highlight the activated panel; sync
+        the highlight status with the status of the panel that was last used."*
+
+        The highlight moves on activation and nothing moved it back, so closing
+        a panel by clicking its own rail entry a second time left the entry lit
+        over a panel that was gone - his example was the undo history, and it
+        holds for any toggle.
+
+        Only entries that can answer for themselves are considered, which is
+        what `is_open` is for. An entry without one keeps the highlight it has:
+        the sidebar sees an anonymous list and guessing on its behalf would move
+        the highlight for reasons the owner never asked for.
+        """
+        row = self.rail.currentRow()
+        if row < 0 or row >= len(self._railOwns):
+            return
+
+        # Still open, or unable to say. Either way there is nothing to correct.
+        if self._railOwns[row] is None or self._sectionOwned(row):
+            return
+
+        # The first entry that *is* showing its own section. "The panel last
+        # used" in practice: with one context section and any number of
+        # always-open ones, this lands on whichever is still up.
+        target = next((i for i in range(len(self._railOwns))
+                       if self._railOwns[i] is not None
+                       and self._sectionOwned(i)), None)
+
+        if target is None or target == row:
+            return
+
+        blocked = self.rail.blockSignals(True)
+        try:
+            self.rail.setCurrentRow(target)
+            self._lastPageRow = target
+        finally:
+            self.rail.blockSignals(blocked)
+
+    def _railToggle(self, row):
+        """Whether row ``row`` closes its own panel when clicked again."""
+        return (self._railToggles[row]
+                if row < len(self._railToggles) else False)
 
     def _sectionOwned(self, row):
         """Whether row ``row``'s own section is the one currently showing.
@@ -1777,8 +1814,8 @@ class Sidebar(QtWidgets.QWidget):
         if key is not None:
             host.setSectionKey(key)
 
-        # The vertical policy is set by `SectionColumn._rebuild`, which is the
-        # one place that knows which host is currently absorbing slack.
+        # The vertical policy is set by `SectionColumn.applyHeights`, which is
+        # the one place that decides the hosts' heights.
 
         # A height the user dragged this section to in an earlier session, or
         # earlier in this one, wins over the configured default (D-d.3d).
@@ -1980,35 +2017,38 @@ class Sidebar(QtWidgets.QWidget):
             self._resizeColumn()
             self._pendingWidth = None
 
+            # A panel closing may have left the rail lit over nothing (D-d.6).
+            # Here rather than in the toggle handlers, because *every* way a
+            # section goes passes through this method - the rail entry, the
+            # header's X, a context switch closing the previous one - and the
+            # highlight has to follow all of them, not the one that was
+            # remembered to be wired up.
+            self.syncRailHighlight()
+
             return widget
 
         return None
 
     def _applySectionStretch(self):
-        """Decide which section, if any, absorbs the column's leftover space.
+        """Re-measure the column after its sections' wanted heights change.
 
-        Since D-d.3d the column is a scroll area rather than a splitter, so
-        there is no share-of-the-total to hand out: a host is as tall as it asks
-        to be, and folding one genuinely frees the space below it. What is left
-        to decide is only what happens when the stack is *shorter* than the
-        viewport, and the answer is the bottom-most expanded section (Zement,
-        2026-09-01) - so the column never shows dead space under the stack.
+        **Nothing absorbs the leftover space any more.** Until D-d.6 the
+        bottom-most expanded section did (Zement, 2026-09-01, choosing that over
+        a visible gap), and that answer was right while a host could not fill
+        itself: the alternative then really was dead space.
 
-        The old version divided splitter stretch between expanded sections, and
-        called `_capSliceTwo`. **Both are gone.** The cap put a maximum *height*
-        on `self.pages` when every section was folded - and since D-d.2b `pages`
-        is a horizontal sibling of the rail, so it capped the whole sidebar's
-        height and collapsed it to a strip (Zement, with a screenshot: "when all
-        panels of slice 2 are collapsed, the entire sidebar collapses to a very
-        small height"). Its own comment had concluded the cap was "cosmetic"
-        after D-d.2b; it was not, it was the bug.
+        A host's content fills its own host now, so the two rules fought and the
+        holder won twice over - it was given the leftover height *and* its
+        content grew into it, so the last section always reached the bottom of
+        the sidebar whatever its configured default said. Zement reversed the
+        choice on seeing it (2026-09-04): *"If they would only be placed at
+        their default height, then everything would be perfect... it is ok to
+        have empty space at the end of the last or only panel."*
+
+        So every section is its configured height and the tail stretch takes
+        what is left. Which is also the accordion the sidebar was asked for: a
+        panel's height means the same thing wherever it sits in the stack.
         """
-        holder = None
-        for host, _stretch in self._sections:
-            if host.isExpanded():
-                holder = host
-
-        self.sections.setSlackHolder(holder)
 
         # The hosts' wanted heights have just changed - a fold, an unfold, or a
         # section arriving. The scroll area does not re-measure on its own,

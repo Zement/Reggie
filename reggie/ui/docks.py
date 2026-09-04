@@ -526,15 +526,19 @@ class DockBuilder:
                         is_open=showing('levelTreeWidget'))
 
         # -- Logs / Undo --------------------------------------------------
-        # Selecting it shows the sections page and opens the undo history if it
-        # is not already up, which is what makes the entry do something today.
-        # No `is_open` here, deliberately. That predicate exists to stop a
-        # click rebuilding a section that is already showing; this entry is a
-        # toggle, so a click while it is open is exactly the case that has to
-        # get through - it is the one that closes it.
+        # A toggle: selecting it opens the undo history, selecting it again
+        # closes it. `toggles=True` is what lets the second click through -
+        # `is_open` alone would swallow it, since its other job is stopping a
+        # re-click from rebuilding a section that is already up.
+        #
+        # It still needs `is_open`, so the highlight can follow the panel: the
+        # entry used to have none, and so stayed lit over a panel it had just
+        # closed (Zement, 2026-09-04).
         sidebar.addPage(icon('undo'), trans('MenuItems', 144),
                         sections=True,
-                        on_activate=self._showUndoHistory)
+                        on_activate=self._showUndoHistory,
+                        is_open=showing('undoHistoryView'),
+                        toggles=True)
 
         # -- Collaborate --------------------------------------------------
         # One entry for both halves of collaboration (D-d.5): with no session
@@ -544,14 +548,17 @@ class DockBuilder:
         # nothing, while one *panel* would mean reworking the join path's
         # exec()/collectResult() handshake and the discovery thread's shutdown.
         #
-        # No `is_open`, for the reason the undo entry has none: with a session
-        # running this is a toggle, and a click while the panel is up is exactly
-        # the case that has to get through.
+        # A toggle like Logs/Undo while a session is running, so the same pair:
+        # `toggles` lets the closing click through, `is_open` lets the highlight
+        # follow the panel.
+        #
         # 'spritelist' is what the Collaborate menu action already uses, so the
         # rail and the menu name the same thing with the same picture.
         sidebar.addPage(icon('spritelist'), trans('MenuItems', 165),
                         sections=True,
-                        on_activate=self._showCollaboration)
+                        on_activate=self._showCollaboration,
+                        is_open=self._collabPanelOpen,
+                        toggles=True)
 
         # -- Help ---------------------------------------------------------
         sidebar.addPage(icon('help'), trans('MenuItems', 88),
@@ -582,6 +589,24 @@ class DockBuilder:
     def _showCollaboration(self):
         """Open the collaboration panel, or the host/join dialog (D-d.5)."""
         self.win.ShowCollaboration()
+
+    def _collabPanelOpen(self):
+        """Whether the collaboration panel is showing.
+
+        Asked of the controller, which owns the window the section holds - and
+        answering False with no controller is right, since a session that has
+        never started has no panel to be showing.
+        """
+        controller = getattr(self.win, '_collab', None)
+        if controller is None:
+            return False
+
+        window = getattr(controller, 'status_window', None)
+        if window is None:
+            return False
+
+        sidebar = getattr(self.win, 'sidebar', None)
+        return sidebar is not None and sidebar.sectionFor(window) is not None
 
     def _showUndoHistory(self):
         """Toggle the undo history section (Zement, 2026-09-01).
