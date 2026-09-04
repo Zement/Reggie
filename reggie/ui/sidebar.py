@@ -192,15 +192,29 @@ class _HostScrollArea(QtWidgets.QScrollArea):
     Neither of `QScrollArea`'s two modes gives that on its own.
 
     - ``setWidgetResizable(True)`` stretches the widget to the viewport in
-      **both** axes. The width is exactly what is wanted; the height is the bug
-      - dragged 300px taller, a tree measuring 215px became 691px, and the
+      **both** axes, and lets it shrink below its hint. That was the original
+      bug: dragged 300px taller, a tree measuring 215px became 691px, and the
       checkbox row inside it grew with it.
     - ``setWidgetResizable(False)`` leaves the widget at its size hint in both
       axes, so it never fills the column's width and every section reads narrow.
 
-    So the width is matched by hand and the height is left alone. The same split
-    `SectionColumn` had to make one level up, for the same reason - which is why
-    this is a class rather than four lines at each call site.
+    So the geometry is set by hand: **as wide as the viewport, and as tall as
+    the viewport or its own hint, whichever is more.**
+
+    The height rule took two passes to state. Pinning it to the hint alone
+    stopped the stretch and introduced the opposite fault - a host taller than
+    its content showed dead space below it, with the grip stranded at the bottom
+    of the box (Zement, 2026-09-04, with pictures). Taking the maximum is what
+    tells the two cases apart:
+
+    - content **shorter** than the viewport: it fills, so a tree given more room
+      shows more rows and there is nothing dead under it
+    - content **taller**: it keeps its own height and the area scrolls
+
+    Which is what the rule always meant. "Never stretch" is about the content
+    being squeezed or inflated *past what it holds* - a row of checkboxes does
+    not become taller - and a list with more rows to show is not stretching when
+    it shows them.
     """
 
     def __init__(self, parent=None):
@@ -214,15 +228,17 @@ class _HostScrollArea(QtWidgets.QScrollArea):
             QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
     def _fit(self):
-        """Widget as wide as the viewport, as tall as it asks to be."""
+        """Widget as wide as the viewport, and as tall as the taller of the two."""
         widget = self.widget()
         if widget is None:
             return
 
-        # The hint, not the current height: a widget already stretched once
-        # would otherwise keep that height forever, since its own hint is the
-        # only honest record of what it wants.
-        widget.resize(self.viewport().width(), widget.sizeHint().height())
+        # The **hint**, not the widget's current height: one already sized to a
+        # larger viewport would otherwise keep that height when the viewport
+        # shrank, since its own hint is the only honest record of what it holds.
+        wanted = max(widget.sizeHint().height(), self.viewport().height())
+
+        widget.resize(self.viewport().width(), wanted)
 
     def setWidget(self, widget):
         super().setWidget(widget)
