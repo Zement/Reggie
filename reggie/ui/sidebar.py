@@ -183,6 +183,27 @@ class Percent(float):
         return int(round(available * float(self) / 100.0))
 
 
+def let_view_give(view):
+    """Let a scrolling view shrink to nothing, so its neighbours cannot be cut.
+
+    A `QAbstractScrollArea` asks for a substantial minimum of its own - a
+    QTextEdit wants 70px, and 98 inside a tab widget - and that minimum becomes
+    the floor of whatever holds it. In a panel whose other rows are buttons,
+    that is the wrong thing to be immovable: the list is what the user can
+    afford to see less of, and the buttons are what must stay reachable.
+
+    Zement's rule, 2026-09-04: the buttons "should always be visible... and
+    *eat* from the above section". They eat by staying fixed while the view
+    gives, which needs the view to be *able* to give - which is this.
+
+    The panel still needs a floor of its own, or the view is eaten to nothing
+    and the drag simply carries on. See `CollabStatusWindow._chatFloor`.
+    """
+    view.setMinimumHeight(0)
+    view.setSizePolicy(view.sizePolicy().horizontalPolicy(),
+                       QtWidgets.QSizePolicy.Policy.Ignored)
+
+
 class _HostScrollArea(QtWidgets.QScrollArea):
     """A host's body: the content at its natural height, scrolled (D-d.6).
 

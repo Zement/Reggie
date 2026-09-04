@@ -80,10 +80,18 @@ def _tr(numcode, *replacements):
     return text
 
 
-#: How short the chat half of the panel may be dragged. It holds the buttons as
-#: well as the log since D-d.6, so this is the tab bar, the entry row, the action
-#: buttons and enough log to read a line or two - Zement's 15% (2026-09-04).
-MIN_CHAT_HEIGHT = 150
+#: How short the chat half of the panel may be dragged.
+#:
+#: **Measured from its own controls rather than fixed**, because what has to
+#: stay visible is exactly the three rows that cannot shrink - the tab bar, the
+#: entry, the actions button and End session - plus a line of log. A constant
+#: would be either too small to hold them on a large font or needlessly large on
+#: a small one.
+#:
+#: Zement's rule, 2026-09-04: the buttons "should always be visible... and *eat*
+#: from the above section Chat". They eat by being fixed while the log gives,
+#: and this floor is what stops the dragging once there is nothing left to eat.
+MIN_CHAT_LOG_LINES = 1
 
 #: How short the roster half may be dragged: its label and about two rows. Small
 #: on purpose - Zement's 5%. The buttons left this half, so there is nothing
@@ -227,6 +235,9 @@ _FALLBACKS = {
     # 28 names the one holding everything in arrival order, which is what gets
     # saved as the session's record.
     28: 'Activity',
+    # Replaces the Send button (D-d.6): it said what Enter already does, and
+    # took a third of the row in a ~260px column to say it.
+    29: 'Press Enter to send',
 }
 
 
@@ -769,17 +780,29 @@ class CollabStatusWindow(QtWidgets.QDialog):
         self.chatEntry.setMaxLength(protocol.MAX_CHAT_CHARS)
         self.chatEntry.returnPressed.connect(self._sendChat)
 
-        sendButton = QtWidgets.QPushButton(_tr(12))
-        sendButton.clicked.connect(self._sendChat)
-
-        entryRow = QtWidgets.QHBoxLayout()
-        entryRow.addWidget(self.chatEntry)
-        entryRow.addWidget(sendButton)
+        # No Send button (Zement, 2026-09-04). Enter already sends, and in a
+        # ~260px column the button took a third of the row to say so. The
+        # placeholder says it instead, which costs no width at all and is only
+        # there while the box is empty.
+        self.chatEntry.setPlaceholderText(_tr(29))
 
         chatColumn = QtWidgets.QVBoxLayout()
         chatColumn.setContentsMargins(0, 0, 0, 0)
-        chatColumn.addWidget(self.logTabs)
-        chatColumn.addLayout(entryRow)
+
+        # The log is the only part that gives: three rows of controls under it
+        # stay put and it takes whatever is left. Without this the log's own
+        # minimum - a QTextEdit asks for 70px, and 98 inside a tab widget - was
+        # the pane's real floor, so the configured one never applied and the
+        # buttons could be dragged out of sight (Zement, 2026-09-04: they
+        # "should always be visible... and *eat* from the above section").
+        from reggie.ui.sidebar import let_view_give
+
+        self.logTabs.setMinimumHeight(0)
+        for log in (self.userLog, self.chatLog):
+            let_view_give(log)
+
+        chatColumn.addWidget(self.logTabs, 1)
+        chatColumn.addWidget(self.chatEntry, 0)
 
         rosterColumn = QtWidgets.QVBoxLayout()
         rosterColumn.setContentsMargins(0, 0, 0, 0)
@@ -828,13 +851,14 @@ class CollabStatusWindow(QtWidgets.QDialog):
         self.leaveButton.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
                                        QtWidgets.QSizePolicy.Policy.Fixed)
 
-        actionRow = QtWidgets.QHBoxLayout()
-        actionRow.setContentsMargins(0, 0, 0, 0)
+        # Three rows, each its own (Zement, 2026-09-04): the chat entry, then
+        # the actions, then End session. Stacked rather than paired, so the one
+        # that ends the session for everybody is never beside something
+        # harmless at a width where both read as three letters.
         if self.is_host:
-            actionRow.addWidget(self.actionsButton, 1)
-        actionRow.addWidget(self.leaveButton, 1)
+            chatColumn.addWidget(self.actionsButton, 0)
 
-        chatColumn.addLayout(actionRow)
+        chatColumn.addWidget(self.leaveButton, 0)
 
         # Stacked, not side by side (Zement, 2026-09-02: "this is the only real
         # UI change needed"). The two columns were written for a 560px dialog;
@@ -873,7 +897,7 @@ class CollabStatusWindow(QtWidgets.QDialog):
         # list that must stay reachable, so the roster's floor is its label and
         # about two rows (Zement, 2026-09-04: reduce it to 5%).
         rosterPane.setMinimumHeight(MIN_ROSTER_HEIGHT)
-        chatPane.setMinimumHeight(MIN_CHAT_HEIGHT)
+        chatPane.setMinimumHeight(self._chatFloor())
 
         layout = QtWidgets.QVBoxLayout()
         layout.setContentsMargins(4, 4, 4, 4)
@@ -901,6 +925,30 @@ class CollabStatusWindow(QtWidgets.QDialog):
         # returnPressed, not made the default button: a default button would
         # fire whenever the dialog has focus anywhere, including in the roster.
         self.chatEntry.setFocus()
+
+    def _chatFloor(self):
+        """How short the chat half may be: its fixed rows, plus a line of log.
+
+        Everything below the log stays put and the log gives, so the floor is
+        reached exactly when the log has nothing left to give. Measured from the
+        widgets rather than written as a number, so it is right at any font
+        size.
+        """
+        rows = self.chatEntry.sizeHint().height() \
+            + self.leaveButton.sizeHint().height()
+
+        if self.actionsButton is not None:
+            rows += self.actionsButton.sizeHint().height()
+
+        # The tab bar, which is what is left of the log's own hint once its
+        # viewport is allowed to disappear.
+        rows += self.logTabs.tabBar().sizeHint().height()
+
+        line = self.fontMetrics().lineSpacing() * MIN_CHAT_LOG_LINES
+
+        # Frames, spacing and the layout's own margins. Small and unavoidable;
+        # a few pixels too many here is invisible, a few too few clips a button.
+        return rows + line + 16
 
     # -- updates ------------------------------------------------------------
 

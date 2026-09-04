@@ -55,6 +55,13 @@ class PatchListWidget(QtWidgets.QWidget):
         layout.addWidget(self.patchInfo, 0)
         layout.addWidget(self.manageButton, 0)
 
+        # The list is what gives when the panel is dragged short, so Patch
+        # Manager can never be pushed out of sight (Zement, 2026-09-04). Its own
+        # minimum would otherwise be the panel's floor, and the button below it
+        # the first thing clipped.
+        from reggie.ui.sidebar import let_view_give
+        let_view_give(self.list)
+
         self.retranslate()
 
         # The one refresh this widget does itself: at construction there may be
