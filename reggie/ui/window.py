@@ -1378,26 +1378,6 @@ class ReggieWindow(QtWidgets.QMainWindow):
             RefreshPatchSelector()
             return False
 
-        # Everything the old patch had open goes, retained dirty levels
-        # included. CheckDirty has just settled those - saved, discarded, or the
-        # switch was cancelled - so anything still held is work the user chose
-        # to let go, and it belongs to a game about to be unloaded: its paths
-        # will not resolve, and a row offering to save it would write it through
-        # the new patch's paths (Zement, 2026-09-04: "after Game Patch
-        # switching, the Unsaved Levels list must be empty").
-        # Everything the old patch had open goes, retained dirty levels
-        # included. CheckDirty has just settled those - saved, discarded, or the
-        # switch was cancelled - so anything still held is work the user chose
-        # to let go, and it belongs to a game about to be unloaded: its paths
-        # will not resolve, and a row offering to save it would write it through
-        # the new patch's paths (Zement, 2026-09-04: "after Game Patch
-        # switching, the Unsaved Levels list must be empty").
-        manager = globals_.get_session_manager()
-        if manager is not None:
-            manager.release_all()
-
-        self.RefreshUnsavedLevels()
-
         # folder is None for the base game, which loadNewGameDef takes as-is.
         success = loadNewGameDef(folder)
 
@@ -1406,6 +1386,39 @@ class ReggieWindow(QtWidgets.QMainWindow):
         RefreshPatchSelector()
 
         if success:
+            # Let go of what the old patch had open, retained dirty levels
+            # included. CheckDirty settled those above - saved, discarded, or
+            # the switch was cancelled - so anything still held is work the user
+            # chose to let go, and it belongs to a game that is no longer
+            # loaded: its paths do not resolve, and a row offering to save it
+            # would write it through the new patch's paths (Zement, 2026-09-04:
+            # "after Game Patch switching, the Unsaved Levels list must be
+            # empty").
+            #
+            # **Here, and not either side of it.** Two orderings were tried and
+            # both were wrong, in opposite ways:
+            #
+            #   before `loadNewGameDef` - the editor has no session at all
+            #     across `LoadGameDef`, which reloads the sprite data editor and
+            #     reads `globals_.Area.sprites` unguarded. Zement, 2026-09-05:
+            #     "'NoneType' object has no attribute 'sprites'".
+            #
+            #   after `LoadFirstLevelOfPatch` - the retained *handle* is still
+            #     keyed by path when the new patch's first level happens to be
+            #     the same file, so the load takes `LoadLevel`'s "already open"
+            #     branch and calls ResetPalette over a scene that has been torn
+            #     down: "wrapped C/C++ object of type ObjectItem has been
+            #     deleted".
+            #
+            # Between the two, the game definition is loaded and a level is
+            # about to be. Nothing here reads `globals_.Area` and nothing writes
+            # a level, so the retained work is in no danger for these few lines.
+            manager = globals_.get_session_manager()
+            if manager is not None:
+                manager.release_stale()
+
+            self.RefreshUnsavedLevels()
+
             # Open the new patch's own first level, rather than keeping one
             # whose tilesets belong to the patch that was just unloaded.
             self.LoadFirstLevelOfPatch()
