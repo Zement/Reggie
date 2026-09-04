@@ -513,17 +513,26 @@ class DockBuilder:
                         and sidebar.sectionFor(widget) is not None)
             return check
 
+        # The widget an entry's section holds, read live: a context section is
+        # rebuilt every time it opens, so a stored reference would be the one
+        # from last time. This is what lets a click *inside* a panel move the
+        # highlight onto its entry (D-d.6).
+        def owns(attr):
+            return lambda: getattr(self.win, attr, None)
+
         # -- Game Patches ------------------------------------------------
         sidebar.addPage(icon('game'), trans('MenuItems', 142),
                         sections=True,
                         on_activate=self._showGamePatches,
-                        is_open=showing('patchListWidget'))
+                        is_open=showing('patchListWidget'),
+                        owns_widget=owns('patchListWidget'))
 
         # -- Directory Listing --------------------------------------------
         sidebar.addPage(icon('folderpath'), trans('MenuItems', 143),
                         sections=True,
                         on_activate=self._showDirectoryListing,
-                        is_open=showing('levelTreeWidget'))
+                        is_open=showing('levelTreeWidget'),
+                        owns_widget=owns('levelTreeWidget'))
 
         # -- Logs / Undo --------------------------------------------------
         # A toggle: selecting it opens the undo history, selecting it again
@@ -538,6 +547,7 @@ class DockBuilder:
                         sections=True,
                         on_activate=self._showUndoHistory,
                         is_open=showing('undoHistoryView'),
+                        owns_widget=owns('undoHistoryView'),
                         toggles=True)
 
         # -- Collaborate --------------------------------------------------
@@ -558,13 +568,15 @@ class DockBuilder:
                         sections=True,
                         on_activate=self._showCollaboration,
                         is_open=self._collabPanelOpen,
+                        owns_widget=self._collabPanelWidget,
                         toggles=True)
 
         # -- Help ---------------------------------------------------------
         sidebar.addPage(icon('help'), trans('MenuItems', 88),
                         sections=True,
                         on_activate=self._showHelp,
-                        is_open=showing('helpTreeWidget'))
+                        is_open=showing('helpTreeWidget'),
+                        owns_widget=owns('helpTreeWidget'))
 
         # -- Preferences --------------------------------------------------
         sidebar.addPage(icon('settings'), trans('MenuItems', 18),
@@ -589,6 +601,16 @@ class DockBuilder:
     def _showCollaboration(self):
         """Open the collaboration panel, or the host/join dialog (D-d.5)."""
         self.win.ShowCollaboration()
+
+    def _collabPanelWidget(self):
+        """The widget the collaboration section holds, or None.
+
+        The controller's status window: it owns it for the life of the session,
+        and the section merely shows it.
+        """
+        controller = getattr(self.win, '_collab', None)
+        return getattr(controller, 'status_window', None) \
+            if controller is not None else None
 
     def _collabPanelOpen(self):
         """Whether the collaboration panel is showing.

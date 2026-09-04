@@ -1302,6 +1302,7 @@ class Sidebar(QtWidgets.QWidget):
         # rebuilding its section (D-d.2c).
         self._railOwns = []
         self._railToggles = []
+        self._railWidgets = []
 
         # The last row that actually selected a page, so an action entry can
         # hand the highlight back rather than leaving it on a button.
@@ -1484,7 +1485,8 @@ class Sidebar(QtWidgets.QWidget):
             self.rail.item(row).setSizeHint(size)
 
     def addPage(self, icon, title, widget=None, on_activate=None,
-                sections=False, is_open=None, toggles=False):
+                sections=False, is_open=None, toggles=False,
+                owns_widget=None):
         """Add a rail entry, and say what selecting it does.
 
         Three kinds of entry, because D-d needs all three (phase D-d.1):
@@ -1548,6 +1550,12 @@ class Sidebar(QtWidgets.QWidget):
         # Whether a click on this entry while its section is up should still
         # reach the handler. True for a toggle, whose whole job that click is.
         self._railToggles.append(bool(toggles))
+
+        # A callable returning the widget this entry's section holds, so the
+        # highlight can be moved *to* this entry when the user clicks into that
+        # panel. Read live rather than stored, because the widget is rebuilt
+        # every time a context section is opened.
+        self._railWidgets.append(owns_widget)
 
         if self.rail.currentRow() < 0 and page is not None:
             self.rail.setCurrentRow(self.rail.count() - 1)
@@ -1616,9 +1624,15 @@ class Sidebar(QtWidgets.QWidget):
         activation it triggered - so neither can answer "did *this* click
         change the row". The press can.
         """
-        if (obj is self.rail.viewport()
-                and event.type() == QtCore.QEvent.Type.MouseButtonPress):
-            self._clickRow = self.rail.currentRow()
+        if event.type() == QtCore.QEvent.Type.MouseButtonPress:
+            if obj is self.rail.viewport():
+                self._clickRow = self.rail.currentRow()
+            elif isinstance(obj, QtWidgets.QWidget):
+                # A click *inside* a panel is the user saying which one they are
+                # using, and the highlight follows that (D-d.6). Filtered on the
+                # sections column rather than on the application, so this only
+                # ever sees presses in slice 2.
+                self.noteSectionUsed(obj)
 
         return super().eventFilter(obj, event)
 
@@ -1694,15 +1708,94 @@ class Sidebar(QtWidgets.QWidget):
                        if self._railOwns[i] is not None
                        and self._sectionOwned(i)), None)
 
-        if target is None or target == row:
+        self._highlightRow(target)
+
+    def _highlightRow(self, row):
+        """Put the rail's highlight on ``row``, without activating it.
+
+        Blocked, or `setCurrentRow` runs the entry's activation - which for a
+        toggle would close the panel the highlight is being moved *to*.
+        """
+        if row is None or row == self.rail.currentRow():
             return
 
         blocked = self.rail.blockSignals(True)
         try:
-            self.rail.setCurrentRow(target)
-            self._lastPageRow = target
+            self.rail.setCurrentRow(row)
+            self._lastPageRow = row
         finally:
             self.rail.blockSignals(blocked)
+
+    def noteSectionUsed(self, widget):
+        """Highlight the rail entry owning the section ``widget`` sits in.
+
+        The other half of Zement's rule (2026-09-04): the highlight follows the
+        panel *last used*, and clicking into a panel is using it.
+        `syncRailHighlight` only fires when a section **closes**, so with two
+        panels open, clicking into the directory listing left the highlight on
+        the undo history - which had taken it on opening, with nothing since to
+        move it.
+
+        Found by walking up from the clicked widget, so anything inside a panel
+        counts - the tree, its checkbox, the roster. That is what "used" means:
+        nobody clicks the section, they click something in it.
+        """
+        parent = widget
+        while parent is not None and not isinstance(parent, SectionHost):
+            parent = parent.parentWidget()
+
+        if parent is None:
+            return
+
+        row = self._rowOwning(parent)
+        self._highlightRow(row)
+
+    def _watchForUse(self, host):
+        """Watch ``host`` and everything in it for a mouse press.
+
+        Every descendant, and their viewports: a press goes to the widget under
+        the pointer, which for a tree is its viewport and never the host. The
+        list is taken once, at add time - a section's contents are built before
+        it is added, and one that grows a new child later simply does not move
+        the highlight until the next click on an older one.
+        """
+        host.installEventFilter(self)
+
+        for child in host.findChildren(QtWidgets.QWidget):
+            child.installEventFilter(self)
+
+            # An item view's presses land on its viewport, which findChildren
+            # does report - but only if it has been created, and asking for it
+            # is what creates it.
+            viewport = getattr(child, 'viewport', None)
+            if callable(viewport):
+                try:
+                    inner = viewport()
+                except RuntimeError:
+                    continue
+                if inner is not None:
+                    inner.installEventFilter(self)
+
+    def _rowOwning(self, host):
+        """The rail row whose entry owns ``host``, or None.
+
+        Matched by the widget the section holds. An entry declares its own with
+        `addPage(..., owns_widget=)`, and asking the section which widget it is
+        showing is the only reliable link - a rail entry and a section are
+        otherwise two anonymous lists that happen to be about the same thing.
+        """
+        widget = host.sectionWidget
+
+        for row, resolve in enumerate(self._railWidgets):
+            if resolve is None:
+                continue
+            try:
+                if resolve() is widget:
+                    return row
+            except Exception:
+                continue
+
+        return None
 
     def _railToggle(self, row):
         """Whether row ``row`` closes its own panel when clicked again."""
@@ -1844,6 +1937,12 @@ class Sidebar(QtWidgets.QWidget):
 
         self.sections.insertWidget(position, host)
         self._sections.insert(position, (host, stretch))
+
+        # So a click anywhere inside this section moves the rail's highlight to
+        # the entry that owns it (D-d.6). On every descendant, because a press
+        # is delivered to the widget under the pointer - the tree's viewport,
+        # a checkbox - and never to the host itself.
+        self._watchForUse(host)
 
         host.toggled.connect(lambda _on: self._applySectionStretch())
         self._applySectionStretch()
