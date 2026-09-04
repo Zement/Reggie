@@ -795,11 +795,16 @@ class CollabStatusWindow(QtWidgets.QDialog):
         # the pane's real floor, so the configured one never applied and the
         # buttons could be dragged out of sight (Zement, 2026-09-04: they
         # "should always be visible... and *eat* from the above section").
-        from reggie.ui.sidebar import let_view_give
+        from reggie.ui.sidebar import let_view_give, squeeze_before_scroll
 
         self.logTabs.setMinimumHeight(0)
         for log in (self.userLog, self.chatLog):
             let_view_give(log)
+
+        # ...and the panel as a whole would rather be squeezed to that than be
+        # scrolled by its sidebar section, which would put the buttons below the
+        # fold - the one place they must never be.
+        squeeze_before_scroll(self)
 
         chatColumn.addWidget(self.logTabs, 1)
         chatColumn.addWidget(self.chatEntry, 0)

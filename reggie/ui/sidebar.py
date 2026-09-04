@@ -183,6 +183,30 @@ class Percent(float):
         return int(round(available * float(self) / 100.0))
 
 
+#: Marks a section's content as preferring to be **squeezed to its minimum**
+#: rather than scrolled by its section (D-d.6).
+#:
+#: For content that has a part which gives and a part which must not - a log
+#: above a row of buttons. Scrolling such a panel hides the buttons, which is
+#: the one thing that must not happen to them; squeezing it shrinks the log,
+#: which is what the log is for.
+#:
+#: Set with `squeeze_before_scroll`, read by `_HostScrollArea._fit`. A Qt
+#: property rather than a subclass or a registry, so any widget can say it
+#: without the sidebar needing to know the type.
+SQUEEZE_BEFORE_SCROLL = 'reggieSqueezeBeforeScroll'
+
+
+def squeeze_before_scroll(widget):
+    """Say this widget would rather shrink than have its section scroll it.
+
+    Only for content whose own layout keeps the important parts visible while
+    something inside it gives - `let_view_give` is usually how that is arranged.
+    A panel that says this without such an arrangement is simply clipped.
+    """
+    widget.setProperty(SQUEEZE_BEFORE_SCROLL, True)
+
+
 def let_view_give(view):
     """Let a scrolling view shrink to nothing, so its neighbours cannot be cut.
 
@@ -254,12 +278,30 @@ class _HostScrollArea(QtWidgets.QScrollArea):
         if widget is None:
             return
 
-        # The **hint**, not the widget's current height: one already sized to a
-        # larger viewport would otherwise keep that height when the viewport
-        # shrank, since its own hint is the only honest record of what it holds.
-        wanted = max(widget.sizeHint().height(), self.viewport().height())
+        # What the widget asks for. The **hint**, not its current height: one
+        # already sized to a larger viewport would otherwise keep that height
+        # when the viewport shrank, since its own hint is the only honest record
+        # of what it holds.
+        asked = widget.sizeHint().height()
 
-        widget.resize(self.viewport().width(), wanted)
+        # ...unless the widget has said it would rather be squeezed than
+        # scrolled, in which case its *minimum* is what it asks for.
+        #
+        # The collaboration panel is the case, and shows why the two differ. Its
+        # hint is a tall log plus its rows of controls; its minimum is one line
+        # of log plus those same rows, because the log can give and the buttons
+        # cannot. Given the hint it overflowed its section by 125px, and the
+        # section scrolled - putting the buttons below the fold, which is
+        # precisely where they must never be (Zement, 2026-09-04).
+        #
+        # A tree does *not* say this, and must not: it has nothing that gives,
+        # so a short section should scroll it rather than crush it.
+        if widget.property(SQUEEZE_BEFORE_SCROLL):
+            asked = max(widget.minimumSizeHint().height(),
+                        widget.minimumHeight())
+
+        widget.resize(self.viewport().width(),
+                      max(asked, self.viewport().height()))
 
     def setWidget(self, widget):
         super().setWidget(widget)

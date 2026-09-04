@@ -59,8 +59,9 @@ class PatchListWidget(QtWidgets.QWidget):
         # Manager can never be pushed out of sight (Zement, 2026-09-04). Its own
         # minimum would otherwise be the panel's floor, and the button below it
         # the first thing clipped.
-        from reggie.ui.sidebar import let_view_give
+        from reggie.ui.sidebar import let_view_give, squeeze_before_scroll
         let_view_give(self.list)
+        squeeze_before_scroll(self)
 
         self.retranslate()
 
