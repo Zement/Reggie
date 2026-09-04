@@ -139,8 +139,15 @@ SECTION_HEIGHTS = {
     'defaultprops': (Percent(30), Percent(30)),
 
     # Kept in pixels: a short list of rows rather than a view, and its default
-    # is whatever four rows come to. Only the floor is a percentage.
-    'unsaved':      (Percent(15), 120),
+    # is whatever four rows come to.
+    #
+    # The floor is 0 because this panel states its own - the four buttons plus
+    # one row of list, measured from the widgets - and `SectionHost.minHeight`
+    # takes the larger of the two. A percentage here was what stopped the drag
+    # early (Zement, 2026-09-04: "the actual list cannot shrink to its min
+    # size"); a fixed number small enough to get out of the way would just be
+    # the panel's floor written twice, in a place that cannot know it.
+    'unsaved':      (0, 120),
 
     # Not built yet, listed so the next person adding one has a number rather
     # than a decision (Zement, 2026-09-01).
@@ -1371,6 +1378,26 @@ class ReggieWindow(QtWidgets.QMainWindow):
             RefreshPatchSelector()
             return False
 
+        # Everything the old patch had open goes, retained dirty levels
+        # included. CheckDirty has just settled those - saved, discarded, or the
+        # switch was cancelled - so anything still held is work the user chose
+        # to let go, and it belongs to a game about to be unloaded: its paths
+        # will not resolve, and a row offering to save it would write it through
+        # the new patch's paths (Zement, 2026-09-04: "after Game Patch
+        # switching, the Unsaved Levels list must be empty").
+        # Everything the old patch had open goes, retained dirty levels
+        # included. CheckDirty has just settled those - saved, discarded, or the
+        # switch was cancelled - so anything still held is work the user chose
+        # to let go, and it belongs to a game about to be unloaded: its paths
+        # will not resolve, and a row offering to save it would write it through
+        # the new patch's paths (Zement, 2026-09-04: "after Game Patch
+        # switching, the Unsaved Levels list must be empty").
+        manager = globals_.get_session_manager()
+        if manager is not None:
+            manager.release_all()
+
+        self.RefreshUnsavedLevels()
+
         # folder is None for the base game, which loadNewGameDef takes as-is.
         success = loadNewGameDef(folder)
 
@@ -1455,8 +1482,26 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         Checks if the level is unsaved and attempts to save it if so.
         Returns whether the level still contains unsaved changes.
+
+        **Several dirty levels get one bulk dialog** (Zement, 2026-09-04). The
+        prompt below asks about ``globals_.Dirty``, which is the *active* level
+        - true enough when one file was open, and since D-d.3b it can be one of
+        several. Asking file by file would mean up to as many dialogs as there
+        are open levels before a patch switch or a quit could proceed, and
+        answering the third one still leaves the first two unresolved.
+
+        So: one level keeps the familiar Save / Discard / Cancel, and two or
+        more get Save All / Discard All / Cancel - the same two bulk actions the
+        unsaved-levels section offers, and deliberately *only* those. Per-file
+        choices belong in that section, where the user can see the list and act
+        on rows; a dialog cannot offer eight buttons. Cancel is the way through
+        to it, which is why Cancel is the default.
         """
-        if not globals_.Dirty:
+        if not self._maySaveInSession():
+            # Checked before `globals_.Dirty` since D-d.6: the bulk branch reads
+            # the manager rather than the active level, so a client with several
+            # dirty levels would otherwise reach a dialog this rule exists to
+            # prevent. See the note below on why a client is never asked.
             return False
 
         # In a session, only the save authority is asked about unsaved work
@@ -1473,7 +1518,19 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # Answering False means "no unsaved changes stand in the way", which is
         # the truthful answer here: the changes exist, but they are the host's
         # to keep, and it has them.
-        if not self._maySaveInSession():
+
+        dirty = dirty_entries()
+        if len(dirty) > 1:
+            return self._checkDirtyBulk(dirty)
+
+        if not globals_.Dirty:
+            # One dirty level that is not the active one - the user closed its
+            # tab and its edits are still held (D-d.6). The single-file prompt
+            # below asks about the active level, so it would ask about the wrong
+            # thing; the bulk dialog names what is actually unsaved.
+            if dirty:
+                return self._checkDirtyBulk(dirty)
+
             return False
 
         msg = QtWidgets.QMessageBox()
@@ -1540,6 +1597,92 @@ class ReggieWindow(QtWidgets.QMainWindow):
             return False
 
         return False
+
+    def _checkDirtyBulk(self, entries):
+        """One dialog for several unsaved levels. Returns whether work remains.
+
+        Save All / Discard All / Cancel, naming the files so the user is not
+        agreeing to something they cannot see. The two actions are exactly the
+        unsaved section's bulk buttons, reached through the same methods -
+        anything else would be a second implementation of "save everything",
+        and the two would drift.
+
+        **Cancel is the default**, unlike the single-file prompt where Save is.
+        The single-file prompt's Save is unambiguous; here the safe answer is to
+        go and look, and Cancel is what leaves the levels alone so the user can
+        act on them row by row in the section.
+
+        Returns True when unsaved work still stands in the way, matching
+        `CheckDirty` - so Cancel, a failed save, and a refused discard all
+        report True and stop whatever asked.
+        """
+        names = []
+        for path, _handle in entries:
+            label = (os.path.splitext(os.path.basename(path))[0] if path
+                     else globals_.trans.string('WindowTitle', 0))
+            if label not in names:
+                names.append(label)
+
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        box.setWindowTitle(globals_.trans.string('AutoSaveDlg', 2))
+        box.setText(globals_.trans.string('MenuItems', 166, '[count]',
+                                          len(names)))
+        box.setInformativeText('%s\n\n%s' % (
+            '\n'.join('    ' + name for name in names),
+            globals_.trans.string('MenuItems', 167)))
+
+        saveAll = box.addButton(globals_.trans.string('MenuItems', 152),
+                                QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+        discardAll = box.addButton(globals_.trans.string('MenuItems', 159),
+                                   QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+        cancel = box.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+
+        box.setDefaultButton(cancel)
+        box.exec()
+
+        clicked = box.clickedButton()
+
+        if clicked is saveAll:
+            # A level that was never saved is skipped by Save All, so it is
+            # still dirty afterwards and still in the way - which is the honest
+            # answer: nothing has been written for it. The user is sent back to
+            # the section, where double-clicking that row opens the Save dialog.
+            if not self.SaveAllDirtyLevels():
+                return True
+
+            return bool(dirty_entries())
+
+        if clicked is discardAll:
+            # confirm=False: this dialog *is* the confirmation, and it named the
+            # files. A second one asking the same question is how a user learns
+            # to click through both without reading either.
+            if not self.DiscardAllDirtyLevels(confirm=False):
+                return True
+
+            # Never-saved levels are skipped by Discard All too - there is no
+            # file to reload. They are not in the way of a patch switch or a
+            # quit, though: the user was shown them and chose to throw the work
+            # away, and refusing to proceed over a level with no file name would
+            # leave no way out but saving it. So they are dropped here.
+            manager = globals_.get_session_manager()
+            if manager is not None:
+                for _path, handle in dirty_entries():
+                    if handle is not None and not handle.file_path:
+                        manager.discard_dirty_handle(handle)
+
+                        # A new level whose tab is still open keeps that tab -
+                        # only its claim on being unsaved goes. Closing tabs is
+                        # not what "discard" means here.
+                        for session in handle.sessions():
+                            session.dirty = False
+
+            self.RefreshUnsavedLevels()
+            self.UpdateTitle()
+
+            return bool(dirty_entries())
+
+        return True
 
     def LoadEventTabFromLevel(self):
         """
@@ -2023,7 +2166,17 @@ class ReggieWindow(QtWidgets.QMainWindow):
         divider in a column the user is short of, and the section is cheap to
         rebuild.
         """
-        sidebar = getattr(self, 'sidebar', None)
+        # Even `getattr` can raise here. On a QMainWindow whose C++ half was
+        # never constructed, attribute lookup itself throws "super-class
+        # __init__() of type ReggieWindow was never called" - so the usual
+        # guard is not a guard at all. The collab suites build exactly such a
+        # window as a test double, and this method is reached from paths that
+        # run before and after a real window exists.
+        try:
+            sidebar = getattr(self, 'sidebar', None)
+        except RuntimeError:
+            return None
+
         if sidebar is None:
             return None
 

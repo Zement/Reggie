@@ -956,6 +956,30 @@ class SessionManager:
         for session in list(self._sessions):
             self.close(session)
 
+    def release_all(self):
+        """Close everything and let go of the retained dirty levels too.
+
+        `close_all` keeps a dirty level in memory, the way closing its last tab
+        does - which is right when the workspace is being replaced by another
+        level from the same patch, because the file is still there to go back
+        to. It is wrong for a **patch switch**: the level belongs to a game that
+        is no longer loaded, its paths no longer resolve, and a row offering to
+        save it would write it through the new patch's paths.
+
+        Zement, 2026-09-04: "after Game Patch switching, the Unsaved Levels list
+        must be empty." By then the user has already been asked, and has saved
+        or discarded; anything still held here is work they chose to let go.
+        """
+        self.close_all()
+
+        for handle in list(self._detached):
+            self.discard_dirty_handle(handle)
+
+        # Whatever is left in `_handles` has no sessions - close_all removed
+        # them all - so nothing is reading it.
+        self._handles.clear()
+        self._detached.clear()
+
     # -- memory ----------------------------------------------------------
 
     def sessions_holding_tiles(self):

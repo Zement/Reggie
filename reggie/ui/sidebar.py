@@ -627,12 +627,28 @@ class _CollapsibleHost(QtWidgets.QWidget):
 
         Never below the header plus something to grab: a section dragged to
         nothing is one the user cannot get back except through the rail.
+
+        **A squeeze-before-scroll panel sets its own floor**, and it wins over
+        the configured one. Such a panel is squeezed rather than scrolled, so
+        shrinking the host past what the panel can honour does not scroll the
+        clipped part into reach - it simply cuts it off, which for these panels
+        is always a row of buttons (Zement, 2026-09-04). The panel measures its
+        own controls, so it is the only thing here that knows the real number;
+        the table can say a section should not go below 30% of the sidebar, but
+        it cannot know that four buttons come to 40px in this theme at this font
+        size. Ordinary content is unaffected: it scrolls, so a short host loses
+        nothing permanently.
         """
         floor = SectionGrip.MIN_SECTION_HEIGHT
 
         resolved = self._resolveHeight(self._minHeight)
         if resolved is not None:
             floor = max(floor, resolved)
+
+        widget = self.hostWidget
+        if widget is not None and widget.property(SQUEEZE_BEFORE_SCROLL):
+            floor = max(floor,
+                        widget.minimumSizeHint().height() + self.headerHeight())
 
         return floor
 

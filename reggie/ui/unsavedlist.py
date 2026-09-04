@@ -163,8 +163,69 @@ class UnsavedLevelsWidget(QtWidgets.QWidget):
         layout.addWidget(self.list, 1)
         layout.addLayout(buttons, 0)
 
+        # The list is what gives when the section is dragged short, so the four
+        # buttons can never be scrolled out of sight (Zement, 2026-09-04 - the
+        # same treatment the collab panel and Game Patches got). A QListWidget
+        # asks for a substantial minimum of its own, and that minimum would
+        # otherwise become the section's floor with the buttons the first thing
+        # below the fold.
+        from reggie.ui.sidebar import let_view_give, squeeze_before_scroll
+        let_view_give(self.list)
+        squeeze_before_scroll(self)
+
         self.retranslate()
         self.refresh()
+
+    def _chromeHeight(self, listHeight):
+        """What the panel is that tall, plus everything that never gives.
+
+        The two button rows, the layout margins, the spacing between the three
+        rows, and the list's own frame. Measured from the widgets rather than
+        written as a number, so it stays right when the theme, the font or the
+        button text changes - a literal would be correct on this machine and
+        wrong on the next.
+        """
+        rows = (self.saveButton.sizeHint().height()
+                + self.discardButton.sizeHint().height())
+
+        margins = self.layout().contentsMargins()
+        chrome = margins.top() + margins.bottom() + self.layout().spacing() * 3
+
+        return rows + chrome + listHeight + 2 * self.list.frameWidth()
+
+    def sizeHint(self):
+        """The natural height: the whole list, and the buttons under it.
+
+        Stated here because `let_view_give` sets the list's vertical policy to
+        `Ignored`, and an ignored widget contributes **nothing** to its layout's
+        hint - so the inherited hint is the buttons alone, and the section would
+        open at ~48px however many rows it had. That is the price of letting the
+        list give, and this is where it is paid back.
+        """
+        hint = super().sizeHint()
+        hint.setHeight(self._chromeHeight(self.list.sizeHint().height()))
+        return hint
+
+    def minimumSizeHint(self):
+        """The buttons, plus a sliver of list. This is the section's floor.
+
+        `let_view_give` lets the list shrink to nothing, which is what keeps the
+        buttons visible (Zement, 2026-09-04: they "should be stickied, just like
+        the other buttons") - but with nothing to stop it, a drag would eat the
+        list entirely and carry on into the buttons. So the floor is stated: the
+        fixed rows, plus one row's worth of list.
+
+        One row rather than none, because a list with nothing visible in it does
+        not read as a list - it reads as a bug.
+        """
+        hint = super().minimumSizeHint()
+
+        sliver = self.list.sizeHintForRow(0)
+        if sliver <= 0:
+            sliver = self.fontMetrics().height() + 4
+
+        hint.setHeight(self._chromeHeight(sliver))
+        return hint
 
     def retranslate(self):
         self.saveButton.setText(globals_.trans.string('MenuItems', 157))
