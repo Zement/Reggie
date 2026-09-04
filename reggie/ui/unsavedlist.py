@@ -63,57 +63,33 @@ def dirty_paths():
 
 
 def dirty_entries():
-    """``(path, session)`` for every file with unsaved work.
+    """``(path, handle)`` for every open level with unsaved work.
 
-    The session is the row's identity, and the path is only its name. **A path
+    **One row per level, tabs or no tabs.** Dirtiness belongs to the level, not
+    to a tab showing it (see `LevelHandle.dirty`), so this asks the manager for
+    its dirty *handles*. That is what makes Zement's rule hold: "it is then
+    possible to close a few, or all of the areas from that level, and the
+    unsaved level will still remain in Unsaved Levels" (2026-09-04).
+
+    The handle is the row's identity, and the path is only its name. **A path
     cannot be the identity here** because a new level has none: two unsaved
     levels both answer `None`, and `sessions_for(None)` finds neither, since
     `_handles` is keyed by path and unsaved handles are not in it (D-d.3b).
 
     That was measured, not guessed: a New Level appeared in the list correctly
     and then could not be saved from it, and Save All returned False without
-    touching the *other* files. Carrying a session per row fixes both, and
-    costs nothing for a saved file - the session is simply the way back to the
-    handle when the path is not one.
-
-    One session per entry, not all of them: saving is per file, so any session
-    on the level will do, and the first is the one whose tab has been open
-    longest.
+    touching the *other* files.
     """
     manager = globals_.get_session_manager()
     if manager is None:
         return []
 
     try:
-        sessions = list(manager.sessions)
+        handles = list(manager.dirty_handles())
     except Exception:
         return []
 
-    entries = []
-    seen = []
-
-    for session in sessions:
-        if not session.dirty:
-            continue
-
-        # By *handle*, not by path: that is what "one entry per file" means
-        # when the file has no name yet, and it is exactly the handle-sharing
-        # rule from S6.4 - two areas of one level share a handle and so are one
-        # row.
-        handle = getattr(session, 'handle', None)
-        key = handle if handle is not None else session
-        if key in seen:
-            continue
-
-        seen.append(key)
-        entries.append((session.file_path, session))
-
-    # Named files sorted by path, so the order matches `dirty_files()`; unsaved
-    # ones after them, in the order they were opened. `None` cannot be compared
-    # to a string, so the two groups are sorted apart rather than together.
-    named = sorted((e for e in entries if e[0] is not None), key=lambda e: e[0])
-    unnamed = [e for e in entries if e[0] is None]
-    return named + unnamed
+    return [(handle.file_path, handle) for handle in handles]
 
 
 def label_for(path):
@@ -205,13 +181,18 @@ class UnsavedLevelsWidget(QtWidgets.QWidget):
         return [self.list.item(row).data(QtCore.Qt.ItemDataRole.UserRole)[0]
                 for row in range(self.list.count())]
 
-    def sessions(self):
-        """The session behind each row, in the order shown."""
+    def handles(self):
+        """The level behind each row, in the order shown."""
         return [self.list.item(row).data(QtCore.Qt.ItemDataRole.UserRole)[1]
                 for row in range(self.list.count())]
 
+    #: A row's second element used to be a session. Kept as an alias so the
+    #: suites and any caller reading "which level is this row" keep working -
+    #: the answer is the same level, named by its handle now.
+    sessions = handles
+
     def selectedEntries(self):
-        """``(path, session)`` for each selected row, in the order shown."""
+        """``(path, handle)`` for each selected row, in the order shown."""
         return [item.data(QtCore.Qt.ItemDataRole.UserRole)
                 for item in self.list.selectedItems()]
 
@@ -236,9 +217,9 @@ class UnsavedLevelsWidget(QtWidgets.QWidget):
 
         self.list.clear()
 
-        for path, session in entries:
+        for path, handle in entries:
             item = QtWidgets.QListWidgetItem(label_for(path))
-            item.setData(QtCore.Qt.ItemDataRole.UserRole, (path, session))
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, (path, handle))
 
             if path:
                 item.setToolTip(path)
@@ -271,8 +252,8 @@ class UnsavedLevelsWidget(QtWidgets.QWidget):
                    for row in range(self.list.count())]
         selected = self.selectedEntries()
 
-        bulk = any(path for path, _session in entries)
-        picked = any(path for path, _session in selected)
+        bulk = any(path for path, _handle in entries)
+        picked = any(path for path, _handle in selected)
 
         self.saveAllButton.setEnabled(bulk)
         self.discardAllButton.setEnabled(bulk)
@@ -296,8 +277,8 @@ class UnsavedLevelsWidget(QtWidgets.QWidget):
         if item is None or self.win is None:
             return False
 
-        path, session = item.data(QtCore.Qt.ItemDataRole.UserRole)
-        return bool(self.win.SaveLevelFile(path, session))
+        path, handle = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        return bool(self.win.SaveLevelFile(path, handle))
 
     def _handleSaveAll(self):
         if self.win is None:

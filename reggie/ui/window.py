@@ -1024,7 +1024,61 @@ class ReggieWindow(QtWidgets.QMainWindow):
             # loaded (D-d.2).
             self.RefreshDirectoryListing()
 
+        # The closed level may still be listed as unsaved - closing a tab does
+        # not discard edits, so a dirty level outlives its last tab. The row's
+        # buttons act on a handle, which is why it can.
+        self.RefreshUnsavedLevels()
+
         return True
+
+    def ReopenDirtyHandle(self, handle, area_num=None):
+        """Give a retained dirty level a tab again, without touching the disk.
+
+        A level whose tabs were all closed while dirty is kept in memory by
+        `SessionManager.close`, so the unsaved section can still save or discard
+        it. Saving reads the *active* session, so there has to be one - and it
+        must be built on **this handle**, never by reloading the path, which
+        would read the unedited file over the very edits being saved.
+
+        Returns the session, or None.
+        """
+        if handle is None:
+            return None
+
+        manager = globals_.get_session_manager()
+        if manager is None:
+            return None
+
+        existing = handle.sessions()
+        if existing:
+            self.ActivateSession(existing[0])
+            return existing[0]
+
+        level = handle.level
+        if level is None:
+            return None
+
+        areas = getattr(level, 'areas', None) or ()
+        if not areas:
+            return None
+
+        if area_num is None or area_num > len(areas):
+            area_num = 1
+
+        area = areas[area_num - 1]
+
+        # Same ordering as `open_area`: the session exists and is active before
+        # the area is loaded, because an area's load() builds sprites whose
+        # findZone() reads globals_.Area through the active session.
+        session = manager.open(level, handle.file_path, area, area_num)
+
+        if not area._is_loaded:
+            area.load()
+
+        self.ActivateSession(session)
+        self.tabs.sync()
+
+        return session
 
     # -- session-bound pages (D-d.4) ----------------------------------------
 
@@ -2080,18 +2134,41 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if manager is None:
             return False
 
+        # `session` is a handle when it comes from the unsaved list, which
+        # carries handles since the dirty flag moved onto them. Both are
+        # accepted: a handle names the level, a session names the level *and* a
+        # tab, and this only ever needed the level.
+        handle = getattr(session, 'handle', session)
+
         if file_path:
             sessions = manager.sessions_for(file_path)
         elif session is not None and session in manager.sessions:
             sessions = [session]
+        elif handle is not None and handle in manager.dirty_handles():
+            sessions = handle.sessions()
         else:
             # No path and no session: nothing to identify a level by.
             return False
 
         if not sessions:
-            # Closed, or saved, between the list being built and the row being
-            # double-clicked. Nothing to save, and nothing to report.
-            return False
+            # A level whose tabs are all closed but whose edits are still held
+            # (see `SessionManager.close`). There is no session to activate, so
+            # one is opened - saving reads the *active* session, and this is the
+            # only way to give it one. The tab is the honest consequence: the
+            # user is about to be shown what is being written.
+            if handle is None or handle not in manager.dirty_handles():
+                # Closed, or saved, between the list being built and the row
+                # being double-clicked. Nothing to save, nothing to report.
+                return False
+
+            if not self.ReopenDirtyHandle(handle):
+                return False
+
+            sessions = handle.sessions()
+            if not sessions:
+                return False
+
+            file_path = handle.file_path
 
         # Already in front? For a named file any session on it will do, since
         # they share the level a save writes. For a pathless one, only the
@@ -2158,16 +2235,20 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         if active is not None:
             handle = getattr(active, 'handle', None)
+
             # By handle rather than by path, so an unsaved level in front is
-            # recognised as the active one too.
-            rest = [e for e in entries
-                    if getattr(e[1], 'handle', None) is not handle]
-            mine = [e for e in entries
-                    if getattr(e[1], 'handle', None) is handle]
+            # recognised as the active one too. A row carries a handle since
+            # the dirty flag moved onto them, so `getattr(x, 'handle', x)`
+            # reads both - a session through its handle, a handle as itself.
+            def owner(entry):
+                return getattr(entry[1], 'handle', entry[1])
+
+            rest = [e for e in entries if owner(e) is not handle]
+            mine = [e for e in entries if owner(e) is handle]
             entries = rest + mine
 
-        for path, session in entries:
-            if not self.SaveLevelFile(path, session):
+        for path, holder in entries:
+            if not self.SaveLevelFile(path, holder):
                 return False
 
         return True
@@ -2217,7 +2298,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # The paths, not the sessions: reloading replaces the sessions on a
         # file, so a session captured now may not survive its own reload.
         paths = []
-        for path, _session in entries:
+        for path, _holder in entries:
             if path not in paths:
                 paths.append(path)
 
@@ -2257,7 +2338,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
     def _confirmDiscard(self, entries):
         """Ask once for the whole set. Returns whether to go ahead."""
         names = []
-        for path, _session in entries:
+        for path, _holder in entries:
             label = os.path.basename(path or '')
             if label not in names:
                 names.append(label)
@@ -2295,6 +2376,18 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         sessions = manager.sessions_for(file_path)
         if not sessions:
+            # A dirty level with no tabs left, kept in memory by
+            # `SessionManager.close`. Discarding it is simply letting go: there
+            # is nothing on screen to reload into, and reopening the file later
+            # reads it from disk, which is exactly the state being asked for.
+            handle = manager.handle_for(file_path)
+            if handle is not None and handle.dirty:
+                manager.discard_dirty_handle(handle)
+                self.RefreshUnsavedLevels()
+                self.RefreshDirectoryListing()
+                self.UpdateTitle()
+                return True
+
             return False
 
         areas = sorted({s.area_num for s in sessions})
