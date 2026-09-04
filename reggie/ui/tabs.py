@@ -1156,11 +1156,35 @@ class MasterTabWidget(QtWidgets.QTabWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._positionOverlay()
+        self._syncOverlayVisibility()
 
     def showEvent(self, event):
         super().showEvent(event)
         # The viewport has no useful geometry until the container is shown, and
         # _availableRect measures against it - so the first placement has to
         # happen here rather than at construction.
-        self._positionOverlay()
+        self._syncOverlayVisibility()
+
+    def changeEvent(self, event):
+        """Put the overview back after the window state changes (D-d.6).
+
+        Zement, 2026-09-04: the overview was occasionally missing from a canvas
+        tab, "might be minimizing Reginald to the task bar", and "changing tabs"
+        brought it back. Changing tabs is what runs `_syncOverlayVisibility`,
+        which is the clue: the overview had been hidden or left behind, and only
+        that call put it right.
+
+        The cause is not established - it could not be reproduced offscreen, and
+        a minimise there is not a real one. What is certain is that every path
+        which *fixes* it is this one call, and that the events which could lose
+        it were only ever repositioning. So they sync instead, and this adds the
+        window-state change to them.
+
+        Cheap and idempotent: it reads a setting and sets a visibility that is
+        usually already right.
+        """
+        super().changeEvent(event)
+
+        if event.type() in (QtCore.QEvent.Type.WindowStateChange,
+                            QtCore.QEvent.Type.ActivationChange):
+            self._syncOverlayVisibility()

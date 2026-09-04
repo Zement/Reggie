@@ -668,9 +668,20 @@ class LevelViewWidget(QtWidgets.QGraphicsView):
                         globals_.mainWindow.levelOverview.update()
 
                 elif isinstance(obj, type_spr):
-                    # move the created sprite
-                    clickedx = int((pos.x() - 12) / 1.5)
-                    clickedy = int((pos.y() - 12) / 1.5)
+                    # Move the created sprite, at the same half-block precision
+                    # the click that created it used - see the `/ 12) * 8` in
+                    # mousePressEvent. Placing already snapped; dragging did
+                    # not, so the smallest movement with the button still down
+                    # re-placed the sprite at 1px (Zement, 2026-09-04).
+                    #
+                    # Snapped **here** rather than relied on from itemChange,
+                    # which is where it used to come from: `setNewObjPos` sets
+                    # ChangingPos, deliberately suppressing that snap so an undo
+                    # or a peer's move lands exactly where it was told. Correct
+                    # for those, and it took this drag's snapping with it - so
+                    # the caller that *wants* the grid now says so.
+                    clickedx = int((pos.x() - 12) / 12) * 8
+                    clickedy = int((pos.y() - 12) / 12) * 8
 
                     if obj.objx != clickedx or obj.objy != clickedy:
                         obj.setNewObjPos(clickedx, clickedy)

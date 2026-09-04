@@ -987,17 +987,26 @@ class ReggieWindow(QtWidgets.QMainWindow):
         that one area stays loaded at all times, so there is no editor state with
         no level in it.
 
-        No dirty prompt. A session's edits live in the shared level object, not
-        in the session, so closing a tab does not discard them - saving the file
-        afterwards still writes that area, exactly as saving from another tab
-        always did. The prompt stays where work genuinely can be lost: quitting,
-        changing patch, opening another file.
+        A dirty prompt **only when this is the file's last open area**, which is
+        exactly when closing can lose work.
+
+        The rule follows from where edits live. They are in the shared level
+        object, not in the session, so closing one area of a file another tab
+        still holds discards nothing - saving from that other tab writes this
+        area too, as it always did. But `SessionManager.close` drops the level
+        handle once the last session on a file goes, and the level goes with it.
+        Zement, 2026-09-04: "I can simply close unsaved tabs, and the list of
+        unsaved levels disappears" - the list was the visible half; the edits
+        were the rest.
         """
         manager = globals_.get_session_manager()
         if manager is None or session is None:
             return False
 
         if len(manager) <= 1:
+            return False
+
+        if not self._confirmCloseSession(manager, session):
             return False
 
         # Before the session is disposed, not after: a page holding a disposed
@@ -1020,6 +1029,76 @@ class ReggieWindow(QtWidgets.QMainWindow):
             self.RefreshDirectoryListing()
 
         return True
+
+    def _confirmCloseSession(self, manager, session):
+        """Ask before closing a tab whose file no other tab holds (D-d.6).
+
+        Returns whether the close may go ahead.
+
+        Silent in the common case, deliberately. Closing one area of a file
+        another tab still has open discards nothing - the edits are in the
+        shared level, and saving from that other tab writes this area too - so
+        prompting there would be a dialog about nothing, several times per
+        level. The prompt appears only where the level object itself is about
+        to be released.
+
+        Saved through the session being closed rather than the active one:
+        `HandleSave` writes whichever session is active, and the tab being
+        closed is usually not it. `applyNow` is the same borrow the session
+        pages use - activate silently, act, put the previous one back.
+        """
+        if not getattr(session, 'dirty', False):
+            return True
+
+        # Another tab on the same file keeps the level alive, so nothing is
+        # lost. `sessions_for` includes this one, hence > 1.
+        if len(manager.sessions_for(session.file_path)) > 1:
+            return True
+
+        # A session whose changes are not this user's to keep - the same rule
+        # CheckDirty applies, and for the same reason.
+        if not self._maySaveInSession():
+            return True
+
+        name = session.file_path or globals_.trans.string('WindowTitle', 0)
+
+        msg = QtWidgets.QMessageBox(self)
+        msg.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        msg.setWindowTitle(globals_.trans.string('AutoSaveDlg', 2))
+        msg.setText('Close "%s" with unsaved changes?' % os.path.basename(name)
+                    if session.file_path else
+                    'Close this level with unsaved changes?')
+        msg.setInformativeText(
+            'No other tab has this level open, so closing it discards the '
+            'changes.')
+        msg.setStandardButtons(
+            QtWidgets.QMessageBox.StandardButton.Save
+            | QtWidgets.QMessageBox.StandardButton.Discard
+            | QtWidgets.QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Save)
+
+        answer = msg.exec()
+
+        if answer == QtWidgets.QMessageBox.StandardButton.Cancel:
+            return False
+
+        if answer == QtWidgets.QMessageBox.StandardButton.Discard:
+            return True
+
+        # Save, against the session being closed. A failed or cancelled save
+        # leaves the level dirty, and then the close must not happen either -
+        # otherwise Save would discard exactly what the user asked to keep.
+        saved = []
+
+        previous = manager.active
+        try:
+            manager.activate(session, notify=False)
+            saved.append(self.HandleSave())
+        finally:
+            if previous in manager.sessions:
+                manager.activate(previous, notify=False)
+
+        return bool(saved and saved[0])
 
     # -- session-bound pages (D-d.4) ----------------------------------------
 

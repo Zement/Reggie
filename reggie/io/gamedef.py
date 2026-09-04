@@ -33,6 +33,31 @@ import reggie.sprites as sprites
 # "Add Patch Folder" button (`_add_patch_folder`) does the same job.
 
 
+#: Bare module names a patch's own Python may import, and where they live now.
+#:
+#: Every one of these was a top-level module in the Reggie a patch author wrote
+#: against, and is a submodule here. A patch is user content we cannot rewrite,
+#: so the names have to keep resolving - and a name that does not is not a
+#: recoverable error: `LoadGameDef` catches it as "the patch could not be
+#: loaded" and falls back to the base game.
+#:
+#: `globals_` is why this became a table rather than a pair (Zement, 2026-09-04,
+#: relaying a user's report): a third-party patch importing it got
+#: "No module named 'globals_'" and would not load at all. Our own bundled
+#: patches import only the first two, which is why it went unnoticed.
+#:
+#: Deliberately generous. Aliasing a name no patch imports costs one dictionary
+#: entry; missing one costs the patch.
+#: **Not** `common`: patches write `import sprites_common as common`, so the
+#: bare name they import is `sprites_common`, and `reggie.core.common` is a
+#: different module that a `common` alias would shadow.
+PATCH_MODULE_ALIASES = {
+    'spritelib': 'reggie.core.spritelib',
+    'sprites_common': 'reggie.core.sprites_common',
+    'globals_': 'reggie.core.globals_',
+}
+
+
 def _ensurePatchModuleAliases():
     """
     Makes the bare module names a patch's sprites.py imports resolvable.
@@ -54,12 +79,12 @@ def _ensurePatchModuleAliases():
     Best-effort per name. A missing optional module should cost that one import,
     not the whole patch load.
     """
-    for name in ('spritelib', 'sprites_common'):
+    for name, target in PATCH_MODULE_ALIASES.items():
         if name in sys.modules:
             continue
 
         try:
-            sys.modules[name] = importlib.import_module('reggie.core.' + name)
+            sys.modules[name] = importlib.import_module(target)
         except ImportError as exc:
             print('[GAMEDEF] could not alias %r for patch sprites: %s'
                   % (name, exc))

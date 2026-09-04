@@ -1101,6 +1101,15 @@ class SectionColumn(QtWidgets.QScrollArea):
             host.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                QtWidgets.QSizePolicy.Policy.Fixed)
 
+            # A folded section offers no grip: dragging one taller would only
+            # reveal a body that is hidden anyway. Set here as well as in
+            # `_rebuild`, because a fold reaches this method and not that one -
+            # and a grip left under a folded header is a handle that resizes
+            # nothing.
+            grip = self._grips.get(host)
+            if grip is not None:
+                grip.setVisible(host.isExpanded())
+
         self.refreshLayout()
 
     def beginDrag(self):
@@ -2212,10 +2221,17 @@ class Sidebar(QtWidgets.QWidget):
         panel's height means the same thing wherever it sits in the stack.
         """
 
-        # The hosts' wanted heights have just changed - a fold, an unfold, or a
-        # section arriving. The scroll area does not re-measure on its own,
-        # since it is deliberately not `widgetResizable`.
-        self.sections.refreshLayout()
+        # `applyHeights`, not `refreshLayout`: the hosts' wanted heights have
+        # just *changed* - a fold, an unfold, a section arriving - and only
+        # applyHeights pushes the new ones back in as minimums. Refreshing the
+        # layout alone re-measures against the old ones.
+        #
+        # Folding was the case that showed it. A fold sets the host's *maximum*
+        # to its header, while its minimum was still the expanded hint - 21
+        # against 145 - and the minimum wins, so folding hid the body and freed
+        # nothing (measured, 2026-09-04). It worked before only by accident: the
+        # folded host was often the slack holder, whose minimum was pinned to 0.
+        self.sections.applyHeights()
 
     def _handleColumnDragged(self, _pos, _index):
         """The user moved the column divider - stop recomputing it."""
