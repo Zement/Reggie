@@ -70,6 +70,11 @@ def main():
     ImageCache.clear()
     SpriteImagesLoaded.clear()
 
+    # In step with the cache: images are about to be reloaded, so a sprite whose
+    # image code failed last time deserves a fresh report if it fails again.
+    from reggie.core import globals_ as _globals
+    _globals.BrokenSpriteImages.clear()
+
     SpritesFolders = []
 
 

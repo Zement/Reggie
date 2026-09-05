@@ -109,6 +109,13 @@ TilesetsAnimating = False
 #
 # Set only around that switch, and always restored in a finally.
 SuppressMissingTilesetWarnings = False
+
+#: Sprite types whose patch-authored image code has already raised, so the
+#: warning and its traceback are printed once rather than once per sprite.
+#: Cleared with the image cache on a patch switch, since the next patch's code
+#: is a different piece of software and deserves its own first report.
+BrokenSpriteImages = set()
+
 ViewActions = None
 ZoneThemeValues = None
 FirstStageFilename = None

@@ -1047,6 +1047,10 @@ def LoadGameDef(name=None, dlg=None):
         if globals_.Area is not None:
             SLib.ImageCache.clear()
             SLib.SpriteImagesLoaded.clear()
+            # The next patch's image code is different software, so it gets its
+            # own first report rather than inheriting the previous patch's
+            # already-warned set.
+            globals_.BrokenSpriteImages.clear()
             sprites.LoadBasics()
 
             spriteClasses = globals_.gamedef.getImageClasses()
@@ -1111,10 +1115,23 @@ def LoadGameDef(name=None, dlg=None):
 
     except Exception as e:
         if dlg: dlg.setValue(7)
-        
+
         if sprite_images_enabled and globals_.mainWindow is not None and hasattr(globals_.mainWindow, 'sprPicker'):
             globals_.mainWindow.sprPicker.show_sprite_images = True
-        
+
+        # **Print the traceback before anything else.** This except covers ~200
+        # lines that touch every data file a patch can carry, so `str(e)` on its
+        # own says what broke and nothing about where - and a user reporting
+        # "'NoneType' object has no attribute 'width'" then has no way to say
+        # more, because nothing reached the terminal either (Zement, 2026-09-05,
+        # switching to an external patch: "sadly there is no additional log
+        # output with a proper fault message"). The dialog keeps its plain
+        # summary; the terminal gets the whole thing.
+        import traceback
+        print('\n--- patch load failed: %r ---' % (name,), flush=True)
+        traceback.print_exc()
+        print('--- end of patch load failure ---\n', flush=True)
+
         # If we were trying to load a specific patch and it failed, show a message
         # and fall back to the base game
         if name is not None:
