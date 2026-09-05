@@ -709,6 +709,65 @@ class LevelTreeModel(QtCore.QAbstractItemModel):
         """Forget a level's cached area list - it was saved, or replaced."""
         self._cache.invalidate(path)
 
+    def indexForFile(self, path):
+        """The LEVEL index for a file path, or an invalid index.
+
+        By *path*, not by label: the label is whatever the catalog renamed the
+        file to, and the session only knows where the file is. Walks the built
+        tree rather than the lazy one - every level node exists from
+        `_buildRoot`, and only its *areas* are read on demand - so this never
+        triggers the 11-44 ms area read that `_indexFor` can.
+        """
+        if not path:
+            return QtCore.QModelIndex()
+
+        try:
+            target = os.path.normcase(os.path.abspath(path))
+        except Exception:
+            return QtCore.QModelIndex()
+
+        def walk(node, parent):
+            for row, child in enumerate(node.children):
+                index = self.index(row, 0, parent)
+
+                if child.kind == LEVEL and child.file_path:
+                    try:
+                        here = os.path.normcase(os.path.abspath(child.file_path))
+                    except Exception:
+                        here = None
+                    if here == target:
+                        return index
+                elif child.kind in (PATCH, CATEGORY):
+                    found = walk(child, index)
+                    if found is not None:
+                        return found
+
+            return None
+
+        found = walk(self._root, QtCore.QModelIndex())
+        return found if found is not None else QtCore.QModelIndex()
+
+    def indexForArea(self, level_index, area_num):
+        """The AREA child of ``level_index`` for ``area_num``, or invalid.
+
+        **Only among children already read.** Deliberately does not call
+        `fetchMore`: the caller's whole rule is "follow an expanded level, do
+        not open a collapsed one", and fetching here would pay the area read
+        the rule exists to avoid.
+        """
+        if not level_index.isValid() or area_num is None:
+            return QtCore.QModelIndex()
+
+        node = level_index.internalPointer()
+        if node is None or not node._loaded:
+            return QtCore.QModelIndex()
+
+        for row, child in enumerate(node.children):
+            if child.kind == AREA and child.area_num == area_num:
+                return self.index(row, 0, level_index)
+
+        return QtCore.QModelIndex()
+
 
 class LevelTreeWidget(QtWidgets.QWidget):
     """The Directory Listing section in sidebar slice 2 (D-d.2).
@@ -725,6 +784,12 @@ class LevelTreeWidget(QtWidgets.QWidget):
         super().__init__(parent)
 
         self.win = window
+
+        #: Set while `syncToSession` moves the current index, so a handler that
+        #: ever sees a programmatic selection can tell it apart from the user's
+        #: (Block D-e §4a). See `syncToSession` for why it is not needed today
+        #: and is here anyway.
+        self._syncingFromSession = False
 
         self.model = LevelTreeModel(window, self)
 
@@ -898,9 +963,71 @@ class LevelTreeWidget(QtWidgets.QWidget):
     def refreshLoadedMarks(self):
         self.model.refreshLoadedMarks()
 
+    # -- following the active session (Block D-e) ------------------------
+
+    def syncToSession(self, file_path, area_num=None):
+        """Select and reveal the node for the session in front.
+
+        The other half of activation: the tree has opened levels since D-d.3,
+        and from here it also *follows* them, so with several levels and areas
+        open at once the tree keeps answering "where am I" - which a tab bar
+        reading ``01-01, 01-01, 01-02`` cannot.
+
+        **Which node**, per plan §4b:
+
+            level collapsed -> select the level, leave it collapsed
+            level expanded  -> select the area
+
+        Expanding a level to reach its area would cost the 11-44 ms area read
+        that D-d's whole lazy design exists to avoid, and doing it on every tab
+        switch would pay it again and again. Following an already-open node is
+        free; forcing one open is not, so the rule is to follow what is there.
+
+        Only the *current index* moves. This is a "you are here" mark, not an
+        instruction: nothing is opened, nothing is expanded, and the caller is
+        not told the selection changed.
+        """
+        index = self.model.indexForFile(file_path)
+        if not index.isValid():
+            return False
+
+        if self.view.isExpanded(index):
+            area = self.model.indexForArea(index, area_num)
+            if area.isValid():
+                index = area
+
+        # `activated` is the view's *activation* signal - double-click and
+        # Enter - not `selectionChanged`, so moving the current index below
+        # cannot re-enter `HandleTreeActivated` and the tree -> open -> select
+        # -> open cycle does not close. The flag makes that an assertion rather
+        # than a standing assumption: if a later change ever wires selection to
+        # activation (single-click-to-switch was explicitly left out of D-e for
+        # this reason), the handler reads this and declines instead of looping.
+        self._syncingFromSession = True
+        try:
+            self.view.setCurrentIndex(index)
+            # Selected is not the same as visible. A node twenty rows below the
+            # viewport would be "followed" invisibly, which is the whole point
+            # missed.
+            self.view.scrollTo(
+                index, QtWidgets.QAbstractItemView.ScrollHint.EnsureVisible)
+        finally:
+            self._syncingFromSession = False
+
+        return True
+
     def _handleGroupToggled(self, checked):
         from reggie.core.dirty import setSetting
 
         setSetting('TreeGroupUnlisted', bool(checked))
-        self.refresh()
+
+        # Through the window where there is one, so the rebuild is followed by
+        # the re-sync that puts the selection back on the active session
+        # (D-e §4d) - regrouping moves every level to a different parent, so
+        # the selection is one of the things the rebuild loses.
+        refresher = getattr(self.win, 'RefreshDirectoryListing', None)
+        if refresher is not None:
+            refresher(rebuild=True)
+        else:
+            self.refresh()
 

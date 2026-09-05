@@ -1892,6 +1892,17 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if state:
             self.levelTreeWidget.applyState(state)
 
+        # ...and then point it at the session that is actually in front, which
+        # is not necessarily the node that was selected when the section was
+        # closed: the user may have switched tabs in between (Block D-e §4c).
+        #
+        # **After `applyState`, not before.** The captured state carries a
+        # `current` of its own, and whichever runs last wins - so the order is
+        # the rule. `applyState` still runs, because it is what restores the
+        # *expansions*, and those decide whether the sync can reach an area
+        # node at all.
+        self.SyncTreeToSession()
+
         self.levelTreeSection = self.sidebar.addSection(
             globals_.trans.string('MenuItems', 143),
             self.levelTreeWidget,
@@ -2155,12 +2166,58 @@ class ReggieWindow(QtWidgets.QMainWindow):
         try:
             if rebuild:
                 widget.refresh()
+                # A rebuild resets the model, so every index the selection was
+                # made from is gone. `refresh` restores what it can from the
+                # captured labels, but nothing re-points it at the *session* -
+                # so on a patch switch the tree would sit on whatever survived
+                # the label match until the next tab switch moved it (D-e §4d).
+                #
+                # Here rather than only after `LoadFirstLevelOfPatch`, which
+                # does re-sync by activating: that covers the patch switch and
+                # not the other rebuild, the Unlisted-grouping toggle, which
+                # has no load after it at all.
+                self.SyncTreeToSession()
             else:
                 widget.refreshLoadedMarks()
         except Exception:
             # A stale tree is worse than none, but neither is worth failing a
             # patch switch or a level load over.
             pass
+
+    def SyncTreeToSession(self, session=None):
+        """Point the directory listing at the active session (Block D-e).
+
+        Called from ``SessionManager.activate`` rather than from the tab
+        widget's ``currentChanged``, because activation is the funnel: opening
+        a file (boot, Open, New) reaches ``activate`` without going through
+        ``ActivateSession`` at all, and wiring the canvas to the latter alone
+        is what left D-c's empty state broken.
+
+        **Selection follows, it does not drive.** Nothing here opens or
+        expands anything - see ``LevelTreeWidget.syncToSession``.
+
+        Guarded, because the tree is a context section the user may have
+        closed, and because activation runs during boot and in the headless
+        suites where there is no sidebar at all.
+        """
+        widget = getattr(self, 'levelTreeWidget', None)
+        if widget is None:
+            return False
+
+        if session is None:
+            manager = globals_.get_session_manager()
+            session = manager.active if manager is not None else None
+
+        if session is None:
+            return False
+
+        try:
+            return bool(widget.syncToSession(session.file_path,
+                                             session.area_num))
+        except Exception:
+            # A tree that will not follow is a cosmetic loss; failing the
+            # activation that triggered it would not be.
+            return False
 
     # -- the unsaved-levels section (Block D-d, phase D-d.3c) ------------
 

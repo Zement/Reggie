@@ -876,6 +876,24 @@ class SessionManager:
         if syncer is not None and session is not None:
             syncer()
 
+        # ...and so does the directory listing's selection (Block D-e). Here
+        # for the third time for the same reason as the two above: activation
+        # is the one funnel every route reaches, and the two callbacks that
+        # were wired to ReggieWindow.ActivateSession instead each had to be
+        # moved here after a route that skips it was found.
+        #
+        # Selection only - the tree follows the active session, it does not
+        # open or expand anything. Tab *creation* deliberately leaves the tree
+        # alone as well (Zement, 2026-09-05): a new tab is often opened *from*
+        # the tree, and rearranging what the user is pointing at while they are
+        # pointing at it is exactly the wrong moment. That falls out of this
+        # placement rather than needing a rule - opening a level activates its
+        # session, so the sync runs and simply selects the node the user just
+        # activated, which is already where they are.
+        follower = getattr(window, 'SyncTreeToSession', None)
+        if follower is not None and session is not None:
+            follower(session)
+
         return previous
 
     def close(self, session):
