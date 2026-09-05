@@ -101,14 +101,73 @@ from reggie.ui.docks import DockBuilder
 from reggie.ui.level_io import LevelIO
 from reggie.ui.tabs import MasterTabWidget
 from reggie.ui.sidebar import Percent
+from reggie.ui.unsavedlist import dirty_entries, dirty_paths
 
-#: The undo history section's starting and maximum heights, as percentages of
-#: the sidebar (Zement, 2026-08-30). Relative rather than absolute because 400px
-#: was chosen on one machine and came out at 40% of a shorter sidebar - the same
-#: reasoning that put the level overview's size behind a percentage in D-c.4.
-#: Over 100 is allowed and means "taller than the sidebar", which scrolls.
-UNDO_SECTION_DEFAULT_HEIGHT = Percent(15)
-UNDO_SECTION_MAX_HEIGHT = Percent(75)
+#: Every slice-2 section's starting height, as a percentage of the sidebar
+#: (Zement, 2026-09-01 - the numbers are his). Relative rather than absolute
+#: because 400px was chosen on one machine and came out at 40% of a shorter
+#: sidebar, the same reasoning that put the level overview's size behind a
+#: percentage in D-c.4.
+#:
+#: They deliberately add up to more than 100: the column scrolls since D-d.3d,
+#: so "70 + 25 + 50" means the stack is taller than the sidebar and the user
+#: scrolls it, not that everything is squeezed to fit.
+#:
+#: **In one place because they were in none.** Game Patches, the Directory
+#: Listing and Help had no default height at all before D-d.3d - they took
+#: whatever their contents asked for - so there was nothing to find and nothing
+#: to change (Zement: "I was unable to find them in the code, as I would have
+#: liked modifying them directly").
+#: ``(minimum, default)`` per section, both as percentages of the sidebar.
+#:
+#: Zement's numbers, 2026-09-04. **No maximum**: every section he specified had
+#: its ceiling unset, and he drew the conclusion himself - "seeing that maximum
+#: height is always unset, we might change that for all panels and simply make
+#: the max height 100%". A ceiling nothing uses is a parameter to get wrong, and
+#: the honest cap is the one the scroll area already provides.
+#:
+#: **The minimum is the new one** and it is what the drag needed: without it
+#: every section shared one hard-coded floor, and a level tree, a chat roster
+#: and a row of checkboxes do not agree on what "too small to use" means.
+SECTION_HEIGHTS = {
+    #                    min           default
+    'patches':      (Percent(30), Percent(30)),
+    'directory':    (Percent(20), Percent(70)),
+    'help':         (Percent(15), Percent(30)),
+    'undo':         (Percent(15), Percent(30)),
+    'collab':       (Percent(40), Percent(50)),
+    'defaultprops': (Percent(30), Percent(30)),
+
+    # Kept in pixels: a short list of rows rather than a view, and its default
+    # is whatever four rows come to.
+    #
+    # The floor is 0 because this panel states its own - the four buttons plus
+    # one row of list, measured from the widgets - and `SectionHost.minHeight`
+    # takes the larger of the two. A percentage here was what stopped the drag
+    # early (Zement, 2026-09-04: "the actual list cannot shrink to its min
+    # size"); a fixed number small enough to get out of the way would just be
+    # the panel's floor written twice, in a place that cannot know it.
+    'unsaved':      (0, 120),
+
+    # Not built yet, listed so the next person adding one has a number rather
+    # than a decision (Zement, 2026-09-01).
+    'logs':         (Percent(15), Percent(40)),
+    'puzzle':       (Percent(20), Percent(70)),
+}
+
+
+def section_heights(key):
+    """``(min_height, default_height)`` for a section, as keyword arguments.
+
+    One lookup rather than two, so a section cannot be given one of its numbers
+    and not the other.
+    """
+    minimum, default = SECTION_HEIGHTS[key]
+    return {'min_height': minimum, 'default_height': default}
+
+
+#: Read by the suites, and by the undo history's own call site.
+UNDO_SECTION_DEFAULT_HEIGHT = SECTION_HEIGHTS['undo'][1]
 
 from reggie.ui import tooltabs
 from reggie.ui import focusgroups
@@ -228,6 +287,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # before the first level is opened - the window exists and is shown well
         # before any session does, and ~87 call sites read mainWindow.scene /
         # .view without checking.
+        # The same idea for the open file's path, and for the same reason it is
+        # needed early: `fileSavePath` is a property since D-d.3b, and it is
+        # read before any session exists.
+        self._fileSavePath = None
+
         self._fallbackScene = LevelScene(0, 0, 1024 * 24, 512 * 24, self)
         self._fallbackScene.setItemIndexMethod(QtWidgets.QGraphicsScene.ItemIndexMethod.NoIndex)
         self._fallbackScene.selectionChanged.connect(self.ChangeSelectionHandler)
@@ -364,6 +428,21 @@ class ReggieWindow(QtWidgets.QMainWindow):
         focusgroups.install(self)
         print("[INIT2] ✓ Focus groups installed")
 
+        # Game Patches, up by default (Zement, 2026-09-04). It was the directory
+        # listing, and the rail then disagreed with itself: the highlight sits
+        # on the *first* entry that owns the sections page, which is Game
+        # Patches, so booting with the tree open said "Game Patches" over a
+        # directory listing.
+        #
+        # Fixed by changing which one opens rather than which one highlights.
+        # The highlight is right for the entry it names; it was the content
+        # behind it that did not match, and Game Patches is also the honest
+        # first stop - which patch you are editing decides what the tree can
+        # even show.
+        print("[INIT2] Opening game patches...")
+        self.ShowGamePatches()
+        print("[INIT2] ✓ Game patches opened")
+
         # now get stuff ready
         loaded = False
         self.fileSavePath = None
@@ -417,9 +496,9 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.RecentMenu = RecentFilesMenu()
         print("[INIT2] ✓ RecentFilesMenu created")
         
-        print("[INIT2] Creating GameDefMenu...")
-        self.GameDefMenu = deferred.GameDefMenu()
-        print("[INIT2] ✓ GameDefMenu created")
+        # No GameDefMenu since D-d.1b: File -> Change Game is gone, and the menu
+        # was only ever reachable through it. Its one irreplaceable part - the
+        # patch info panel - lives in the Patch Manager now (PatchInfoPanel).
 
         print("[INIT2] Creating menubar...")
         # Menu/toolbar/action construction extracted to
@@ -458,6 +537,43 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """The active session, or None before one exists."""
         manager = globals_.get_session_manager()
         return manager.active if manager is not None else None
+
+    @property
+    def fileSavePath(self):
+        """The path of the file in front (D-d.3b).
+
+        A plain attribute until several files could be open at once, at which
+        point it stopped being merely a duplicate of the handle's path and
+        started being *wrong*: it named one file while the editor held several.
+        All ~50 read sites mean "the file in front", which is what this returns.
+
+        The duplication was already dangerous with one file. In D-d.3 a rename
+        applied to the manager but not to this attribute made the two disagree,
+        and re-opening the file then found no handle, loaded it again, and built
+        fresh scene items over a level whose old ones were still live - "wrapped
+        C/C++ object of type ObjectItem has been deleted". Resolving through the
+        session removes the second copy rather than keeping them in step.
+
+        Falls back to the window-owned value when there is no session: a new
+        unsaved level, boot before the first load, and the headless suites.
+        """
+        session = self._activeSession()
+        if session is None:
+            return self._fileSavePath
+        return session.file_path
+
+    @fileSavePath.setter
+    def fileSavePath(self, value):
+        # Only the fallback. Deliberately **not** a rename of the active
+        # session's handle, tempting as that is: assigning this does not always
+        # mean "the open file moved". `LoadLevel` assigns it while naming a file
+        # it is *about* to open, before that file's session exists - so a
+        # setter that renamed would re-key the previous file's handle to the
+        # incoming path and lose both.
+        #
+        # Save As is the one case that does mean a rename, and it says so, by
+        # calling `_RebindSessionsTo` explicitly after the write.
+        self._fileSavePath = value
 
     @property
     def ZoomLevel(self):
@@ -673,6 +789,12 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self._SyncAreaComboBox()
         self.UpdateTitle()
 
+        # Bold-for-loaded in the directory listing (D-d.2). Here rather than in
+        # LoadLevel because this is the one point every route passes through -
+        # opening a level, switching area, and closing a session, which
+        # activates a survivor on its way out.
+        self.RefreshDirectoryListing()
+
         # Bring the toolbar, the zoom controls and the property panels in line
         # with this session (D-c.4). All three read state that now belongs to
         # the session, and none is driven by a signal a tab switch fires - so
@@ -703,11 +825,29 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if menu is None:
             return False
 
-        menu.menuAction().setEnabled(bool(enabled))
+        action = menu.menuAction()
+
+        # A hidden menu is not the user's to reach, so there is nothing to
+        # enable or disable (D-d.2c). Help is one: it is still built, because
+        # its actions keep their shortcuts and the sidebar's Help section
+        # renders this very menu - but it is not in the menu bar any more.
+        #
+        # Reported as False rather than silently "done", because Qt treats a
+        # hidden action as disabled: claiming success would mean SetMenusEnabled
+        # returning a name whose menu it did not actually enable.
+        if not action.isVisible():
+            return False
+
+        action.setEnabled(bool(enabled))
         return True
 
     def SetMenusEnabled(self, enabled, names=None):
-        """Enable or disable several menus at once. Defaults to all of them."""
+        """Enable or disable several menus at once.
+
+        Defaults to every menu the user can reach - which is not necessarily
+        every menu in the registry, since a hidden one is skipped. The return
+        value is the menus actually changed, so a caller can tell.
+        """
         menus = getattr(self, 'menus', {})
         wanted = list(menus) if names is None else list(names)
         return [name for name in wanted if self.SetMenuEnabled(name, enabled)]
@@ -823,6 +963,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
         side = configured_side()
         wanted = 0 if side == SIDE_LEFT else 1
 
+        # Once, on the first placement: a drag of this divider is the user
+        # setting the sidebar width themselves, which clears any clamp the
+        # restore recorded (D-d.1b). Connected here because it is the one place
+        # that knows both the splitter and the sidebar exist.
+        if not getattr(self, '_sidebarDragConnected', False):
+            self.centralSplitter.splitterMoved.connect(
+                self.sidebar._handleSidebarResized)
+            self._sidebarDragConnected = True
+
         if self.centralSplitter.indexOf(self.sidebar) == wanted:
             return False
 
@@ -845,11 +994,16 @@ class ReggieWindow(QtWidgets.QMainWindow):
         that one area stays loaded at all times, so there is no editor state with
         no level in it.
 
-        No dirty prompt. A session's edits live in the shared level object, not
-        in the session, so closing a tab does not discard them - saving the file
-        afterwards still writes that area, exactly as saving from another tab
-        always did. The prompt stays where work genuinely can be lost: quitting,
-        changing patch, opening another file.
+        No dirty prompt. Unsaved work has its own interface - the unsaved-levels
+        section, with Save, Save All, Discard and Discard All (D-d.3c) - and
+        that is where it stays. A dialog on every tab close would ask the same
+        question those buttons already answer, at the moment the user is least
+        interested in it. The prompt belongs where work genuinely leaves the
+        editor: quitting, changing patch, opening another file.
+
+        Zement, 2026-09-04, rejecting a close prompt: "a tab could be closed
+        without a dialog, and the unsaved level would stay dirty and remain in
+        the Unsaved Levels list."
         """
         manager = globals_.get_session_manager()
         if manager is None or session is None:
@@ -857,6 +1011,11 @@ class ReggieWindow(QtWidgets.QMainWindow):
 
         if len(manager) <= 1:
             return False
+
+        # Before the session is disposed, not after: a page holding a disposed
+        # session is the one state D-d.4 must not permit, and this is the point
+        # every deliberate close passes through.
+        self.CloseSessionPagesFor(session)
 
         manager.close(session)
         self.tabs.sync()
@@ -866,8 +1025,309 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # the session that just went away.
         if manager.active is not None:
             self.ActivateSession(manager.active)
+        else:
+            # No survivor to activate, so nothing else will repaint the tree's
+            # bold marks - and the level that just closed is still shown as
+            # loaded (D-d.2).
+            self.RefreshDirectoryListing()
+
+        # The closed level may still be listed as unsaved - closing a tab does
+        # not discard edits, so a dirty level outlives its last tab. The row's
+        # buttons act on a handle, which is why it can.
+        self.RefreshUnsavedLevels()
 
         return True
+
+    def ReopenDirtyHandle(self, handle, area_num=None):
+        """Give a retained dirty level a tab again, without touching the disk.
+
+        A level whose tabs were all closed while dirty is kept in memory by
+        `SessionManager.close`, so the unsaved section can still save or discard
+        it. Saving reads the *active* session, so there has to be one - and it
+        must be built on **this handle**, never by reloading the path, which
+        would read the unedited file over the very edits being saved.
+
+        Returns the session, or None.
+        """
+        if handle is None:
+            return None
+
+        manager = globals_.get_session_manager()
+        if manager is None:
+            return None
+
+        existing = handle.sessions()
+        if existing:
+            self.ActivateSession(existing[0])
+            return existing[0]
+
+        level = handle.level
+        if level is None:
+            return None
+
+        areas = getattr(level, 'areas', None) or ()
+        if not areas:
+            return None
+
+        if area_num is None or area_num > len(areas):
+            area_num = 1
+
+        area = areas[area_num - 1]
+
+        # Same ordering as `open_area`: the session exists and is active before
+        # the area is loaded, because an area's load() builds sprites whose
+        # findZone() reads globals_.Area through the active session.
+        session = manager.open(level, handle.file_path, area, area_num)
+
+        if not area._is_loaded:
+            area.load()
+
+        self.ActivateSession(session)
+        self.tabs.sync()
+
+        return session
+
+    # -- session-bound pages (D-d.4) ----------------------------------------
+
+    def sessionPageFor(self, key):
+        """The ``SessionBoundPage`` for a key on the active session, or None.
+
+        Kept for callers that mean "the form the user is looking at". Since
+        D-d.4b a form belongs to an area rather than to the editor, so the
+        session-aware ``sessionPageOn`` is the fuller question.
+        """
+        manager = globals_.get_session_manager()
+        return self.sessionPageOn(manager.active if manager else None, key)
+
+    def sessionPageOn(self, session, key):
+        """The ``SessionBoundPage`` of kind ``key`` open on ``session``."""
+        return getattr(self, '_sessionPages', {}).get((session, key))
+
+    def OpenSessionPageByKey(self, session, key):
+        """Open one of the five forms on ``session``, chosen by its tool key.
+
+        The flyout bar's way in. It shows all five buttons whether or not the
+        area has that form yet (Zement, 2026-09-02 - hiding the unopened ones
+        hid the entrance), so a click has to be able to *open* one, and the bar
+        knows a key rather than a handler.
+
+        Routed through the same handlers the menu uses rather than duplicating
+        their factory-and-apply pairs here: two ways to open one form is two
+        places for the binding to be got wrong, which is the whole subject of
+        this phase.
+        """
+        handlers = {
+            tooltabs.AREA_SETTINGS: self.HandleAreaOptions,
+            tooltabs.ZONE_SETTINGS: self.HandleZones,
+            tooltabs.BACKGROUNDS: self.HandleBG,
+            tooltabs.CAMERA_PROFILES: self.HandleCameraProfiles,
+            tooltabs.LEVEL_INFORMATION: self.HandleInfo,
+        }
+
+        handler = handlers.get(key)
+        if handler is None:
+            return None
+
+        return handler(session=session)
+
+    def OpenSessionPage(self, key, factory, title, apply_callback, session=None):
+        """Open one of the five per-area forms, bound to ``session``.
+
+        The binding is D-d.4: the form applies to the session it was opened for,
+        whatever tab is in front when the user presses OK. See
+        ``reggie.ui.sessionpages`` for why that is not the default and what goes
+        wrong without it.
+
+        **One form per area** since D-d.4b, and it replaced one per *kind*.
+        Zement's correction, 2026-09-02: replacing area 1's half-filled Area
+        Settings because the user asked for area 2's throws away work, which is
+        not what reopening Preferences does and not what the shell's
+        one-tab-per-kind rule was ever about. The form goes into that session's
+        own page stack, under its own tab, reachable from the flyout bar.
+
+        ``session`` defaults to the active one, which is what every menu entry
+        means; the directory listing passes a node's session explicitly.
+
+        **No shell, no tab.** The collab suites and several headless tests build
+        a window with no ``MasterTabWidget``, and a per-area dialog that required
+        one would fail all of them - so this falls back to ``exec()`` plus an
+        immediate apply, which is the behaviour these five had before this phase
+        and the same fallback ``showStatusWindow`` already uses.
+        """
+        manager = globals_.get_session_manager()
+
+        # Validated against the manager rather than merely checked for None.
+        # Every one of these five is wired to a QAction, and `triggered` passes
+        # its `checked` bool as the first positional argument - so the menu and
+        # the toolbar called this with `session=False`, which is not None, binds
+        # a page to a non-session, and then applies against whatever is active:
+        # the exact bug this phase exists to prevent, arriving through the one
+        # route none of the tests used (Zement, 2026-09-02). Fixed at the
+        # connection too, in menus.CreateAction; belt and braces, because this
+        # is the parameter that decides which area gets written.
+        if manager is None:
+            return None
+
+        if session not in manager.sessions:
+            session = manager.active
+
+        if session is None:
+            return None
+
+        from reggie.ui.sessionpages import SessionBoundPage
+
+        tabs = getattr(self, 'tabs', None)
+        stack = tabs.stackFor(session, create=False) if tabs is not None else None
+
+        if stack is None:
+            # No shell, or a session with no tab yet. The modal path, unchanged
+            # from before D-d.4 - and the binding still applies it, so even here
+            # the values land on the session this was opened for rather than on
+            # whatever became active while the dialog was up.
+            page = SessionBoundPage(self, session, apply_callback, key, title)
+            dialog = factory()
+            if dialog is None:
+                return None
+
+            if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+                page.applyNow(dialog)
+            return None
+
+        if not hasattr(self, '_sessionPages'):
+            self._sessionPages = {}
+
+        # Asking again for a form this area already has means "show me the one I
+        # opened", exactly as it does for Preferences - the difference D-d.4b
+        # draws is between *this area's* form and *another* area's, and another
+        # area's is untouched here because the registry is keyed by both.
+        existing = self._sessionPages.get((session, key))
+        if existing is not None and stack.showPage(key):
+            return existing
+
+        dialog = factory()
+        if dialog is None:
+            return None
+
+        page = SessionBoundPage(self, session, apply_callback, key, title)
+        page.dialog = dialog
+
+        self._hostSessionForm(stack, key, dialog, page)
+        self._sessionPages[(session, key)] = page
+        return page
+
+    def _hostSessionForm(self, stack, key, dialog, page):
+        """Wrap a form and put it into its session's page stack.
+
+        Reuses ``ToolTabHost`` rather than reparenting the dialog directly,
+        because the hard part of hosting a QDialog as a page is already solved
+        there: it intercepts ``done``/``accept``/``reject`` - four dialogs by
+        four authors, none of which knows it is not modal - and it distinguishes
+        the confirming button from the dismissing one. That distinction is the
+        whole contract of a form that writes into a level.
+        """
+        from reggie.ui.tooltabs import ToolTabHost
+
+        host = ToolTabHost(key, dialog, owns_dialog=True)
+        host.closeRequested.connect(
+            lambda _key, confirmed, _s=stack, _k=key, _p=page:
+            self._finishSessionForm(_s, _k, _p, confirmed))
+
+        page.host = host
+        stack.addPage(key, host)
+        return host
+
+    def _finishSessionForm(self, stack, key, page, confirmed):
+        """The user pressed OK or Cancel on a per-area form.
+
+        Applies only on the confirming button, and takes the form out either
+        way. The apply happens *before* the page is removed, because the apply
+        reads the dialog's widgets - which is the same ordering ``closeTool``
+        uses for Preferences, and for the same reason.
+        """
+        host = getattr(page, 'host', None)
+        dialog = getattr(host, 'dialog', None)
+
+        if confirmed and dialog is not None:
+            page.applyNow(dialog)
+        elif not confirmed:
+            self._cancelSessionForm(key)
+
+        self._sessionPages.pop((page.session, key), None)
+        stack.removePage(key)
+
+        if host is not None:
+            host.closeDialog()
+            host.setParent(None)
+            host.deleteLater()
+
+    def _cancelSessionForm(self, key):
+        """Whatever a dismissed form needs undoing.
+
+        Only the zone dialog has any: it previews its edits on the level
+        overview as the user types, so cancelling has to repaint what was being
+        previewed. That repaint was the ``exec() != Accepted`` branch of the old
+        handler and is the one thing that would have been silently lost when
+        these became pages.
+        """
+        if key == tooltabs.ZONE_SETTINGS:
+            self.levelOverview.update()
+
+    def _sessionPageTitle(self, title, session):
+        """``Area Settings (02-05: Area 3)`` - the binding, made visible.
+
+        Reuses the tab widget's own ``tabTitleFor`` rather than formatting a
+        second time, so a page and the canvas it acts on always read as the same
+        thing - including the ``xx-xx: Area y`` form Zement asked for at D-d.3d,
+        and whatever it becomes next. Without this the binding is real but
+        invisible, and a user with two areas open has no way to tell which one an
+        open form belongs to.
+        """
+        tabs = getattr(self, 'tabs', None)
+        namer = getattr(tabs, 'tabTitleFor', None)
+        if namer is None:
+            return title
+
+        try:
+            return '%s (%s)' % (title, namer(session, dirty_marker=False))
+        except Exception:
+            return title
+
+    def CloseSessionPagesFor(self, session):
+        """Close every form bound to a session that is going away.
+
+        The one state this design must not permit is a page holding a disposed
+        session: its area is a dead object, and applying would write into
+        released memory or - worse, because it does not crash - into whatever is
+        active instead.
+
+        Since D-d.4b a session's forms are pages of that session's own stack, so
+        dropping the stack would take them with it by parentage. Done explicitly
+        anyway, and *before* the stack goes, so each form's dialog gets its own
+        ``closeEvent`` rather than being deleted mid-cleanup - which is the
+        difference between "the Patch Manager sweeps its temp directories" and
+        "it does not".
+        """
+        pages = getattr(self, '_sessionPages', None)
+        if not pages:
+            return
+
+        tabs = getattr(self, 'tabs', None)
+        stack = tabs.stackFor(session, create=False) if tabs is not None else None
+
+        for (owner, key), page in list(pages.items()):
+            if owner is not session:
+                continue
+
+            pages.pop((owner, key), None)
+
+            if stack is not None:
+                stack.removePage(key)
+
+            host = getattr(page, 'host', None)
+            if host is not None:
+                host.closeDialog()
+                host.setParent(None)
+                host.deleteLater()
 
     def _RefillAreaComboBox(self):
         """Rebuild the area selector from the level actually open.
@@ -894,23 +1354,17 @@ class ReggieWindow(QtWidgets.QMainWindow):
         finally:
             self.areaComboBox.blockSignals(blocked)
 
-    def HandleSwitchPatch(self, index):
-        """
-        Handle activated signals for patchComboBox
-        """
-        if index < 0:
-            return
-        
-        # Get the selected item data
-        patch_data = self.patchComboBox.itemData(index)
-        
-        if patch_data == 'patchmanager':
-            # Open Patch Manager
-            self.HandlePatchManager()
-            # Reset to current patch
-            self.updatePatchComboBox()
-            return
+    def SwitchPatch(self, folder):
+        """Load a different game patch. ``folder is None`` means retail.
 
+        The single entry point since D-d.1b. It was `HandleSwitchPatch(index)`,
+        which took a combo-box row and read the folder back out of it - so a
+        caller without a combo box had to fake one. The combo box is gone (the
+        sidebar's Game Patches page replaced it), and this takes the patch id
+        directly.
+
+        Returns True if the patch actually changed.
+        """
         # Unsaved work is settled *before* the patch changes (Block C - B3,
         # round 2, R5). Asking afterwards would offer to save the old patch's
         # level through the new patch's paths, and Cancel would have nothing to
@@ -918,81 +1372,58 @@ class ReggieWindow(QtWidgets.QMainWindow):
         #
         # Cancel is right here, unlike the join dialog: the user started this
         # and may reasonably change their mind.
+        from reggie.io.gamedef import loadNewGameDef, RefreshPatchSelector
+
         if self.CheckDirty():
-            self.updatePatchComboBox()
-            return
+            RefreshPatchSelector()
+            return False
 
-        from reggie.io.gamedef import loadNewGameDef
+        # folder is None for the base game, which loadNewGameDef takes as-is.
+        success = loadNewGameDef(folder)
 
-        # patch_data is None for the base game, which loadNewGameDef takes as-is.
-        success = loadNewGameDef(patch_data)
-
-        # Either way the combo box is put back in step: with the new patch on
-        # success, with the restored one on failure.
-        self.updatePatchComboBox()
+        # Either way every patch control is put back in step: on the new patch
+        # after a success, on the restored one after a failure.
+        RefreshPatchSelector()
 
         if success:
+            # Let go of what the old patch had open, retained dirty levels
+            # included. CheckDirty settled those above - saved, discarded, or
+            # the switch was cancelled - so anything still held is work the user
+            # chose to let go, and it belongs to a game that is no longer
+            # loaded: its paths do not resolve, and a row offering to save it
+            # would write it through the new patch's paths (Zement, 2026-09-04:
+            # "after Game Patch switching, the Unsaved Levels list must be
+            # empty").
+            #
+            # **Here, and not either side of it.** Two orderings were tried and
+            # both were wrong, in opposite ways:
+            #
+            #   before `loadNewGameDef` - the editor has no session at all
+            #     across `LoadGameDef`, which reloads the sprite data editor and
+            #     reads `globals_.Area.sprites` unguarded. Zement, 2026-09-05:
+            #     "'NoneType' object has no attribute 'sprites'".
+            #
+            #   after `LoadFirstLevelOfPatch` - the retained *handle* is still
+            #     keyed by path when the new patch's first level happens to be
+            #     the same file, so the load takes `LoadLevel`'s "already open"
+            #     branch and calls ResetPalette over a scene that has been torn
+            #     down: "wrapped C/C++ object of type ObjectItem has been
+            #     deleted".
+            #
+            # Between the two, the game definition is loaded and a level is
+            # about to be. Nothing here reads `globals_.Area` and nothing writes
+            # a level, so the retained work is in no danger for these few lines.
+            manager = globals_.get_session_manager()
+            if manager is not None:
+                manager.release_stale()
+
+            self.RefreshUnsavedLevels()
+
             # Open the new patch's own first level, rather than keeping one
             # whose tilesets belong to the patch that was just unloaded.
             self.LoadFirstLevelOfPatch()
 
-    def updatePatchComboBox(self):
-        """
-        Updates the patch combo box with current patches and selects the active one
-        """
-        # Check if patch combo box exists (might be disabled in preferences)
-        if not hasattr(self, 'patchComboBox') or self.patchComboBox is None:
-            return
-        
-        from reggie.io.gamedef import getAvailableGameDefs
-        from reggie.core.dirty import setting
-        
-        # Store current selection
-        current_patch = setting('LastGameDef')
-        
-        # Clear and repopulate
-        self.patchComboBox.clear()
-        
-        # Get all patches
-        patches = getAvailableGameDefs()
-        
-        # Find current patch index
-        current_index = 0
-        
-        # Add base game if it exists
-        if None in patches:
-            patches.remove(None)
-            self.patchComboBox.addItem('New Super Mario Bros. Wii', None)
-            if current_patch is None:
-                current_index = self.patchComboBox.count() - 1
-        
-        # Add custom patches
-        for patch_folder in patches:
-            if patch_folder is not None:
-                try:
-                    from reggie.io.gamedef import ReggieGameDefinition
-                    # Check if it's a custom path
-                    custom_path = setting('PatchPath_' + patch_folder)
-                    if custom_path:
-                        patch_def = ReggieGameDefinition(patch_folder, custom_path=custom_path)
-                    else:
-                        patch_def = ReggieGameDefinition(patch_folder)
-                    
-                    if patch_def.custom:
-                        self.patchComboBox.addItem(patch_def.name, patch_folder)
-                        if patch_folder == current_patch:
-                            current_index = self.patchComboBox.count() - 1
-                except:
-                    # Skip invalid patches
-                    continue
-        
-        # Add Patch Manager separator and option
-        self.patchComboBox.insertSeparator(self.patchComboBox.count())
-        self.patchComboBox.addItem('Patch Manager...', 'patchmanager')
-        
-        # Set current selection
-        if current_index < self.patchComboBox.count():
-            self.patchComboBox.setCurrentIndex(current_index)
+        return success
 
     def DeselectPathSelection(self, checked):
         """
@@ -1048,12 +1479,42 @@ class ReggieWindow(QtWidgets.QMainWindow):
         if tabs is not None:
             tabs.refreshTitles()
 
+        # And the unsaved-levels section (D-d.3c), which lists the same dirty
+        # state the tab markers show. Hooked here for the same reason: this is
+        # the one place the editor already calls whenever that state may have
+        # moved, so the section cannot drift out of step with the tabs beside
+        # it. Guarded because UpdateTitle runs long before the sidebar exists.
+        try:
+            self.RefreshUnsavedLevels()
+        except Exception:
+            # A stale list is worth living with; a title that cannot be set is
+            # not, and neither is a failed save whose UpdateTitle threw.
+            pass
+
     def CheckDirty(self):
         """
         Checks if the level is unsaved and attempts to save it if so.
         Returns whether the level still contains unsaved changes.
+
+        **Several dirty levels get one bulk dialog** (Zement, 2026-09-04). The
+        prompt below asks about ``globals_.Dirty``, which is the *active* level
+        - true enough when one file was open, and since D-d.3b it can be one of
+        several. Asking file by file would mean up to as many dialogs as there
+        are open levels before a patch switch or a quit could proceed, and
+        answering the third one still leaves the first two unresolved.
+
+        So: one level keeps the familiar Save / Discard / Cancel, and two or
+        more get Save All / Discard All / Cancel - the same two bulk actions the
+        unsaved-levels section offers, and deliberately *only* those. Per-file
+        choices belong in that section, where the user can see the list and act
+        on rows; a dialog cannot offer eight buttons. Cancel is the way through
+        to it, which is why Cancel is the default.
         """
-        if not globals_.Dirty:
+        if not self._maySaveInSession():
+            # Checked before `globals_.Dirty` since D-d.6: the bulk branch reads
+            # the manager rather than the active level, so a client with several
+            # dirty levels would otherwise reach a dialog this rule exists to
+            # prevent. See the note below on why a client is never asked.
             return False
 
         # In a session, only the save authority is asked about unsaved work
@@ -1070,7 +1531,19 @@ class ReggieWindow(QtWidgets.QMainWindow):
         # Answering False means "no unsaved changes stand in the way", which is
         # the truthful answer here: the changes exist, but they are the host's
         # to keep, and it has them.
-        if not self._maySaveInSession():
+
+        dirty = dirty_entries()
+        if len(dirty) > 1:
+            return self._checkDirtyBulk(dirty)
+
+        if not globals_.Dirty:
+            # One dirty level that is not the active one - the user closed its
+            # tab and its edits are still held (D-d.6). The single-file prompt
+            # below asks about the active level, so it would ask about the wrong
+            # thing; the bulk dialog names what is actually unsaved.
+            if dirty:
+                return self._checkDirtyBulk(dirty)
+
             return False
 
         msg = QtWidgets.QMessageBox()
@@ -1137,6 +1610,92 @@ class ReggieWindow(QtWidgets.QMainWindow):
             return False
 
         return False
+
+    def _checkDirtyBulk(self, entries):
+        """One dialog for several unsaved levels. Returns whether work remains.
+
+        Save All / Discard All / Cancel, naming the files so the user is not
+        agreeing to something they cannot see. The two actions are exactly the
+        unsaved section's bulk buttons, reached through the same methods -
+        anything else would be a second implementation of "save everything",
+        and the two would drift.
+
+        **Cancel is the default**, unlike the single-file prompt where Save is.
+        The single-file prompt's Save is unambiguous; here the safe answer is to
+        go and look, and Cancel is what leaves the levels alone so the user can
+        act on them row by row in the section.
+
+        Returns True when unsaved work still stands in the way, matching
+        `CheckDirty` - so Cancel, a failed save, and a refused discard all
+        report True and stop whatever asked.
+        """
+        names = []
+        for path, _handle in entries:
+            label = (os.path.splitext(os.path.basename(path))[0] if path
+                     else globals_.trans.string('WindowTitle', 0))
+            if label not in names:
+                names.append(label)
+
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        box.setWindowTitle(globals_.trans.string('AutoSaveDlg', 2))
+        box.setText(globals_.trans.string('MenuItems', 166, '[count]',
+                                          len(names)))
+        box.setInformativeText('%s\n\n%s' % (
+            '\n'.join('    ' + name for name in names),
+            globals_.trans.string('MenuItems', 167)))
+
+        saveAll = box.addButton(globals_.trans.string('MenuItems', 152),
+                                QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+        discardAll = box.addButton(globals_.trans.string('MenuItems', 159),
+                                   QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+        cancel = box.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+
+        box.setDefaultButton(cancel)
+        box.exec()
+
+        clicked = box.clickedButton()
+
+        if clicked is saveAll:
+            # A level that was never saved is skipped by Save All, so it is
+            # still dirty afterwards and still in the way - which is the honest
+            # answer: nothing has been written for it. The user is sent back to
+            # the section, where double-clicking that row opens the Save dialog.
+            if not self.SaveAllDirtyLevels():
+                return True
+
+            return bool(dirty_entries())
+
+        if clicked is discardAll:
+            # confirm=False: this dialog *is* the confirmation, and it named the
+            # files. A second one asking the same question is how a user learns
+            # to click through both without reading either.
+            if not self.DiscardAllDirtyLevels(confirm=False):
+                return True
+
+            # Never-saved levels are skipped by Discard All too - there is no
+            # file to reload. They are not in the way of a patch switch or a
+            # quit, though: the user was shown them and chose to throw the work
+            # away, and refusing to proceed over a level with no file name would
+            # leave no way out but saving it. So they are dropped here.
+            manager = globals_.get_session_manager()
+            if manager is not None:
+                for _path, handle in dirty_entries():
+                    if handle is not None and not handle.file_path:
+                        manager.discard_dirty_handle(handle)
+
+                        # A new level whose tab is still open keeps that tab -
+                        # only its claim on being unsaved goes. Closing tabs is
+                        # not what "discard" means here.
+                        for session in handle.sessions():
+                            session.dirty = False
+
+            self.RefreshUnsavedLevels()
+            self.UpdateTitle()
+
+            return bool(dirty_entries())
+
+        return True
 
     def LoadEventTabFromLevel(self):
         """
@@ -1238,8 +1797,8 @@ class ReggieWindow(QtWidgets.QMainWindow):
     def AboutBox(self):
         return self._windowActions.AboutBox()
 
-    def HandleInfo(self):
-        return self._windowActions.HandleInfo()
+    def HandleInfo(self, session=None):
+        return self._windowActions.HandleInfo(session=session)
 
     def HelpBox(self):
         return self._windowActions.HelpBox()
@@ -1300,6 +1859,777 @@ class ReggieWindow(QtWidgets.QMainWindow):
         else:
             self.actions['redo'].setText(self._redoBaseText)
 
+    def ShowDirectoryListing(self):
+        """Put the directory listing into sidebar slice 2 (Block D-d, phase 2).
+
+        Idempotent: if the section is already up it is brought to the front
+        rather than added twice. The rail entry calls this, and so will the
+        menu entry when there is one.
+
+        Unlike the undo history this is not a toggle - a rail category that
+        hid its own content when picked would be surprising - so closing it is
+        the section header's X, which the sidebar handles.
+        """
+        if self.sidebar is None:
+            return None
+
+        existing = self.sidebar.sectionFor(
+            getattr(self, 'levelTreeWidget', None))
+        if existing is not None:
+            self.sidebar.showSections()
+            return existing
+
+        from reggie.ui.leveltree import LevelTreeWidget
+
+        self.levelTreeWidget = LevelTreeWidget(self)
+        self.levelTreeWidget.activated.connect(self.HandleTreeActivated)
+
+        # Put back what the last one had open. A context section is destroyed
+        # when the user switches to another, so without this the tree comes
+        # back collapsed and scrolled to the top every time - which is exactly
+        # what it did (Zement, 2026-09-01).
+        state = getattr(self, '_levelTreeState', None)
+        if state:
+            self.levelTreeWidget.applyState(state)
+
+        self.levelTreeSection = self.sidebar.addSection(
+            globals_.trans.string('MenuItems', 143),
+            self.levelTreeWidget,
+            # stretch=1: a tree is a scrolling list, so more height is directly
+            # more of what the user came for - the same reasoning that gives the
+            # palette its stretch in slice 3.
+            stretch=1,
+            **section_heights('directory'),
+            on_close=self._closeDirectoryListing,
+            context=True)
+
+        return self.levelTreeSection
+
+    def HandleTreeActivated(self, index):
+        """Open what was activated in the directory listing (Block D-d.3).
+
+        The tree's five node kinds divide into three answers:
+
+        - **area** - open or raise that area of that file.
+        - **level** - the same for area 1, which is what the old level picker
+          did and what activating a level has always meant.
+        - **patch, category, tileset** - nothing. A category is a heading, and
+          a tileset slot names a file this editor does not edit (that is Block
+          G's Puzzle Next). Expanding them is what they are for, and the view
+          already does that on its own.
+        """
+        if index is None or not index.isValid():
+            return False
+
+        from reggie.ui.leveltree import AREA, LEVEL
+
+        node = index.internalPointer()
+        if node is None or node.kind not in (LEVEL, AREA):
+            return False
+
+        area_num = node.area_num if node.kind == AREA else 1
+        return self.OpenLevelFromTree(node.file_path, node.file_name, area_num)
+
+    def OpenLevelFromTree(self, file_path, file_name, area_num=1):
+        """Open a file and area, reusing whatever is already open.
+
+        Split out from ``HandleTreeActivated`` so the work can be driven
+        without a QModelIndex - by a test, and by D-d.4's dialogs.
+
+        Three cases, cheapest first, matching plan §3.3:
+
+        1. that area is already open        -> activate its session
+        2. the file is open at another area -> ``SwitchToArea``, which adds a
+           session on the same ``LevelHandle``
+        3. the file is not open             -> ``LoadLevel``
+
+        **The collab hook is asked first, in every case that changes what this
+        editor shows.** A client proposes and the host's broadcast performs the
+        load; outside a session the hook returns True immediately. This is the
+        one guard that keeps a client from desynchronising, and a second load
+        path that skipped it would reintroduce the bug C-B3 phase 3d fixed -
+        which is exactly the risk a *new* way to open levels creates.
+        """
+        if not file_path:
+            return False
+
+        manager = globals_.get_session_manager()
+
+        # Case 1: already open at that area. Raising an existing tab shows the
+        # user's own unsaved work; re-loading would discard it, and there is
+        # nothing to propose because nothing about the session changes except
+        # which tab is in front.
+        if manager is not None:
+            existing = manager.find(file_path, area_num)
+            if existing is not None:
+                return bool(self.ActivateSession(existing))
+
+        # The wire carries level *names*, never paths - peers resolve them
+        # against their own stage folder - so the proposal is named from the
+        # node rather than from the path that follows it.
+        level_name = file_name or ''
+
+        if not self._levelio._ProposeCollabSwitch(level_name, area_num):
+            # A client whose host has not agreed. The host's broadcast will
+            # perform the load if it does agree, so there is nothing to do here
+            # but stop.
+            return False
+
+        # Case 2: this file is open, another area of it. Adding a session on
+        # the shared handle rather than re-reading the archive is what keeps
+        # the other areas' unsaved edits alive (phase D-4).
+        open_sessions = manager.sessions_for(file_path) if manager else []
+
+        if open_sessions:
+            if self.fileSavePath == file_path:
+                return bool(self.SwitchToArea(area_num))
+
+            # Open, but not as the file in front - so `SwitchToArea`, which
+            # works on whatever is active, would open an area of the wrong
+            # level. Activate one of this file's own sessions first; that puts
+            # its path in front, and the area switch is then a switch within
+            # the right file.
+            #
+            # Reloading instead is what the first version did, and it is not
+            # merely wasteful: the reload builds a second set of scene items
+            # over a level whose sessions are still live, and the editor dies
+            # with "wrapped C/C++ object of type ObjectItem has been deleted".
+            self.ActivateSession(open_sessions[0])
+            if self.fileSavePath == file_path:
+                return bool(self.SwitchToArea(area_num))
+
+        # Case 3: not open at all - so open it *alongside* what is already
+        # there (D-d.3b). This is what the tree is for: "opening areas from
+        # different levels simultaneously is of course one of the main features
+        # we wanted to implement with the tree view" (Zement, 2026-09-01).
+        #
+        # No CheckDirty here, and that is the point rather than an omission.
+        # It asks "does unsaved work stand in the way of *replacing* what is
+        # open" - and nothing is being replaced. The other file stays open,
+        # with its edits, in its own tab.
+        return bool(self.LoadLevel(file_path, True, area_num, add=True))
+
+    def ShowGamePatches(self):
+        """Put the installed-patch list into sidebar slice 2 (D-d.2c).
+
+        A context-sensitive section like the directory listing. It was a rail
+        *page* until Zement's 2026-09-01 report: "Game Patches panel/tree does
+        not have a collapsible header element and close button. All panels
+        should have the same header." It had none because a page is not a
+        section - see `Sidebar.addSection`.
+        """
+        if self.sidebar is None:
+            return None
+
+        existing = self.sidebar.sectionFor(
+            getattr(self, 'patchListWidget', None))
+        if existing is not None:
+            self.sidebar.showSections()
+            return existing
+
+        from reggie.ui.patchlist import PatchListWidget
+
+        self.patchListWidget = PatchListWidget(self)
+        self.patchListSection = self.sidebar.addSection(
+            globals_.trans.string('MenuItems', 142),
+            self.patchListWidget,
+            stretch=1,
+            **section_heights('patches'),
+            on_close=self._closeGamePatches,
+            context=True)
+
+        # The list is built fresh each time this section is opened, so a
+        # collaboration restriction applied to the previous one went with it. A
+        # client that closed and re-opened the section would otherwise get a
+        # patch list it could use - and switching patch as a client pulls the
+        # tilesets out from under the session.
+        collab = getattr(self, '_collab', None)
+        if collab is not None:
+            try:
+                collab.applyEditingPermissions()
+            except Exception:
+                pass
+
+        return self.patchListSection
+
+    def _closeGamePatches(self):
+        """Take the patch list out of slice 2 and forget it."""
+        if self.sidebar is None:
+            return
+
+        existing = self.sidebar.sectionFor(
+            getattr(self, 'patchListWidget', None))
+        if existing is not None:
+            self.sidebar.removeSection(existing)
+
+        self.patchListWidget = None
+        self.patchListSection = None
+
+    def ShowHelpSection(self):
+        """Put the Help entries into sidebar slice 2 as a tree (D-d.2c).
+
+        Zement, 2026-09-01: "*Help* by the way should simply show the current
+        Help file menu contents as a tree in slice 2." It reads the existing
+        Help menu rather than listing the entries again, so an entry added to
+        the menu appears here with no second place to remember.
+        """
+        if self.sidebar is None:
+            return None
+
+        existing = self.sidebar.sectionFor(
+            getattr(self, 'helpTreeWidget', None))
+        if existing is not None:
+            self.sidebar.showSections()
+            return existing
+
+        from reggie.ui.helptree import HelpTreeWidget
+
+        self.helpTreeWidget = HelpTreeWidget(self)
+        self.helpTreeSection = self.sidebar.addSection(
+            globals_.trans.string('MenuItems', 88),
+            self.helpTreeWidget,
+            stretch=1,
+            **section_heights('help'),
+            on_close=self._closeHelpSection,
+            context=True)
+
+        return self.helpTreeSection
+
+    def _closeHelpSection(self):
+        """Take the Help tree out of slice 2 and forget it."""
+        if self.sidebar is None:
+            return
+
+        existing = self.sidebar.sectionFor(
+            getattr(self, 'helpTreeWidget', None))
+        if existing is not None:
+            self.sidebar.removeSection(existing)
+
+        self.helpTreeWidget = None
+        self.helpTreeSection = None
+
+    def _closeDirectoryListing(self):
+        """Take the directory listing out of slice 2 and forget it.
+
+        The widget really is dropped here, unlike the collab window: the tree
+        belongs to the sidebar rather than to a controller that outlives it, and
+        rebuilding it is one folder listing.
+        """
+        if self.sidebar is None:
+            return
+
+        widget = getattr(self, 'levelTreeWidget', None)
+
+        # Saved before the widget goes, so re-opening restores what was open
+        # rather than starting from a collapsed tree. Kept on the window rather
+        # than in settings: it describes this session's browsing, and a tree
+        # restored across a restart would be re-expanding levels the user may
+        # not want to wait for.
+        if widget is not None:
+            try:
+                self._levelTreeState = widget.captureState()
+            except Exception:
+                # A state that cannot be captured is worth losing; a section
+                # that cannot be closed is not.
+                self._levelTreeState = None
+
+        existing = self.sidebar.sectionFor(widget)
+        if existing is not None:
+            self.sidebar.removeSection(existing)
+
+        self.levelTreeWidget = None
+        self.levelTreeSection = None
+
+    def RefreshDirectoryListing(self, rebuild=False):
+        """Keep the tree in step with the sessions, or with the patch.
+
+        ``rebuild`` re-reads the Stage folder, which is what a patch switch
+        needs; without it only the bold-for-loaded marks are repainted, which is
+        what opening or closing an area needs. Guarded, because the tree is a
+        section the user may have closed.
+        """
+        widget = getattr(self, 'levelTreeWidget', None)
+        if widget is None:
+            return
+
+        try:
+            if rebuild:
+                widget.refresh()
+            else:
+                widget.refreshLoadedMarks()
+        except Exception:
+            # A stale tree is worse than none, but neither is worth failing a
+            # patch switch or a level load over.
+            pass
+
+    # -- the unsaved-levels section (Block D-d, phase D-d.3c) ------------
+
+    def RefreshUnsavedLevels(self):
+        """Show, hide or refill the unsaved-levels section.
+
+        Driven from ``UpdateTitle``, which is already "what the editor calls
+        whenever the dirty state may have moved" - the same hook the tab labels'
+        dirty markers use, and for the same reason. So this runs constantly,
+        including on paths with no sidebar, no manager and no session: every
+        step below is guarded, and the whole thing is a no-op when there is
+        nothing to describe.
+
+        "Hidden entirely when nothing is unsaved" (§6.5) is implemented as
+        *absent*, not hidden: an empty section still costs a header and a
+        divider in a column the user is short of, and the section is cheap to
+        rebuild.
+        """
+        # Even `getattr` can raise here. On a QMainWindow whose C++ half was
+        # never constructed, attribute lookup itself throws "super-class
+        # __init__() of type ReggieWindow was never called" - so the usual
+        # guard is not a guard at all. The collab suites build exactly such a
+        # window as a test double, and this method is reached from paths that
+        # run before and after a real window exists.
+        try:
+            sidebar = getattr(self, 'sidebar', None)
+        except RuntimeError:
+            return None
+
+        if sidebar is None:
+            return None
+
+        widget = getattr(self, 'unsavedLevelsWidget', None)
+
+        # §6.5's rule 4. A client that may not save must not be shown a list of
+        # things it cannot do - the same answer CheckDirty gives when it
+        # declines to prompt a client about work that is the host's to keep.
+        # Note what this does NOT do: it does not show the *host's* list on the
+        # client. Nothing on the wire carries the host's dirty state, and
+        # inventing a message for it belongs with the end-of-D-d collab work.
+        wanted = self._maySaveInSession() and bool(dirty_paths())
+
+        if not wanted:
+            if widget is not None:
+                self._closeUnsavedLevels()
+            return None
+
+        if widget is None:
+            from reggie.ui.unsavedlist import UnsavedLevelsWidget
+
+            self.unsavedLevelsWidget = UnsavedLevelsWidget(self)
+            self.unsavedLevelsSection = sidebar.addSection(
+                globals_.trans.string('MenuItems', 154),
+                self.unsavedLevelsWidget,
+                # A short list that should not eat the directory listing's
+                # height: it claims no share of the leftover space, and asks
+                # for enough room to read a few rows.
+                stretch=0,
+                **section_heights('unsaved'),
+                # No X. Every other section is something the user opened, so
+                # closing it is undoing that; this one is not - it is the
+                # editor reporting a state, and it goes on its own the moment
+                # that state does.
+                #
+                # It was closable at first, and the suite caught what that
+                # meant: `SetDirty` returns early when the level is *already*
+                # dirty, so after closing it by hand the section would not come
+                # back until the set of dirty files changed - which may be
+                # after the next save, or never. A button whose effect the
+                # editor silently undoes at an unpredictable later moment is
+                # worse than no button.
+                closable=False,
+                pinned=True)
+        else:
+            widget.refresh()
+
+        return self.unsavedLevelsSection
+
+    def _closeUnsavedLevels(self):
+        """Take the unsaved-levels section out of slice 2 and forget it.
+
+        Reached from ``RefreshUnsavedLevels`` alone - when the last file is
+        saved, or when a collab session takes the save authority away. The
+        section has no X of its own (see there), so there is no by-hand route.
+
+        Nothing is captured on the way out, unlike the directory listing: this
+        widget's contents are derived wholly from the manager and rebuild
+        identically next time, so there is no browsing state to lose.
+        """
+        sidebar = getattr(self, 'sidebar', None)
+        if sidebar is None:
+            return
+
+        existing = sidebar.sectionFor(getattr(self, 'unsavedLevelsWidget', None))
+        if existing is not None:
+            sidebar.removeSection(existing)
+
+        self.unsavedLevelsWidget = None
+        self.unsavedLevelsSection = None
+
+    def SaveLevelFile(self, file_path, session=None):
+        """Save one open file, whichever tab is in front.
+
+        **Activate, then save.** ``HandleSave`` reads ``globals_.Level`` and
+        ``self.fileSavePath``, and since D-d.3b both resolve through the *active
+        session* - so calling it without activating first would save whatever
+        tab happens to be current, under the name of the one that was asked for.
+
+        Parameterising ``HandleSave`` with a path was the alternative and was
+        rejected: the compression, padding, autosave, undo-clear and collab
+        steps all read the active session too, so it would not be one parameter
+        but a second save path over a second source of truth - and a second save
+        path is how areas got dropped before D-b.
+
+        The visible cost is that saving an entry brings its tab to the front.
+        That is left visible on purpose: it is the honest reflection of an
+        editor whose save acts on the level in front, and it is what the user
+        would do by hand. Restoring the previous tab afterwards would make Save
+        All flicker through every dirty file and would hide which file was
+        actually written.
+
+        ``session`` names *which* level when the path cannot. A level that has
+        never been saved has no path, so two new levels both answer ``None``
+        and ``sessions_for(None)`` finds neither - unsaved handles are not in
+        `_handles`, which is keyed by path (D-d.3b). Without it a New Level
+        listed correctly and then could not be saved from the list at all, and
+        Save All gave up on it without touching the other files (measured
+        2026-09-01). For a file that *has* a path the session is redundant, and
+        the path still wins - a row may have been saved under a new name since
+        it was built.
+
+        Saving a pathless level lands in ``HandleSave``, which delegates to
+        Save As for exactly this case. So the user gets the file dialog, which
+        is the only possible answer to "save a level with no name".
+        """
+        manager = globals_.get_session_manager()
+        if manager is None:
+            return False
+
+        # `session` is a handle when it comes from the unsaved list, which
+        # carries handles since the dirty flag moved onto them. Both are
+        # accepted: a handle names the level, a session names the level *and* a
+        # tab, and this only ever needed the level.
+        handle = getattr(session, 'handle', session)
+
+        if file_path:
+            sessions = manager.sessions_for(file_path)
+        elif session is not None and session in manager.sessions:
+            sessions = [session]
+        elif handle is not None and handle in manager.dirty_handles():
+            sessions = handle.sessions()
+        else:
+            # No path and no session: nothing to identify a level by.
+            return False
+
+        if not sessions:
+            # A level whose tabs are all closed but whose edits are still held
+            # (see `SessionManager.close`). There is no session to activate, so
+            # one is opened - saving reads the *active* session, and this is the
+            # only way to give it one. The tab is the honest consequence: the
+            # user is about to be shown what is being written.
+            if handle is None or handle not in manager.dirty_handles():
+                # Closed, or saved, between the list being built and the row
+                # being double-clicked. Nothing to save, nothing to report.
+                return False
+
+            if not self.ReopenDirtyHandle(handle):
+                return False
+
+            sessions = handle.sessions()
+            if not sessions:
+                return False
+
+            file_path = handle.file_path
+
+        # Already in front? For a named file any session on it will do, since
+        # they share the level a save writes. For a pathless one, only the
+        # session itself identifies it - `file_path == file_path` would be
+        # `None == None`, which is true of every unsaved level.
+        active = manager.active
+        if file_path:
+            in_front = active is not None and active.file_path == file_path
+        else:
+            in_front = active in sessions
+
+        if not in_front and not self.ActivateSession(sessions[0]):
+            return False
+
+        return bool(self._levelio.HandleSave())
+
+    def SaveAllDirtyLevels(self):
+        """Save every open file with unsaved work. Returns whether all of them
+        were written.
+
+        **The active file is saved last** when it is among the dirty ones, so
+        the user ends on the tab they started on. Saving in ``dirty_files()``
+        order would leave them on whichever file sorted last, which is an
+        arbitrary place to be put by a button that says "Save All".
+
+        Stops at the first failure rather than pressing on: a save that fails
+        has already shown the user a dialog, and continuing would stack more of
+        them on top of a question they have not answered.
+
+        **Levels that have never been saved are skipped** (Zement, 2026-09-01:
+        "those *have to go through* the Save dialog path once, so that a file
+        name and file path is chosen. If this hasn't happened yet, then we can't
+        bulk-save this level, and should simply skip it"). Right: a bulk action
+        that stops to ask a question per level is not a bulk action, and one
+        cancelled dialog would abandon the files after it. They stay reachable
+        by double-clicking the row, which opens the Save dialog as it should,
+        and the list marks them so it is visible why they were left.
+
+        Skipping them does **not** make this return False. Nothing failed -
+        there was simply nothing this action could do for them, which is what
+        "skip" means.
+
+        Works on ``(path, session)`` pairs rather than paths for the reason
+        ``SaveLevelFile`` takes a session - an unsaved level has no path to
+        name it by.
+        """
+        return self.SaveLevelFiles([e for e in dirty_entries() if e[0]])
+
+    def SaveLevelFiles(self, entries):
+        """Save each of ``entries``, the active file last.
+
+        The shared body of Save All and the Save button, which differ only in
+        which rows they are handed - every row, or the selected ones. Saving the
+        active file last is what leaves the user on the tab they started on
+        (D-d.3c); doing it in list order would put them on whichever row sorted
+        last, which is an arbitrary place for a button to leave them.
+        """
+        entries = list(entries or ())
+        if not entries:
+            return True
+
+        manager = globals_.get_session_manager()
+        active = manager.active if manager is not None else None
+
+        if active is not None:
+            handle = getattr(active, 'handle', None)
+
+            # By handle rather than by path, so an unsaved level in front is
+            # recognised as the active one too. A row carries a handle since
+            # the dirty flag moved onto them, so `getattr(x, 'handle', x)`
+            # reads both - a session through its handle, a handle as itself.
+            def owner(entry):
+                return getattr(entry[1], 'handle', entry[1])
+
+            rest = [e for e in entries if owner(e) is not handle]
+            mine = [e for e in entries if owner(e) is handle]
+            entries = rest + mine
+
+        for path, holder in entries:
+            if not self.SaveLevelFile(path, holder):
+                return False
+
+        return True
+
+    # -- discarding (D-d.3d) ---------------------------------------------
+
+    def DiscardLevelFiles(self, entries, confirm=True):
+        """Throw away unsaved changes in each of ``entries``, after confirming.
+
+        **Reloads each file from disk** rather than merely clearing its dirty
+        flag (Zement's choice, 2026-09-01). That is what "discard my changes"
+        means everywhere else, and the alternative is worse than it looks: an
+        editor still showing edits it claims are saved, to be lost silently on
+        close. It costs a reload and clears that level's undo history, which is
+        the price of the operation being real rather than cosmetic.
+
+        A level that has **never been saved** is skipped: there is no file to
+        reload, so discarding it could only mean closing its tab, and a bulk
+        action should not close tabs. The buttons mark those rows and disable
+        themselves when they are all there is.
+
+        One confirmation for the whole set, naming how many. Not suppressible:
+        the action is unrecoverable and takes the undo stack with it, so a
+        "don't ask again" would turn that into one click. ``confirm=False`` is
+        for the headless suites, which have no one to answer a dialog.
+        """
+        entries = [e for e in (entries or ()) if e[0]]
+        if not entries:
+            # Nothing this action can act on - every row was a never-saved
+            # level, or there were no rows. Not a failure, the same way Save All
+            # skipping them is not: there was simply nothing to do. Returning
+            # False here would make "Discard All with only a new level open"
+            # look like an error to the caller.
+            return True
+
+        if confirm and not self._confirmDiscard(entries):
+            # The user said no. Reported as False so a caller can tell "nothing
+            # was discarded" from "everything was" - which is the one place the
+            # distinction matters, and is not the same question as whether
+            # anything went wrong.
+            return False
+
+        manager = globals_.get_session_manager()
+        if manager is None:
+            return False
+
+        # The paths, not the sessions: reloading replaces the sessions on a
+        # file, so a session captured now may not survive its own reload.
+        paths = []
+        for path, _holder in entries:
+            if path not in paths:
+                paths.append(path)
+
+        # Where the user was, so they can be put back. Unlike saving, ordering
+        # is not enough here: a reload *always* activates the file it read, so
+        # discarding a file that was not in front would leave the user looking
+        # at it (measured 2026-09-01 - discard 01-02 from 01-01, and the editor
+        # ends up on 01-02). The path and area are remembered rather than the
+        # session, because a reloaded file's sessions are new objects.
+        active = manager.active
+        was = ((active.file_path, active.area_num)
+               if active is not None else None)
+
+        # The file in front last anyway, so the common case needs no restoring
+        # and the uncommon one has less to undo.
+        current = was[0] if was else None
+        if current in paths:
+            paths = [p for p in paths if p != current] + [current]
+
+        ok = True
+        for path in paths:
+            if not self.DiscardLevelFile(path):
+                ok = False
+
+        if was is not None:
+            survivor = manager.find(was[0], was[1])
+            if survivor is not None and manager.active is not survivor:
+                self.ActivateSession(survivor)
+
+        return ok
+
+    def DiscardAllDirtyLevels(self, confirm=True):
+        """Discard every dirty file, skipping levels that were never saved."""
+        return self.DiscardLevelFiles(
+            [e for e in dirty_entries() if e[0]], confirm=confirm)
+
+    def _confirmDiscard(self, entries):
+        """Ask once for the whole set. Returns whether to go ahead."""
+        names = []
+        for path, _holder in entries:
+            label = os.path.basename(path or '')
+            if label not in names:
+                names.append(label)
+
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        box.setWindowTitle(globals_.trans.string('MenuItems', 161))
+        box.setText(globals_.trans.string(
+            'MenuItems', 162, '[count]', len(names)))
+        box.setInformativeText('%s\n\n%s' % (
+            '\n'.join('    ' + name for name in names),
+            globals_.trans.string('MenuItems', 163)))
+        box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Discard
+                               | QtWidgets.QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+
+        return box.exec() == QtWidgets.QMessageBox.StandardButton.Discard
+
+    def DiscardLevelFile(self, file_path):
+        """Reload one file from disk, throwing away its unsaved changes.
+
+        Activate-then-reload, the same shape as ``SaveLevelFile`` and for the
+        same reason: `LoadLevel` works on the session in front.
+
+        The areas that were open stay open. Reloading is done by re-opening each
+        of them, so a file with areas 1 and 3 showing comes back with areas 1
+        and 3 showing - discarding edits is not meant to rearrange the tabs.
+        """
+        if not file_path:
+            return False
+
+        manager = globals_.get_session_manager()
+        if manager is None:
+            return False
+
+        sessions = manager.sessions_for(file_path)
+        if not sessions:
+            # A dirty level with no tabs left, kept in memory by
+            # `SessionManager.close`. Discarding it is simply letting go: there
+            # is nothing on screen to reload into, and reopening the file later
+            # reads it from disk, which is exactly the state being asked for.
+            handle = manager.handle_for(file_path)
+            if handle is not None and handle.dirty:
+                manager.discard_dirty_handle(handle)
+                self.RefreshUnsavedLevels()
+                self.RefreshDirectoryListing()
+                self.UpdateTitle()
+                return True
+
+            return False
+
+        areas = sorted({s.area_num for s in sessions})
+        name = os.path.splitext(os.path.basename(file_path))[0]
+
+        # Refuse to leave the editor with nothing open. Zement's rule is that
+        # one area stays loaded at all times, and discarding the only open file
+        # would close its sessions before the reload could make new ones.
+        others = [s for s in manager.sessions if s.file_path != file_path]
+        if not others:
+            return self._discardOnlyOpenFile(file_path, areas)
+
+        # Clear dirty first, so nothing on the way through asks the user to save
+        # what they have just asked to throw away.
+        manager.clear_dirty_for_file(file_path)
+
+        # **Every** session on the file, so the handle is released. Keeping one
+        # would defeat the whole operation: `add_level` reuses the handle keyed
+        # by that path, so the freshly read level would be dropped in favour of
+        # the edited one still in memory.
+        globals_.DirtyOverride += 1
+        try:
+            for session in list(sessions):
+                # A discard replaces every session on the file with a fresh one
+                # read from disk, so a page bound to any of them is bound to
+                # something about to be disposed (D-d.4).
+                self.CloseSessionPagesFor(session)
+                manager.close(session)
+
+            self.ActivateSession(manager.active)
+
+            self.LoadLevel(file_path, True, areas[0], add=True)
+            for area_num in areas[1:]:
+                self.OpenLevelFromTree(file_path, name, area_num)
+        finally:
+            globals_.DirtyOverride -= 1
+
+        self.tabs.sync()
+        self.UpdateTitle()
+        self.RefreshDirectoryListing()
+        return True
+
+    def _discardOnlyOpenFile(self, file_path, areas):
+        """Discard the file when it is the only one open.
+
+        The sessions cannot be closed first - that would leave the editor with
+        no level at all, which Zement's rule forbids - so this reloads over them
+        with ``open_level`` instead, which closes them itself as part of putting
+        the fresh copy up. The extra areas are re-opened afterwards, as above.
+        """
+        manager = globals_.get_session_manager()
+        manager.clear_dirty_for_file(file_path)
+
+        name = os.path.splitext(os.path.basename(file_path))[0]
+
+        # `LoadLevel` skips the read when asked for the level it already has in
+        # front - which is the whole point here, so the skip has to be
+        # suppressed. This is the flag CheckDirty's own Discard button already
+        # sets for the same reason; without it the load takes the "same level"
+        # path and rebuilds the palette over items it has just destroyed
+        # ("wrapped C/C++ object of type ObjectItem has been deleted").
+        self.justDiscardedChanges = True
+
+        globals_.DirtyOverride += 1
+        try:
+            self.LoadLevel(file_path, True, areas[0])
+            for area_num in areas[1:]:
+                self.OpenLevelFromTree(file_path, name, area_num)
+        finally:
+            globals_.DirtyOverride -= 1
+
+        self.tabs.sync()
+        self.UpdateTitle()
+        self.RefreshDirectoryListing()
+        return True
+
     def HandleShowUndoHistory(self, checked=None):
         """
         Toggles the undo history section in sidebar slice 2 (D-c.6)
@@ -1345,11 +2675,14 @@ class ReggieWindow(QtWidgets.QMainWindow):
             # references in the same state the menu entry would, or the two
             # disagree about whether the section is up.
             on_close=self.HandleShowUndoHistory,
-            # Zement's numbers (2026-08-30). The default is a starting height
-            # the user can drag away from, not a rule; the maximum stops a long
-            # history from taking the whole sidebar.
-            default_height=UNDO_SECTION_DEFAULT_HEIGHT,
-            max_height=UNDO_SECTION_MAX_HEIGHT)
+            # Zement's numbers (2026-09-04). The maximum is gone with every
+            # other section's: the content scrolls inside its host now, so a
+            # long history cannot make its section grow in the first place.
+            **section_heights('undo'),
+            # An explicit key, because this section's *title* names the level
+            # and area it is showing and so changes on every switch - a dragged
+            # height saved under one would never be found again (D-d.3d).
+            key='Undo History')
 
         self._SyncUndoHistoryAction(True)
 
@@ -1442,6 +2775,32 @@ class ReggieWindow(QtWidgets.QMainWindow):
             self._collab = CollabController(self)
 
         self._collab.showSetupDialog()
+
+    def ShowCollaboration(self):
+        """The rail's Collaborate entry (D-d.5).
+
+        One entry, two meanings, decided by whether a session is running:
+
+        - **no session** - the host/join dialog, exactly as the menu entry does.
+          Nothing to show in a panel yet, and a panel that said "not connected"
+          would be a row of nothing taking a share of slice 2.
+        - **session running** - toggle the roster-and-chat section, the way the
+          Logs/Undo entry toggles the undo history. Toggling is right here for
+          the same reason: a rail entry for a panel that is already up should
+          put it away, and the session is untouched either way.
+
+        The controller is created lazily by HandleCollaborate, and deliberately
+        not created here: an entry that has never been used should not pull in
+        the collab package just to answer "is a session running?" - the answer
+        with no controller is no.
+        """
+        controller = getattr(self, '_collab', None)
+
+        if controller is None or not controller.is_active:
+            self.HandleCollaborate()
+            return
+
+        controller.toggleStatusPanel()
 
     # Cut/Copy/Paste + ReggieClip encode/decode/place extracted to
     # reggie.ui.clipboard.ClipboardController (Phase 2 — see
@@ -2214,14 +3573,15 @@ class ReggieWindow(QtWidgets.QMainWindow):
     def HandleSaveCopyAs(self):
         return self._levelio.HandleSaveCopyAs()
 
-    def LoadLevel(self, name, isFullPath, areaNum):
-        return self._levelio.LoadLevel(name, isFullPath, areaNum)
+    def LoadLevel(self, name, isFullPath, areaNum, add=False):
+        return self._levelio.LoadLevel(name, isFullPath, areaNum, add=add)
 
-    def newLevel(self):
-        return self._levelio.newLevel()
+    def newLevel(self, add=False):
+        return self._levelio.newLevel(add=add)
 
-    def LoadLevel_NSMBW(self, levelData, areaNum):
-        return self._levelio.LoadLevel_NSMBW(levelData, areaNum)
+    def LoadLevel_NSMBW(self, levelData, areaNum, add=False, file_path=None):
+        return self._levelio.LoadLevel_NSMBW(levelData, areaNum, add=add,
+                                             file_path=file_path)
 
     def HandleExit(self):
         """
@@ -2739,7 +4099,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.entranceEditorDock.setVisible(False)
         self.pathEditorDock.setVisible(False)
         self.locationEditorDock.setVisible(False)
-        self.defaultPropDock.setVisible(False)
+        self.HideDefaultProps()
 
         # state: determines positions of docks
         # geometry: determines the main window position
@@ -3299,7 +4659,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
             if 0 <= nt <= 3:
                 self.objPicker.ShowTileset(nt)
                 eval('self.objTS%dTab' % nt).setLayout(self.createObjectLayout)
-            self.defaultPropDock.setVisible(False)
+            self.HideDefaultProps()
 
         globals_.CurrentPaintType = nt
 
@@ -3425,7 +4785,7 @@ class ReggieWindow(QtWidgets.QMainWindow):
             self.defaultPropButton.setEnabled(True)
         else:
             self.defaultPropButton.setEnabled(False)
-            self.defaultPropDock.setVisible(False)
+            self.HideDefaultProps()
             self.defaultDataEditor.update()
 
     def _onSpriteImageLoadingProgress(self, current, total):
@@ -3486,10 +4846,65 @@ class ReggieWindow(QtWidgets.QMainWindow):
         self.sprPicker.SetSearchString(text)
 
     def ShowDefaultProps(self):
+        """Open Default Properties as a sidebar section (D-d.5).
+
+        It was a floating QDockWidget, opened by a button under the sprite
+        picker. **Moved and not redesigned** (§3.7): the editor widget inside it
+        is unchanged, and only where it appears is different.
+
+        Below the undo history, as an always-open section. It is a *selection*
+        follower rather than a session-bound page, so D-d.4's one-per-area rule
+        does not apply - it always means "the sprite currently picked", which is
+        what the editor is for, and there is only ever one of those.
         """
-        Handles the Show Default Properties button being clicked
+        if self.sidebar is None:
+            # No shell: the dock is still there and still works.
+            self.defaultPropDock.setVisible(True)
+            return
+
+        editor = self.defaultDataEditor
+
+        existing = self.sidebar.sectionFor(editor)
+        if existing is not None:
+            self.sidebar.showSections()
+            return
+
+        # Out of the dock before into the section, or it would be a child of
+        # two parents - the dock keeps its pointer and would show an empty
+        # frame if the user ever floated it.
+        self.defaultPropDock.setVisible(False)
+        self.defaultPropDock.setWidget(None)
+
+        editor.setVisible(True)
+
+        self.defaultPropSection = self.sidebar.addSection(
+            globals_.trans.string('Palette', 7), editor,
+            on_close=self.HideDefaultProps,
+            **section_heights('defaultprops'),
+            key='Default Properties')
+
+    def HideDefaultProps(self):
+        """Put Default Properties away, from wherever it currently is.
+
+        Four callers, all meaning "there is nothing to show properties for any
+        more": the window closing, the object tab changing, and a sprite being
+        deselected. Written as one method because the dock and the section are
+        two answers to that and neither caller should have to know which.
         """
-        self.defaultPropDock.setVisible(True)
+        dock = getattr(self, 'defaultPropDock', None)
+        if dock is not None:
+            dock.setVisible(False)
+
+        sidebar = getattr(self, 'sidebar', None)
+        editor = getattr(self, 'defaultDataEditor', None)
+
+        if sidebar is None or editor is None:
+            return
+
+        host = sidebar.sectionFor(editor)
+        if host is not None:
+            sidebar.removeSection(host)
+            self.defaultPropSection = None
 
     def HandleSprPosChange(self, obj, oldx, oldy, x, y):
         """
@@ -3858,14 +5273,28 @@ class ReggieWindow(QtWidgets.QMainWindow):
             except Exception as e:
                 print(f"[QPT] Warning: Could not reset QPT: {e}")
 
-    def HandleAreaOptions(self):
+    def HandleAreaOptions(self, session=None):
         """
         Pops up the options for Area Dialogue
-        """
-        dlg = deferred.AreaOptionsDialog()
-        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
 
+        A session-bound page since D-d.4: it applies to the area it was opened
+        for, not to whichever tab happens to be in front when OK is pressed.
+        """
+        return self.OpenSessionPage(
+            tooltabs.AREA_SETTINGS,
+            deferred.AreaOptionsDialog,
+            globals_.trans.string('AreaDlg', 0),
+            self._applyAreaOptions,
+            session=session)
+
+    def _applyAreaOptions(self, dlg):
+        """Everything the handler did after ``exec()`` returned.
+
+        Not one line of this changed when it moved (D-d.4). It goes on reading
+        ``globals_.Area``, ``self.undoStack`` and ``RefreshTilesetsFromArea()``
+        - and it is correct, because ``SessionBoundPage.applyNow`` has pointed
+        all three at the session this form was opened for.
+        """
         SetDirty()
 
         before = {attr: getattr(globals_.Area, attr) for attr in self._AREA_SETTINGS_ATTRS}
@@ -3912,17 +5341,25 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 before, after, globals_.trans.string('Undo', 51),
                 refresh_tilesets=True))
 
-    def HandleZones(self):
+    def HandleZones(self, session=None):
         """
         Pops up the options for Zone dialog
+
+        Session-bound since D-d.4, and the one of the five where a wrong binding
+        would *crash* rather than corrupt: the apply below moves ``ZoneItem``s
+        in and out of ``self.scene``, which is per session since D-c.1.
         """
         LoadZoneThemes()
 
-        dlg = deferred.ZonesDialog()
-        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            self.levelOverview.update()
-            return
+        return self.OpenSessionPage(
+            tooltabs.ZONE_SETTINGS,
+            deferred.ZonesDialog,
+            globals_.trans.string('ZonesDlg', 0),
+            self._applyZones,
+            session=session)
 
+    def _applyZones(self, dlg):
+        """Everything the handler did after ``exec()`` returned (D-d.4)."""
         SetDirty()
 
         zones_before = undo.snapshot_zones()
@@ -4002,14 +5439,21 @@ class ReggieWindow(QtWidgets.QMainWindow):
                 zones_before, zones_after, globals_.trans.string('Undo', 50)))
 
     # Handles setting the backgrounds
-    def HandleBG(self):
+    def HandleBG(self, session=None):
         """
         Pops up the Background settings Dialog
-        """
-        dlg = deferred.BGDialog()
-        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
 
+        Session-bound since D-d.4.
+        """
+        return self.OpenSessionPage(
+            tooltabs.BACKGROUNDS,
+            deferred.BGDialog,
+            globals_.trans.string('BGDlg', 0),
+            self._applyBG,
+            session=session)
+
+    def _applyBG(self, dlg):
+        """Everything the handler did after ``exec()`` returned (D-d.4)."""
         SetDirty()
 
         zones_before = undo.snapshot_zones()
@@ -4134,12 +5578,17 @@ class ReggieWindow(QtWidgets.QMainWindow):
         """
         DiagnosticToolDialog().exec()
 
-    def HandleCameraProfiles(self):
-        """Pops up the options for camera profiles"""
-        dlg = CameraProfilesDialog()
-        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
+    def HandleCameraProfiles(self, session=None):
+        """Pops up the options for camera profiles. Session-bound since D-d.4."""
+        return self.OpenSessionPage(
+            tooltabs.CAMERA_PROFILES,
+            CameraProfilesDialog,
+            globals_.trans.string('CamProfsDlg', 0),
+            self._applyCameraProfiles,
+            session=session)
 
+    def _applyCameraProfiles(self, dlg):
+        """Everything the handler did after ``exec()`` returned (D-d.4)."""
         camprofiles = []
         for row in range(dlg.list.count()):
             item = dlg.list.item(row)

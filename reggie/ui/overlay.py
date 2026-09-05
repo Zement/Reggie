@@ -46,6 +46,11 @@ MIN_HEIGHT_PCT = MIN_SIZE_PCT
 MAX_HEIGHT_PCT = MAX_SIZE_PCT
 DEFAULT_HEIGHT_PCT = DEFAULT_SIZE_PCT
 
+#: Corner radius of anything floating over the canvas, in pixels. Nearly square
+#: (Zement, 2026-09-03) - the flyout's buttons round to the same amount, so the
+#: bar and the things in it share one shape.
+OVERLAY_CORNER_RADIUS = 1
+
 #: Default opacity of the overlay's background, as a percentage.
 MIN_OPACITY_PCT = 5.0
 MAX_OPACITY_PCT = 100.0
@@ -97,6 +102,37 @@ def configured_opacity_pct():
 
     return _clamped_pct('OverviewOpacityPct', DEFAULT_OPACITY_PCT,
                         MIN_OPACITY_PCT, MAX_OPACITY_PCT)
+
+
+def canvas_overlay_colour():
+    """The background colour for anything floating over the level canvas.
+
+    Qt-native, not theme.color('bg'). The theme's `bg` is the *canvas* colour,
+    which is exactly what this must not match - against it the overview was
+    invisible (Zement, 2026-08-29). Taken from the running palette, so it
+    follows a light or dark theme with no setting of its own.
+
+    Midlight on a light theme rather than Mid: Mid reads as a shadow, and plain
+    Light would clash with the overview's own terrain depiction (Zement,
+    2026-09-03). Dark on a dark theme, since Midlight there is nearly black.
+
+    The light/dark question is answered by *the palette*, not by
+    QStyleHints.colorScheme(). colorScheme() reports what the operating system
+    is set to, and a style or platform theme can hand the application a palette
+    that disagrees; asking the palette whose colour is about to be read cannot.
+    It also needs Qt 6.5 and can answer Unknown.
+
+    Read once per widget, at construction. A theme switched while Reginald is
+    running leaves both callers stale until restart - acceptable while nothing
+    else in the program follows a live theme change either.
+    """
+    palette = QtWidgets.QApplication.instance().palette()
+
+    dark = palette.color(QtGui.QPalette.ColorRole.Window).lightness() < 128
+    role = (QtGui.QPalette.ColorRole.Dark if dark
+            else QtGui.QPalette.ColorRole.Midlight)
+
+    return palette.color(role)
 
 
 class _ResizeGrip(QtWidgets.QWidget):
@@ -159,7 +195,270 @@ class _ResizeGrip(QtWidgets.QWidget):
             event.accept()
 
 
-class CanvasOverlay(QtWidgets.QFrame):
+def _canvasSiblings(parent):
+    """Every canvas overlay sharing a canvas with a child of ``parent``.
+
+    Searched from the **tab container** down rather than among ``parent``'s own
+    children, because the two kinds do not share a parent: the overview is a
+    child of the container, a sub-tab flyout of one page inside it. A search of
+    either one's siblings alone finds only itself.
+    """
+    top = parent
+    for _ in range(4):
+        if hasattr(top, 'currentCanvas'):
+            break
+        nxt = top.parentWidget()
+        if nxt is None:
+            break
+        top = nxt
+
+    return top.findChildren(CanvasWidget)
+
+
+class CanvasWidget(QtWidgets.QFrame):
+    """Base for anything that floats over the canvas.
+
+    Lifted out of ``CanvasOverlay`` at D-d.4b, when the sub-tab flyout became
+    the second such thing and immediately grew the two problems the overview had
+    already solved: it looked wrong against the canvas without a background of
+    its own, and it collided with whatever else was floating in the same corner
+    (Zement, 2026-09-03).
+
+    What lives here is what every canvas overlay needs and none of them should
+    solve twice:
+
+    - **the translucent background**, at the user's configured opacity, going
+      solid on hover
+    - **the rectangle to sit in** - the canvas *viewport*, not the container,
+      so nothing lands on the scrollbars
+    - **corner placement with a margin**, and the stacking that keeps two
+      overlays in one corner off each other
+
+    Zement asked for exactly this consolidation and named the next caller: a
+    hotkey info panel to replace the one QPT carries.
+    """
+
+    #: True for a subclass whose children paint over the palette's background -
+    #: the sub-tab flyout's buttons do. Those get their fill from ``paintEvent``
+    #: with a real brush instead, since a palette colour under an opaque child
+    #: is simply not visible.
+    PAINTS_OWN_BACKGROUND = False
+
+    def __init__(self, parent, margin=12):
+        super().__init__(parent)
+
+        self.margin = margin
+        self._backgroundBrush = None
+
+        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self.setAutoFillBackground(True)
+
+        # A background of its own, so the widget is not invisible against the
+        # canvas - Zement's report, 2026-08-29. Shared with the level overview
+        # so the two cannot drift apart; see canvas_overlay_colour().
+        self._baseColour = canvas_overlay_colour()
+
+        self._hovered = False
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
+
+    # -- opacity ---------------------------------------------------------
+
+    def _applyOpacity(self):
+        """Paint the background at the configured opacity.
+
+        An alpha on the background colour rather than setWindowOpacity or a
+        QGraphicsOpacityEffect: both of those fade the *contents* too, and what
+        is drawn on top is the part that must stay readable - it is the
+        background the user wants out of the way. Alpha on the brush leaves the
+        contents at full strength.
+
+        Hovering restores full opacity, so pointing at the thing to use it makes
+        it solid. Focus would be the better trigger, but these frames are not
+        focusable and giving one focus would steal it from the canvas mid-edit;
+        hover is what Zement offered as sufficient, and it is also the correct
+        choice here.
+        """
+        colour = QtGui.QColor(self._baseColour)
+        alpha = int(255 * configured_opacity_pct() / 100.0)
+
+        if not self._hovered:
+            colour.setAlpha(alpha)
+
+        palette = self.palette()
+        palette.setColor(QtGui.QPalette.ColorRole.Window, colour)
+        self.setPalette(palette)
+
+        # A translucent background needs the parent painted behind it, which
+        # autoFillBackground alone does not arrange.
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground,
+                          colour.alpha() < 255)
+
+        # Palette-driven fill only where nothing else paints over it. A frame
+        # whose children draw their own backgrounds - the sub-tab flyout's
+        # buttons - hides the palette entirely, so those paint the brush
+        # themselves in paintEvent. Turning autoFill *off* there is what stops
+        # Qt filling the rect opaquely underneath (Zement, 2026-09-03: the
+        # opacity "seems to be applied to the icons or maybe the border, but
+        # not the background color").
+        self.setAutoFillBackground(not self.PAINTS_OWN_BACKGROUND)
+
+        self._backgroundBrush = QtGui.QBrush(colour)
+        self._opacityApplied(255 if self._hovered else alpha)
+        self.update()
+
+    def paintEvent(self, event):
+        """Fill the background at the configured alpha, then paint as usual.
+
+        A QBrush drawn here rather than a palette colour, for the reason the
+        level overview already had to solve once: the alpha has to land on the
+        *background* and nothing else. A palette Window colour is painted by
+        each child under its own content, so the icons faded and the background
+        did not - the opposite of what the setting means.
+        """
+        if self.PAINTS_OWN_BACKGROUND and self._backgroundBrush is not None:
+            painter = QtGui.QPainter(self)
+            painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(self._backgroundBrush)
+            painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1),
+                                    OVERLAY_CORNER_RADIUS,
+                                    OVERLAY_CORNER_RADIUS)
+            painter.end()
+
+        super().paintEvent(event)
+
+    def _opacityApplied(self, alpha):
+        """Hook for subclasses whose contents paint their own background."""
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self._hovered = True
+        self._applyOpacity()
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self._hovered = False
+        self._applyOpacity()
+
+    # -- the rectangle to sit in -----------------------------------------
+
+    def _availableRect(self):
+        """The canvas area to sit within, excluding any scrollbars.
+
+        The parent is the tab container, whose page holds a QGraphicsView with
+        its own scrollbars. Sitting over them makes them unusable and looks like
+        a misalignment - Zement reported a 3-4px overlap - so the view's
+        viewport is the rectangle that counts, not the container's full width.
+        """
+        parent = self.parentWidget()
+        if parent is None:
+            return QtCore.QRect()
+
+        rect = parent.rect()
+        page = self._canvasWidget(parent)
+
+        viewport = getattr(page, 'viewport', None)
+        if viewport is not None:
+            # Map the viewport into the container's coordinates: the page sits
+            # below the tab bar, so its origin is not the container's.
+            vp = viewport()
+            top_left = vp.mapTo(parent, QtCore.QPoint(0, 0))
+            rect = QtCore.QRect(top_left, vp.size())
+
+        return rect
+
+    @staticmethod
+    def _canvasWidget(parent):
+        """The QGraphicsView behind ``parent``, whatever kind of parent it is.
+
+        Two kinds now, and they are found differently. The overview is a child
+        of the **tab container**, which knows which canvas is in front and
+        answers ``currentCanvas()``. The sub-tab flyout is a child of one
+        **page**, which holds exactly one canvas and has no such method - so
+        asking it for `currentCanvas` returns nothing and the rectangle silently
+        falls back to the page's full width. That is not cosmetic: the fallback
+        is 16px wider than the viewport, which is exactly the scrollbar the bar
+        was landing on (Zement, 2026-09-03).
+        """
+        current_canvas = getattr(parent, 'currentCanvas', None)
+        if current_canvas is not None:
+            found = current_canvas()
+            if found is not None:
+                return found
+
+        stack = getattr(parent, 'stack', None)
+        canvas = getattr(stack, 'canvas', None)
+        if canvas is not None:
+            return canvas()
+
+        if hasattr(parent, 'currentWidget'):
+            return parent.currentWidget()
+
+        return None
+
+    # -- stacking --------------------------------------------------------
+
+    def globalRect(self):
+        """This widget's geometry in screen coordinates.
+
+        Overlays over one canvas can have *different parents* - the overview is
+        a child of the tab container, a sub-tab flyout of one page inside it -
+        so their raw geometries are in different coordinate systems and
+        comparing them directly is meaningless. Everything that compares two
+        overlays goes through here.
+        """
+        return QtCore.QRect(self.mapToGlobal(QtCore.QPoint(0, 0)), self.size())
+
+    def topOverlap(self, band):
+        """How far down to start, to clear anything already inside ``band``.
+
+        ``band`` is where this overlay wants to sit, in **screen** coordinates.
+        Anything else floating over the canvas that would intersect it pushes
+        the answer down past its own bottom edge.
+
+        Rectangles rather than corner names, and that distinction is the fix for
+        Zement's 2026-09-03 report that top-right still collided. The first
+        version asked "is anything anchored in *my* corner", and the flyout's
+        anchor is the top **left** - so a top-right overview matched nothing and
+        moved not at all. But the flyout is not really cornered: it follows its
+        own tab along the top edge, so with enough tabs open it reaches the
+        right-hand side too, which is exactly the case he photographed. What
+        matters is whether the two would overlap, and only a rectangle can say.
+
+        Only the vertical direction is offset. Two things side by side would
+        each be somewhere unpredictable; stacked, the one that was there first
+        keeps its place.
+        """
+        parent = self.parentWidget()
+        if parent is None:
+            return 0
+
+        offset = 0
+        for sibling in _canvasSiblings(parent):
+            if sibling is self or not sibling.isVisible():
+                continue
+            if sibling.stacksBelow(self):
+                continue
+
+            rect = sibling.globalRect()
+            if not rect.intersects(band):
+                continue
+
+            offset = max(offset, rect.bottom() - band.top() + 1 + sibling.margin)
+
+        return offset
+
+    def stacksBelow(self, other):
+        """True if ``other`` should be the one to move.
+
+        Default: nothing moves for anything, and the subclass that is willing
+        to give way says so. The flyout is fixed to its tab, so the overview is
+        the one that yields.
+        """
+        return False
+
+
+class CanvasOverlay(CanvasWidget):
     """A frame pinned to a corner of the canvas, holding one widget.
 
     Owns the placement and the size; the widget inside knows nothing about
@@ -168,10 +467,9 @@ class CanvasOverlay(QtWidgets.QFrame):
     """
 
     def __init__(self, parent, content, margin=12):
-        super().__init__(parent)
+        super().__init__(parent, margin)
 
         self.content = content
-        self.margin = margin
         self._corner = configured_corner()
 
         # False until a drag or a settings change has sized this frame, so
@@ -187,17 +485,6 @@ class CanvasOverlay(QtWidgets.QFrame):
         # reason and leave the menu entry unticked after a visit to Preferences.
         self._userVisible = True
 
-        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
-        self.setAutoFillBackground(True)
-
-        # A background of its own, so the overview is not invisible against the
-        # canvas - Zement's report, 2026-08-29. Qt-native rather than from the
-        # theme file: the theme's `bg` is the canvas colour, which is exactly
-        # what it must NOT match. Mid/Dark come from the running palette, so
-        # this follows a light or dark system theme without a setting.
-        self._baseColour = self.palette().color(QtGui.QPalette.ColorRole.Mid)
-        self._hovered = False
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
         self._applyOpacity()
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -212,6 +499,15 @@ class CanvasOverlay(QtWidgets.QFrame):
         self.grip.show()
         self.grip.raise_()
 
+    def stacksBelow(self, other):
+        """The overview yields; the flyout is pinned to its tab and cannot."""
+        return True
+
+    def _opacityApplied(self, alpha):
+        content_bg = getattr(self.content, 'setBackgroundAlpha', None)
+        if content_bg is not None:
+            content_bg(alpha)
+
     # -- visibility ------------------------------------------------------
 
     def setUserVisible(self, visible):
@@ -225,55 +521,6 @@ class CanvasOverlay(QtWidgets.QFrame):
 
     def isEnabledByUser(self):
         return self._userVisible
-
-    # -- opacity ---------------------------------------------------------
-
-    def _applyOpacity(self):
-        """Paint the background at the configured opacity.
-
-        An alpha on the background colour rather than setWindowOpacity or a
-        QGraphicsOpacityEffect: both of those fade the *contents* too, and the
-        level drawing is the part that must stay readable - it is the background
-        the user wants out of the way. Alpha on the brush leaves the overview's
-        own painting at full strength.
-
-        Hovering restores full opacity, so pointing at the overview to use it
-        makes it solid. Focus would be the better trigger, but this frame is not
-        a focusable control and giving it focus would steal it from the canvas
-        mid-edit; hover is what Zement offered as sufficient, and it is also the
-        correct choice here.
-        """
-        colour = QtGui.QColor(self._baseColour)
-
-        if not self._hovered:
-            colour.setAlpha(int(255 * configured_opacity_pct() / 100.0))
-
-        palette = self.palette()
-        palette.setColor(QtGui.QPalette.ColorRole.Window, colour)
-        self.setPalette(palette)
-
-        # A translucent background needs the parent painted behind it, which
-        # autoFillBackground alone does not arrange.
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground,
-                          colour.alpha() < 255)
-        self.setAutoFillBackground(True)
-
-        content_bg = getattr(self.content, 'setBackgroundAlpha', None)
-        if content_bg is not None:
-            content_bg(255 if self._hovered
-                       else int(255 * configured_opacity_pct() / 100.0))
-
-        self.update()
-
-    def enterEvent(self, event):
-        super().enterEvent(event)
-        self._hovered = True
-        self._applyOpacity()
-
-    def leaveEvent(self, event):
-        super().leaveEvent(event)
-        self._hovered = False
-        self._applyOpacity()
 
     # -- placement -------------------------------------------------------
 
@@ -349,31 +596,6 @@ class CanvasOverlay(QtWidgets.QFrame):
         setSetting('OverviewWidthPct',
                    round(self.width() * 100.0 / area.width(), 2))
 
-    def _availableRect(self):
-        """The canvas area to sit within, excluding any scrollbars.
-
-        The parent is the tab container, whose page is a QGraphicsView with its
-        own scrollbars. Sitting over them makes them unusable and looks like a
-        misalignment - Zement reported a 3-4px overlap - so the view's viewport
-        is the rectangle that counts, not the container's full width.
-        """
-        parent = self.parentWidget()
-        if parent is None:
-            return QtCore.QRect()
-
-        rect = parent.rect()
-
-        page = parent.currentWidget() if hasattr(parent, 'currentWidget') else None
-        viewport = getattr(page, 'viewport', None)
-        if viewport is not None:
-            # Map the viewport into the container's coordinates: the page sits
-            # below the tab bar, so its origin is not the container's.
-            vp = viewport()
-            top_left = vp.mapTo(parent, QtCore.QPoint(0, 0))
-            rect = QtCore.QRect(top_left, vp.size())
-
-        return rect
-
     def reposition(self):
         """Move to the configured corner of the canvas, and place the grip."""
         area = self._availableRect()
@@ -399,6 +621,22 @@ class CanvasOverlay(QtWidgets.QFrame):
         bottom = area.bottom() - size.height() - margin + 1
 
         x = left if 'left' in self._corner else max(left, right)
+
+        # Start below anything that would overlap where this wants to sit - the
+        # sub-tab flyout, when the overview is in a top corner (Zement,
+        # 2026-09-03). Only the top corners can collide: the flyout hangs from
+        # the tab bar, so it is always along the top edge.
+        #
+        # Asked with the rectangle this would occupy, not with a corner name.
+        # The flyout follows its own tab horizontally, so it is not in a corner
+        # at all - with enough tabs open it reaches the right-hand side, which
+        # is the case a corner-name test missed entirely.
+        if 'top' in self._corner:
+            parent = self.parentWidget()
+            band = QtCore.QRect(
+                parent.mapToGlobal(QtCore.QPoint(int(x), int(top))), size)
+            top += self.topOverlap(band)
+
         y = top if 'top' in self._corner else max(top, bottom)
 
         self.move(int(x), int(y))

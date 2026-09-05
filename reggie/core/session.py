@@ -36,32 +36,65 @@ def _globals():
 def open_level(level, file_path, area_num=1):
     """Replace the editor's open level with ``level``, as a session.
 
-    Closes every open session and opens one on the new level. That is still the
-    right behaviour after phase D-4: this is reached only when a *new*
-    ``Level_NSMBW`` has been constructed - a new level, or a file read from disk
-    - and every session open against the previous level refers to areas of a
-    level object that is being replaced wholesale.
+    Closes every open session and opens one on the new level. That is what
+    "open a level" means for New Level, a patch switch and File -> Open: the
+    workspace is replaced.
 
     Moving between areas of the level already open does not come through here;
     it goes to :func:`open_area`, which adds a session rather than replacing
-    them. Opening several *files* at once is the UI block's concern, since it
-    needs somewhere to show them.
+    them. Opening a *second file* alongside this one goes to :func:`add_level`.
 
     Returns the new session, or None when no manager is installed - the
     headless suites construct levels with no editor around them.
     """
+    return _open(level, file_path, area_num, replace=True)
+
+
+def add_level(level, file_path, area_num=1):
+    """Open ``level`` *alongside* whatever is already open (D-d.3b).
+
+    The counterpart to :func:`open_level` for a second file. The directory
+    listing is its caller and, for now, its only one - which is deliberate:
+    opening several files belongs to the UI that can show several, and leaves
+    File -> Open behaving the way a file menu behaves.
+
+    This was always the intent. `_handles` is keyed by path and has been a dict
+    since D-b.2, so the model could hold several files from the start; the one
+    thing preventing it was ``open_level`` closing everything, whose docstring
+    said the rest: "opening several files at once is the UI block's concern,
+    since it needs somewhere to show them." D-c built the tab bar and D-d.3
+    built the way to ask, so the premise expired and nothing had claimed the
+    job (Zement, 2026-09-01: "it opens that area, but *closes* all others from
+    the previous level").
+
+    Separate verbs rather than a ``replace=`` flag, so each caller states its
+    intent at the call site. A default would let existing callers keep the
+    destructive behaviour by omission, which is how a flag comes to mean
+    nothing.
+    """
+    return _open(level, file_path, area_num, replace=False)
+
+
+def _open(level, file_path, area_num, replace):
     from reggie.core import globals_
 
     manager = globals_.get_session_manager()
     if manager is None:
         return None
 
-    manager.close_all()
+    if replace:
+        manager.close_all()
 
     # `level.areas` may still be empty here: Level_NSMBW.__init__ runs new()
     # before any area is populated, and load() fills them in afterwards. The
     # area is attached by set_current_area as loading proceeds.
-    area = level.areas[area_num - 1] if len(level.areas) >= area_num else None
+    #
+    # `level` may also be None: adding a file opens the session *before*
+    # constructing the level, so the level's own construction has a session of
+    # its own to publish into rather than stamping over the previous one
+    # (D-d.3b). The caller binds it as soon as it exists.
+    areas = getattr(level, 'areas', None) or ()
+    area = areas[area_num - 1] if len(areas) >= area_num else None
 
     return manager.open(level, file_path, area, area_num)
 
@@ -234,12 +267,26 @@ class LevelHandle:
     """One open level file, shared by every session showing one of its areas.
 
     Holds the ``Level_NSMBW`` and the path it saves to. Sessions attach and
-    detach; the level is released when the last one detaches.
+    detach; the level is released when the last one detaches, unless it has
+    unsaved work - see :attr:`dirty`.
+
+    **Dirtiness lives here, not on the session** (Zement, 2026-09-04). It is a
+    fact about the *level*, because that is what an edit changes and what a save
+    writes: ``Level_NSMBW.save()`` serialises every area in one pass, so an edit
+    to area 2 is unsaved work in the file, not unsaved work in one tab. With the
+    flag on the session it was neither - editing area 2 left area 1 reporting
+    clean for the same level, and closing area 2 took the only record of the
+    edit with it, so the file left the unsaved list while its edits were still
+    in memory.
     """
 
     def __init__(self, level, file_path):
         self.level = level
         self.file_path = file_path
+
+        #: Unsaved work in this level, in any of its areas. Set through
+        #: `SessionManager.mark_dirty` and cleared by a save.
+        self.dirty = False
 
         # Sessions are held weakly: the manager owns their lifetime, and a
         # strong set here would keep a closed tab's session alive.
@@ -292,8 +339,6 @@ class EditorSession:
         # What release_tiles() dropped, so restore_tiles() knows what to
         # rebuild. Empty until this session has actually been evicted once.
         self.released_tileset_names = None
-
-        self.dirty = False
 
         # What the user is looking at and what they have picked, per area
         # (phase D-c.4). Window attributes until the tab bar made them visibly
@@ -417,6 +462,23 @@ class EditorSession:
         return self.handle.file_path
 
     @property
+    def dirty(self):
+        """Unsaved work in this session's *level*, in any of its areas.
+
+        Delegated to the handle, beside `level` and `file_path` and for the same
+        reason: it is a fact about the file, not about this tab. See
+        `LevelHandle.dirty`. Kept as an attribute on the session because every
+        caller in the editor reads and writes ``session.dirty``, and because a
+        tab genuinely does want to ask "is what I am showing unsaved" - it is
+        only the *storage* that was in the wrong place.
+        """
+        return self.handle.dirty
+
+    @dirty.setter
+    def dirty(self, value):
+        self.handle.dirty = bool(value)
+
+    @property
     def has_tiles(self):
         """Whether this session is currently holding decoded tilesets."""
         return self.tiles is not None
@@ -489,9 +551,20 @@ class EditorSession:
             if window is not None:
                 tabs = getattr(window, 'tabs', None)
                 if tabs is not None:
-                    index = tabs.indexOf(self._view)
+                    # By session, not by widget. Since D-d.4b the tab's page is
+                    # this session's page stack rather than its view, so
+                    # `indexOf(self._view)` returns -1 and the tab would be left
+                    # holding a widget about to be deleted underneath it - the
+                    # "wrapped C/C++ object has been deleted" family. The tab
+                    # data has always been the session, so asking by session is
+                    # both correct now and independent of what the page is next.
+                    index = tabs.indexOfSession(self)
                     if index != -1:
                         tabs.removeTab(index)
+
+                    dropper = getattr(tabs, 'dropStackFor', None)
+                    if dropper is not None:
+                        dropper(self)
                 elif window.centralWidget() is self._view:
                     window.takeCentralWidget()
 
@@ -544,6 +617,11 @@ class SessionManager:
         self._handles = {}      # file_path -> LevelHandle
         self._serial = 0
 
+        # Handles kept alive past their last session because they hold unsaved
+        # work - see `close`. A never-saved level cannot live in `_handles`,
+        # which is keyed by path, so they are held here as well as there.
+        self._detached = []
+
     # -- queries ---------------------------------------------------------
 
     @property
@@ -579,22 +657,130 @@ class SessionManager:
 
     # -- mutation --------------------------------------------------------
 
+    def rename_file(self, old_path, new_path):
+        """Re-key an open file to a new path. True if anything moved.
+
+        Save As writes the level somewhere else and the editor carries on with
+        it - but a handle is keyed by path, so without this the manager still
+        believes the sessions are on the old file. The consequences are all the
+        same shape: opening the *new* path makes a second handle over bytes
+        already open, so two undo stacks edit one file; opening the *old* path
+        finds sessions for a file that may no longer exist.
+
+        Only the handle moves. Sessions read their path through it
+        (``EditorSession.file_path`` is a property on ``handle.file_path``), so
+        every session on the file follows with nothing to update - which is the
+        reason the handle owns the path in the first place.
+
+        Refuses when ``new_path`` is already open, and that refusal is the
+        point rather than a limitation: merging the two would give one file two
+        handles' worth of undo history, and picking one to discard would throw
+        away a user's edits without asking. The caller is better placed to
+        decide - it knows whether the write actually happened.
+
+        Also handles the case that is not really a rename: an **unsaved level
+        being saved for the first time**. Those have no ``_handles`` entry at
+        all, because None is not a path and two unsaved levels are two
+        different levels (see :meth:`open`) - so there is nothing to move, only
+        a handle to register under the name it has just been given. Passing
+        ``old_path=None`` asks for exactly that, against the active session.
+        """
+        if not new_path or old_path == new_path:
+            return False
+
+        if new_path in self._handles:
+            return False
+
+        # A first save: adopt the active session's handle under its new name.
+        if not old_path:
+            session = self._active
+            handle = session.handle if session is not None else None
+            if handle is None or handle.file_path is not None:
+                return False
+
+            handle.file_path = new_path
+            self._handles[new_path] = handle
+            return True
+
+        handle = self._handles.get(old_path)
+        if handle is None:
+            return False
+
+        del self._handles[old_path]
+        handle.file_path = new_path
+        self._handles[new_path] = handle
+        return True
+
+    def _unsavedHandles(self):
+        """Handles for levels with no path yet - not in ``_handles``.
+
+        Reached through the sessions holding them, which is where a live one is
+        recorded: `_handles` is keyed by path, and these have none. Deliberately
+        not a registry of its own for the live case - one would have to be kept
+        in step with session lifetimes, and a stale entry would hand a new level
+        a handle whose level is gone.
+
+        `_detached` is the exception, and is not a second registry of the same
+        thing: it holds only handles with **no** sessions left, kept because
+        they are dirty, and an entry leaves it exactly when the level is saved,
+        discarded or reopened. A new level cannot collide with one, because
+        `open` matches on the level object.
+        """
+        seen = []
+        for session in self._sessions:
+            handle = session.handle
+            if handle.file_path is None and handle not in seen:
+                seen.append(handle)
+
+        for handle in self._detached:
+            if handle.file_path is None and handle not in seen:
+                seen.append(handle)
+
+        return seen
+
     def open(self, level, file_path, area, area_num, activate=True):
         """Open an area as a new session, sharing the level if already open.
 
         Returns the existing session if this exact area is already open, so
         callers can use this as "show me this area" without checking first.
-        """
-        existing = self.find(file_path, area_num)
-        if existing is not None:
-            if activate:
-                self.activate(existing)
-            return existing
 
-        handle = self._handles.get(file_path)
+        **A ``file_path`` of None is not an identity** (D-d.3b). It means "not
+        saved anywhere yet", and two unsaved levels are two different levels -
+        so they must not share a handle the way two areas of one file do. With
+        the path as the key they collided: a second File -> New found the first
+        new level's handle and re-activated its tab instead of making one.
+
+        For an unsaved level the identity is therefore the **level object**.
+        Two areas of one unsaved level still share their handle - they are one
+        level, and `Level_NSMBW.save()` serialises every area in one pass, so
+        two handles over them would be two ideas of the same file.
+        """
+        if file_path is not None:
+            existing = self.find(file_path, area_num)
+            if existing is not None:
+                if activate:
+                    self.activate(existing)
+                return existing
+
+        if file_path is not None:
+            handle = self._handles.get(file_path)
+        else:
+            # Unsaved: match on the level object rather than on the path they
+            # all share (None). Without this, opening area 2 of a new level
+            # built it a second handle - and saving would then write one
+            # handle's idea of the file over the other's.
+            handle = next((h for h in self._unsavedHandles()
+                           if level is not None and h.level is level), None)
+
         if handle is None:
             handle = LevelHandle(level, file_path)
-            self._handles[file_path] = handle
+            if file_path is not None:
+                self._handles[file_path] = handle
+
+        # Reopened after its last tab was closed while dirty: it is a live
+        # handle again, so it stops being one of the retained ones.
+        if handle in self._detached:
+            self._detached.remove(handle)
 
         session = EditorSession(handle, area, area_num)
         self._sessions.append(session)
@@ -604,8 +790,24 @@ class SessionManager:
 
         return session
 
-    def activate(self, session):
-        """Make a session the active one. Returns the previously active one."""
+    def activate(self, session, notify=True):
+        """Make a session the active one. Returns the previously active one.
+
+        ``notify=False`` moves the *state* - ``globals_``'s proxied bindings,
+        spritelib's, this session's tilesets - and skips the three calls that
+        tell the rest of the editor about it: the undo menu, the canvas on
+        screen, and the toolbar. D-d.4's session-bound pages need the first half
+        and must not have the second: applying an Area Settings form for area 1
+        while the user is looking at area 2 would yank the canvas to area 1 and
+        back again.
+
+        One method with a flag rather than a second ``_bind_state_only``
+        alongside it, deliberately. A twin would be a second definition of what
+        activation means, and the two would drift - which is the exact shape of
+        both the D-d.3b area-number bug and the ``Dirty``-proxy bug. The flag
+        guards three calls and nothing else, so what it suppresses is readable
+        from here.
+        """
         if session is not None and session not in self._sessions:
             raise ValueError('cannot activate a session this manager does not own')
 
@@ -640,10 +842,16 @@ class SessionManager:
         if session is not None and session.tiles is not None:
             SLib.Tiles = session.tiles
 
+        # Everything below here is the *notify* half: three window callbacks
+        # that tell the editor the active session moved. Dropping the window
+        # reference is how `notify=False` suppresses all three at once - one
+        # place rather than three conditions, so a fourth callback added later
+        # is silenced by construction instead of by remembering to.
+        #
         # The undo/redo menu items follow the active session's stack. Guarded
         # because the manager exists before the window does during boot, and
         # the headless suites run with no window at all.
-        window = getattr(_globals(), 'mainWindow', None)
+        window = getattr(_globals(), 'mainWindow', None) if notify else None
         binder = getattr(window, 'BindUndoStack', None)
         if binder is not None and session is not None:
             binder(session.undo_stack)
@@ -674,17 +882,47 @@ class SessionManager:
         """Close a session, releasing the level if it was the last on that file.
 
         Returns True if the underlying level was released.
+
+        **A level with unsaved work is not released** (Zement, 2026-09-04): "it
+        is then possible to close a few, or all of the areas from that level,
+        and the unsaved level will still remain in Unsaved Levels." Closing a
+        tab is a view operation, so it must not be able to throw away edits -
+        and the unsaved section is where those edits are saved or discarded,
+        which it can only do while the level is still in memory.
+
+        The handle is kept in `_detached` as well as in `_handles`, because a
+        never-saved level has no path and `_handles` is keyed by path. It goes
+        when the level is saved (`clear_dirty_for_file`), discarded
+        (`discard_dirty_handle`), or reopened - `open` finds it by path and
+        attaches to it, so reopening a closed dirty level comes back to the
+        edits rather than to what is on disk.
         """
         if session not in self._sessions:
             raise ValueError('cannot close a session this manager does not own')
+
+        # Read before dispose(): the file path resolves through the handle, and
+        # a session detached from its handle can no longer answer for it.
+        handle = session.handle
 
         self._sessions.remove(session)
         remaining = session.dispose()
 
         released = False
         if remaining == 0:
-            self._handles.pop(session.file_path, None)
-            released = True
+            # Kept, not released: the level stays listed as unsaved and stays
+            # savable from there. **Only a level that has a path**, though. A
+            # never-saved one has no file to write to and none to reload from,
+            # so a retained row could neither be saved nor discarded - it would
+            # sit in the list with both its buttons disabled and no way to be
+            # rid of it. Closing the tab of a level that was never saved is the
+            # one close that really does discard, and it always has.
+            if handle is not None and handle.dirty and handle.file_path:
+                if handle not in self._detached:
+                    self._detached.append(handle)
+                self._handles[handle.file_path] = handle
+            else:
+                self._handles.pop(session.file_path, None)
+                released = True
 
         if self._active is session:
             # Fall back to the most recently active survivor, so closing a tab
@@ -717,6 +955,36 @@ class SessionManager:
     def close_all(self):
         for session in list(self._sessions):
             self.close(session)
+
+    def release_stale(self):
+        """Close everything and let go of the retained dirty levels too.
+
+        `close` keeps a dirty level in memory, the way it should when its last
+        tab is closed - the file is still there to go back to, and the unsaved
+        section still offers to save it. It is wrong for a **patch switch**: the
+        level belongs to a game that is no longer loaded, its paths no longer
+        resolve, and a row offering to save it would write it through the new
+        patch's paths.
+
+        Zement, 2026-09-04: "after Game Patch switching, the Unsaved Levels list
+        must be empty." By then the user has already been asked, and has saved
+        or discarded; anything still held is work they chose to let go.
+
+        Letting go of the *handles* is what distinguishes this from `close_all`,
+        and it matters beyond the list: a retained handle stays keyed by path,
+        so if the new patch's first level happens to be the same file, the load
+        that follows would find it and take `LoadLevel`'s "already open" branch
+        over a scene that has just been torn down.
+        """
+        self.close_all()
+
+        for handle in list(self._detached):
+            self.discard_dirty_handle(handle)
+
+        # Whatever is left in `_handles` has no sessions - close_all removed
+        # them all - so nothing is reading it.
+        self._handles.clear()
+        self._detached.clear()
 
     # -- memory ----------------------------------------------------------
 
@@ -752,19 +1020,98 @@ class SessionManager:
         session.dirty = dirty
 
     def dirty_files(self):
-        """Paths with at least one unsaved session."""
-        return sorted({s.file_path for s in self._sessions if s.dirty})
+        """Paths of the open levels with unsaved work.
+
+        Asked of the **handles**, not the sessions, so a level whose tabs have
+        all been closed is still reported while its edits are in memory - which
+        is what keeps it in the unsaved list and savable from there.
+
+        A level that has never been saved appears as ``None``, and sorts
+        **after** the named ones - a plain `sorted()` raises here, because
+        `None` cannot be compared to a string. That was unreachable while a new
+        level was marked dirty the moment it was created and nothing asked for
+        the whole set at once; D-d.3c asks on every UpdateTitle, so a named
+        file and a new level both dirty made this throw (measured 2026-09-01).
+        """
+        paths = {h.file_path for h in self.dirty_handles()}
+        named = sorted(p for p in paths if p is not None)
+        return named + [None] if None in paths else named
+
+    def dirty_handles(self):
+        """Every open level with unsaved work, tabs or no tabs.
+
+        Three places to look, because a handle can be recorded in three ways.
+        `_handles` holds the saved files; `_detached` holds the ones `close`
+        kept past their last tab; and a **live never-saved level is in neither**
+        - `_handles` is keyed by path and it has none, and it is not detached
+        because its tab is open. Those are reached through their sessions, which
+        is the only place they are recorded (see `_unsavedHandles`). Missing
+        this third case is what dropped a New Level out of the list entirely.
+
+        Ordered by path so the list is stable between calls, with a never-saved
+        level last for the reason `dirty_files` gives.
+        """
+        handles = []
+
+        for source in (self._handles.values(), self._detached,
+                       (s.handle for s in self._sessions)):
+            for handle in source:
+                if handle is not None and handle.dirty and handle not in handles:
+                    handles.append(handle)
+
+        named = sorted((h for h in handles if h.file_path is not None),
+                       key=lambda h: h.file_path)
+        return named + [h for h in handles if h.file_path is None]
 
     def clear_dirty_for_file(self, file_path):
-        """Clear dirty on every session sharing a file.
+        """Mark a file saved, and let go of it if nothing is showing it.
 
-        Saving is per *file*: Level.save() serialises every area from the
-        shared level in one pass, so a save from any tab persists all of them.
-        Leaving the other tabs marked dirty would misreport that.
+        Saving is per *file*: Level.save() serialises every area from the shared
+        level in one pass, so a save from any tab persists all of them - and
+        since the flag lives on the handle, one assignment covers every area
+        rather than being fanned out over the sessions.
+
+        Returns the sessions that were showing unsaved work, which is what the
+        callers report on. A handle with no sessions left was only being kept
+        because it was dirty, so saving it is also what finally releases it.
+
+        **A ``file_path`` of None matches nothing**, as it always has (D-d.3b).
+        It is not an identity: two never-saved levels both answer None, so
+        clearing "the file called None" would mark a second new level saved
+        along with the one that was written. `LevelIO` handles that case by
+        clearing the active session, which names exactly one level.
         """
+        if file_path is None:
+            return []
+
+        handle = self._handles.get(file_path)
+
         cleared = []
-        for session in self.sessions_for(file_path):
-            if session.dirty:
-                session.dirty = False
-                cleared.append(session)
+        if handle is not None and handle.dirty:
+            cleared = [s for s in handle.sessions()]
+            handle.dirty = False
+
+        for stale in [h for h in self._detached
+                      if h.file_path == file_path or h is handle]:
+            stale.dirty = False
+            self._detached.remove(stale)
+            if self._handles.get(stale.file_path) is stale:
+                self._handles.pop(stale.file_path, None)
+
         return cleared
+
+    def discard_dirty_handle(self, handle):
+        """Drop a retained level, throwing away the edits that kept it.
+
+        The other way a handle held by `close` can go: the user discarding it
+        rather than saving it. Without this the only way to be rid of a closed
+        dirty level would be to save it, which is not a choice an editor gets to
+        impose.
+        """
+        handle.dirty = False
+
+        if handle in self._detached:
+            self._detached.remove(handle)
+
+        if self._handles.get(handle.file_path) is handle:
+            self._handles.pop(handle.file_path, None)

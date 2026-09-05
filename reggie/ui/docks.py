@@ -70,6 +70,12 @@ class DockBuilder:
         act.setStatusTip(globals_.trans.string('MenuItems', 95))
         # Register so the keybind editor (SetKeybind) can update the shortcut
         self.win.actions['leveloverview'] = act
+        # ...and on the window, or the shortcut never fires. See the note in
+        # menus.py: an action needs to be in a window widget's action list, and
+        # the menubar cannot be that widget once combined mode moves it into the
+        # toolbar. menus.py sweeps every action it built; these two are added
+        # afterwards, so they say it for themselves.
+        self.win.addAction(act)
         self.win.vmenu.addAction(act)
 
         # No levelOverviewDock alias: nothing outside this builder ever used it
@@ -130,6 +136,8 @@ class DockBuilder:
         act.setStatusTip(globals_.trans.string('MenuItems', 97))
         # Register so the keybind editor (SetKeybind) can update the shortcut
         self.win.actions['palette'] = act
+        # On the window too - see the note on 'leveloverview' above.
+        self.win.addAction(act)
         self.win.vmenu.addAction(act)
 
         # object choosing tabs
@@ -454,3 +462,193 @@ class DockBuilder:
         # list can use the height, which is why one setSizePolicy on the panel
         # was not enough.
         self.win.sidebar.relaxPanelHeights()
+
+        # Slice 1 gets its entries (D-d.1). Last, because the Game Patches page
+        # is a real widget and the rail's first entry selects a page as soon as
+        # it is added.
+        self.buildRail()
+
+    def buildRail(self):
+        """Fill slice 1, the icon rail (Block D-d, phase D-d.1).
+
+        The set comes from Zement's brief: Game Patches, Directory Listing,
+        (Puzzle Next later), Logs/Undo, Help, Preferences. Provisional - entries
+        are expected to be added as the later phases land.
+
+        **Every rail entry that shows something in slice 2 opens a section**
+        (Zement's model, 2026-09-01). Game Patches was a rail *page* until then -
+        a `QStackedWidget` entry rather than a section - and that accidental
+        split is what produced two of his four reports: the patch list had no
+        collapsible header because it was not a section, and the undo history
+        looked "attached to" the directory listing because a page replaced the
+        whole splitter while a section merely joined it.
+
+        So there are two kinds of entry left:
+
+        - **Game Patches**, **Directory Listing** and **Help** open
+          *context-sensitive* sections: mutually exclusive, always on top.
+        - **Preferences** is an action - it opens as a tool tab in the master
+          container and has no sidebar content at all. **Logs/Undo** is also an
+          action, but one that opens an *always-open* section, which stacks
+          below the context section and survives every switch between them.
+        """
+        sidebar = self.win.sidebar
+        if sidebar is None:
+            return
+
+        # Lazy, like the other reggie.ui imports here: reggie.py defers `ui`
+        # until after the QApplication exists (the Block A lesson).
+        from reggie.ui.ui import GetIcon
+
+        trans = globals_.trans.string
+
+        # big=True (D-d.1c): the 'sm' icons are 16px source art, so a rail
+        # asking for 38px (64 * 0.6) would upscale a 16px bitmap - soft, and
+        # never actually larger than 16. The 'lg' set is 48px, which covers
+        # every rail width. This is why "only the section reserved for the icon
+        # grows, not the actual icon" (Zement, 2026-08-31).
+        def icon(name):
+            return GetIcon(name, True)
+
+        # `is_open` on each: clicking the entry whose section is already showing
+        # must not rebuild it, or the tree loses its scroll position, its
+        # expanded levels and the selection. Each answers for its own widget,
+        # which is the only thing the sidebar cannot work out for itself.
+        def showing(attr):
+            def check():
+                widget = getattr(self.win, attr, None)
+                return (widget is not None
+                        and sidebar.sectionFor(widget) is not None)
+            return check
+
+        # The widget an entry's section holds, read live: a context section is
+        # rebuilt every time it opens, so a stored reference would be the one
+        # from last time. This is what lets a click *inside* a panel move the
+        # highlight onto its entry (D-d.6).
+        def owns(attr):
+            return lambda: getattr(self.win, attr, None)
+
+        # -- Game Patches ------------------------------------------------
+        sidebar.addPage(icon('game'), trans('MenuItems', 142),
+                        sections=True,
+                        on_activate=self._showGamePatches,
+                        is_open=showing('patchListWidget'),
+                        owns_widget=owns('patchListWidget'))
+
+        # -- Directory Listing --------------------------------------------
+        sidebar.addPage(icon('folderpath'), trans('MenuItems', 143),
+                        sections=True,
+                        on_activate=self._showDirectoryListing,
+                        is_open=showing('levelTreeWidget'),
+                        owns_widget=owns('levelTreeWidget'))
+
+        # -- Logs / Undo --------------------------------------------------
+        # A toggle: selecting it opens the undo history, selecting it again
+        # closes it. `toggles=True` is what lets the second click through -
+        # `is_open` alone would swallow it, since its other job is stopping a
+        # re-click from rebuilding a section that is already up.
+        #
+        # It still needs `is_open`, so the highlight can follow the panel: the
+        # entry used to have none, and so stayed lit over a panel it had just
+        # closed (Zement, 2026-09-04).
+        sidebar.addPage(icon('undo'), trans('MenuItems', 144),
+                        sections=True,
+                        on_activate=self._showUndoHistory,
+                        is_open=showing('undoHistoryView'),
+                        owns_widget=owns('undoHistoryView'),
+                        toggles=True)
+
+        # -- Collaborate --------------------------------------------------
+        # One entry for both halves of collaboration (D-d.5): with no session
+        # running it opens the host/join dialog, and with one it opens the
+        # roster and chat. Zement ranked a single panel first (2026-09-02); one
+        # *entry* is what that preference is actually about, and it costs
+        # nothing, while one *panel* would mean reworking the join path's
+        # exec()/collectResult() handshake and the discovery thread's shutdown.
+        #
+        # A toggle like Logs/Undo while a session is running, so the same pair:
+        # `toggles` lets the closing click through, `is_open` lets the highlight
+        # follow the panel.
+        #
+        # 'spritelist' is what the Collaborate menu action already uses, so the
+        # rail and the menu name the same thing with the same picture.
+        sidebar.addPage(icon('spritelist'), trans('MenuItems', 165),
+                        sections=True,
+                        on_activate=self._showCollaboration,
+                        is_open=self._collabPanelOpen,
+                        owns_widget=self._collabPanelWidget,
+                        toggles=True)
+
+        # -- Help ---------------------------------------------------------
+        sidebar.addPage(icon('help'), trans('MenuItems', 88),
+                        sections=True,
+                        on_activate=self._showHelp,
+                        is_open=showing('helpTreeWidget'),
+                        owns_widget=owns('helpTreeWidget'))
+
+        # -- Preferences --------------------------------------------------
+        sidebar.addPage(icon('settings'), trans('MenuItems', 18),
+                        on_activate=self.win.HandlePreferences)
+
+    def _showGamePatches(self):
+        """Open the Game Patches section unless it is already up."""
+        self.win.ShowGamePatches()
+
+    def _showDirectoryListing(self):
+        """Open the directory listing section unless it is already up (D-d.2).
+
+        Not a toggle, for the same reason the undo entry is not: selecting a
+        rail category should never *hide* the thing it names.
+        """
+        self.win.ShowDirectoryListing()
+
+    def _showHelp(self):
+        """Open the Help section unless it is already up (D-d.2c)."""
+        self.win.ShowHelpSection()
+
+    def _showCollaboration(self):
+        """Open the collaboration panel, or the host/join dialog (D-d.5)."""
+        self.win.ShowCollaboration()
+
+    def _collabPanelWidget(self):
+        """The widget the collaboration section holds, or None.
+
+        The controller's status window: it owns it for the life of the session,
+        and the section merely shows it.
+        """
+        controller = getattr(self.win, '_collab', None)
+        return getattr(controller, 'status_window', None) \
+            if controller is not None else None
+
+    def _collabPanelOpen(self):
+        """Whether the collaboration panel is showing.
+
+        Asked of the controller, which owns the window the section holds - and
+        answering False with no controller is right, since a session that has
+        never started has no panel to be showing.
+        """
+        controller = getattr(self.win, '_collab', None)
+        if controller is None:
+            return False
+
+        window = getattr(controller, 'status_window', None)
+        if window is None:
+            return False
+
+        sidebar = getattr(self.win, 'sidebar', None)
+        return sidebar is not None and sidebar.sectionFor(window) is not None
+
+    def _showUndoHistory(self):
+        """Toggle the undo history section (Zement, 2026-09-01).
+
+        A *toggle*, unlike the context entries, and the asymmetry is the point.
+        Clicking a context entry means "show me this instead of that", so
+        closing on a second click would leave slice 2 with nothing selected.
+        An always-open section has no "instead": it is either there or not, and
+        the rail entry is the switch. "Clicking on Undo History rail button
+        while the panel is open should *close* the panel."
+        """
+        if self.win.sidebar is None:
+            return
+
+        self.win.HandleShowUndoHistory()

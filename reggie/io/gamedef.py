@@ -7,266 +7,55 @@ from xml.etree import ElementTree as etree
 
 from PyQt6 import QtWidgets, QtCore, QtGui
 
-from reggie.ui.ui import GetIcon, createVertLine
 from reggie.io.misc import LoadSpriteData, LoadSpriteListData, LoadSpriteCategories, LoadBgANames, LoadBgBNames, LoadObjDescriptions, LoadTilesetNames, LoadTilesetInfo, LoadEntranceNames, LoadMusicInfo, LoadZoneThemes
 from reggie.core.dirty import setting, setSetting
+# Safe at module level: patchmodel imports only globals_ and dirty, and this
+# module already imports from reggie.ui above.
+from reggie.ui.patchmodel import patch_model
 
 from reggie.core import globals_
 from reggie.core import spritelib as SLib
 import reggie.sprites as sprites
 
-class GameDefViewer(QtWidgets.QWidget):
-    """
-    Widget which displays basic info about the current game definition
-    """
-
-    def __init__(self):
-        """
-        Initializes the widget
-        """
-        QtWidgets.QWidget.__init__(self)
-        self.imgLabel = QtWidgets.QLabel()
-        self.imgLabel.setToolTip(globals_.trans.string('Gamedefs', 0))
-        self.imgLabel.setPixmap(GetIcon('sprites', False).pixmap(16, 16))
-        self.versionLabel = QtWidgets.QLabel()
-        self.titleLabel = QtWidgets.QLabel()
-        self.titleLabel.setWordWrap(True)
-        self.descLabel = QtWidgets.QLabel()
-        self.descLabel.setWordWrap(True)
-        self.descLabel.setMinimumHeight(40)
-
-        # Make layouts
-        left = QtWidgets.QVBoxLayout()
-        left.addWidget(self.imgLabel)
-        left.addWidget(self.versionLabel)
-        left.addStretch(1)
-        right = QtWidgets.QVBoxLayout()
-        right.addWidget(self.titleLabel)
-        right.addWidget(self.descLabel)
-        right.addStretch(1)
-        main = QtWidgets.QHBoxLayout()
-        main.addLayout(left)
-        main.addWidget(createVertLine())
-        main.addLayout(right)
-        main.setStretch(2, 1)
-        self.setLayout(main)
-        self.setMinimumWidth(235)
-        self.setMaximumWidth(256 + 64)
-
-        self.updateLabels()
-
-    def updateLabels(self):
-        """
-        Updates all labels
-        """
-        sprite_folders = globals_.gamedef.recursiveFiles('sprites', is_folder=True)[0]
-
-        if not globals_.gamedef.custom or sprite_folders:
-            img = GetIcon('sprites', False).pixmap(16, 16)
-        else:
-            img = QtGui.QPixmap(16, 16)
-            img.fill(QtGui.QColor(0, 0, 0, 0))
-
-        ver = '' if globals_.gamedef.version is None else '<i><p style="font-size:10px;">v%s</p></i>' % str(globals_.gamedef.version)
-        title = '<b>%s</b>' % str(globals_.gamedef.name)
-        desc = str(globals_.gamedef.description)
-
-        self.imgLabel.setPixmap(img)
-        self.versionLabel.setText(ver)
-        self.titleLabel.setText(title)
-        self.descLabel.setText(desc)
+# GameDefViewer and GameDefMenu were removed in Block D-d, phase D-d.1b.
+#
+# They were the `File -> Change Game` menu: a patch list plus an info panel at
+# the top. That menu is gone - a patch is reached from the sidebar's Game
+# Patches page or from the Patch Manager - and D-d deliberately removes entry
+# points rather than adding a third one.
+#
+# The info panel was the one part worth keeping, since the Patch Manager had no
+# equivalent. It lives on as `PatchInfoPanel` in
+# reggie/patches/patch_manager_dialog.py, with one change: it describes the
+# *selected* patch rather than the loaded one, which is what a manager wants.
+#
+# `add_reggie_patch` went with the menu; the Patch Manager's own
+# "Add Patch Folder" button (`_add_patch_folder`) does the same job.
 
 
-class GameDefMenu(QtWidgets.QMenu):
-    """
-    A menu which lets the user pick gamedefs
-    """
-    gameChanged = QtCore.pyqtSignal()
-    update_flag = False
-
-
-    def add_reggie_patch(self):
-        def select_reggie_patch_folder():
-            src_path = QtWidgets.QFileDialog.getExistingDirectory(None, "Select Reggie Patch Folder ...")
-            return src_path
-
-        def restart_reggie_info():
-            # Warn the user that they may need to restart
-            QtWidgets.QMessageBox.warning(None, globals_.trans.string('PrefsDlg', 0), globals_.trans.string('PrefsDlg', 30))
-
-        # Select the patch folder
-        patch_path = select_reggie_patch_folder()
-        if patch_path == "":
-            return
-
-        patch_path = os.path.normpath(patch_path)
-        patch_name = os.path.basename(patch_path)
-        
-        # Verify that main.xml exists in the selected folder
-        if not os.path.isfile(os.path.join(patch_path, 'main.xml')):
-            QtWidgets.QMessageBox.warning(None, 'Invalid Patch', 
-                f'The selected folder does not contain a valid Reggie patch (main.xml not found).')
-            return
-        
-        # Check if a patch with this name already exists (in patches dir or settings)
-        patches_dir_path = os.path.join(os.getcwd(), 'reggiedata', 'patches', patch_name)
-        if os.path.exists(patches_dir_path):
-            QtWidgets.QMessageBox.warning(None, 'Error', 
-                f'A patch with this name already exists in the patches directory:\n{patch_name}')
-            return
-        
-        # Check if already configured in settings
-        existing_path = setting('PatchPath_' + patch_name)
-        if existing_path:
-            QtWidgets.QMessageBox.warning(None, 'Error', 
-                f'A patch with this name is already configured:\n{patch_name}\nPath: {existing_path}')
-            return
-        
-        # Save the patch path to settings
-        # setSetting will automatically normalize the path format
-        setSetting('PatchPath_' + patch_name, patch_path)
-        
-        # Refresh the menu to show the new patch
-        self.refreshMenu()
-        self.gameChanged.emit()
-
-
-    def __init__(self):
-        """
-        Creates and initializes the menu
-        """
-        QtWidgets.QMenu.__init__(self)
-
-        # Add the gamedef viewer widget
-        self.currentView = GameDefViewer()
-        self.currentView.setMinimumHeight(100)
-        self.gameChanged.connect(self.currentView.updateLabels)
-
-        v = QtWidgets.QWidgetAction(self)
-        v.setDefaultWidget(self.currentView)
-        self.addAction(v)
-        self.addSeparator()
-
-        # Add entries for each gamedef
-        self.GameDefs = getAvailableGameDefs()
-
-        self.actGroup = QtGui.QActionGroup(self)
-        loadedDef = setting('LastGameDef')
-        for folder in self.GameDefs:
-            def_ = ReggieGameDefinition(folder)
-
-            act = QtGui.QAction(self)
-            act.setText(def_.name)
-            act.setToolTip(def_.description)
-            act.setData(folder)
-            act.setActionGroup(self.actGroup)
-            act.setCheckable(True)
-            act.setChecked(folder == loadedDef)
-            act.toggled.connect(self.handleGameDefClicked)
-
-            self.addAction(act)
-
-        # add button
-        self.addSeparator()
-
-        act = QtGui.QAction(self)
-        act.setText(globals_.trans.string('Gamedefs', 19))
-        act.setToolTip(globals_.trans.string('Gamedefs', 20))
-        act.setActionGroup(self.actGroup)
-        act.setCheckable(False)
-        act.setChecked(False)
-        act.triggered.connect(self.add_reggie_patch)
-
-        self.addAction(act)
-
-
-    def handleGameDefClicked(self, checked):
-        """
-        Handles the user clicking a gamedef
-        """
-        if not checked or self.update_flag: return
-
-        name = self.actGroup.checkedAction().data()
-
-        # Unsaved work is settled before the patch changes (Block C - B3,
-        # round 2, R5), for the same reason as the patch combo box: prompting
-        # afterwards would offer to save the old patch's level through the new
-        # patch's paths, and Cancel would have nothing left to cancel.
-        window = globals_.mainWindow
-        if window is not None and window.CheckDirty():
-            # Put the menu's tick back on the patch still loaded, or it would
-            # show a switch that did not happen.
-            self._recheckLoadedGameDef()
-            return
-
-        success = loadNewGameDef(name)
-        if success:
-            self.gameChanged.emit()
-
-            # Open the new patch's first level, rather than keeping one whose
-            # tilesets belong to the patch just unloaded - the pink-placeholder
-            # state Zement described.
-            if window is not None:
-                window.LoadFirstLevelOfPatch()
-            return
-
-        # Setting the new gamedef failed for some reason, so load back the old
-        # game def.
-        real_gamedef = setting('LastGameDef')
-        success = loadNewGameDef(real_gamedef)
-        if not success:
-            raise Exception("Restoring the previous game def (%r) failed after failing to load new game def (%r)" % (real_gamedef, name))
-
-        self._recheckLoadedGameDef()
-
-    def _recheckLoadedGameDef(self):
-        """
-        Puts the menu's tick back on the patch that is actually loaded.
-
-        The update_flag guard is what stops setChecked re-entering
-        handleGameDefClicked, which would restart the switch this is undoing.
-        """
-        real_gamedef = setting('LastGameDef')
-
-        self.update_flag = True
-        for act in self.actGroup.actions():
-            act.setChecked(act.data() == real_gamedef)
-        self.update_flag = False
-
-    def refreshMenu(self):
-        """
-        Refresh the menu to show newly added patches
-        """
-        # Clear existing patch actions (but keep the viewer and add button)
-        for act in self.actGroup.actions():
-            self.removeAction(act)
-            self.actGroup.removeAction(act)
-        
-        # Reload game defs
-        self.GameDefs = getAvailableGameDefs()
-        
-        # Re-add entries for each gamedef
-        loadedDef = setting('LastGameDef')
-        for folder in self.GameDefs:
-            def_ = ReggieGameDefinition(folder)
-            
-            act = QtGui.QAction(self)
-            act.setText(def_.name)
-            act.setToolTip(def_.description)
-            act.setData(folder)
-            act.setActionGroup(self.actGroup)
-            act.setCheckable(True)
-            act.setChecked(folder == loadedDef)
-            act.toggled.connect(self.handleGameDefClicked)
-            
-            # Insert before the separator and "Add" button
-            actions = self.actions()
-            if len(actions) >= 3:  # viewer, separator, patches..., separator, add button
-                self.insertAction(actions[-2], act)  # Insert before last separator
-
-        # Also refresh the main window's patch combo box if it exists, so a
-        # newly added patch appears in both controls.
-        RefreshPatchSelector()
+#: Bare module names a patch's own Python may import, and where they live now.
+#:
+#: Every one of these was a top-level module in the Reggie a patch author wrote
+#: against, and is a submodule here. A patch is user content we cannot rewrite,
+#: so the names have to keep resolving - and a name that does not is not a
+#: recoverable error: `LoadGameDef` catches it as "the patch could not be
+#: loaded" and falls back to the base game.
+#:
+#: `globals_` is why this became a table rather than a pair (Zement, 2026-09-04,
+#: relaying a user's report): a third-party patch importing it got
+#: "No module named 'globals_'" and would not load at all. Our own bundled
+#: patches import only the first two, which is why it went unnoticed.
+#:
+#: Deliberately generous. Aliasing a name no patch imports costs one dictionary
+#: entry; missing one costs the patch.
+#: **Not** `common`: patches write `import sprites_common as common`, so the
+#: bare name they import is `sprites_common`, and `reggie.core.common` is a
+#: different module that a `common` alias would shadow.
+PATCH_MODULE_ALIASES = {
+    'spritelib': 'reggie.core.spritelib',
+    'sprites_common': 'reggie.core.sprites_common',
+    'globals_': 'reggie.core.globals_',
+}
 
 
 def _ensurePatchModuleAliases():
@@ -290,12 +79,12 @@ def _ensurePatchModuleAliases():
     Best-effort per name. A missing optional module should cost that one import,
     not the whole patch load.
     """
-    for name in ('spritelib', 'sprites_common'):
+    for name, target in PATCH_MODULE_ALIASES.items():
         if name in sys.modules:
             continue
 
         try:
-            sys.modules[name] = importlib.import_module('reggie.core.' + name)
+            sys.modules[name] = importlib.import_module(target)
         except ImportError as exc:
             print('[GAMEDEF] could not alias %r for patch sprites: %s'
                   % (name, exc))
@@ -1134,7 +923,24 @@ def LoadGameDef(name=None, dlg=None):
         if globals_.gamedef.custom and (setting('StageGamePath_' + globals_.gamedef.name) is None):
             # First-time usage of this globals_.gamedef. Have the
             # user pick a stage folder so we can load stages
-            # and tilesets from there
+            # and tilesets from there.
+            #
+            # **Every abort below has to leave the editor able to run.** The
+            # three `return False`s here skip the rest of this function, which
+            # is where the data files the UI treats as always-present get
+            # loaded - `ObjDesc` above all, which starts as None and is filled
+            # nowhere else. The palette then does `i in globals_.ObjDesc` and
+            # dies with "argument of type 'NoneType' is not iterable" before
+            # the window is even up, so the only way out is deleting
+            # settings.ini (Zement, 2026-09-01, on a ReggieCopy whose patch had
+            # no Stage path yet).
+            #
+            # Loaded before the prompt rather than in each abort: there is
+            # nothing patch-specific about it - `ts1_descriptions` is retail
+            # data - and doing it once here cannot be forgotten by a fourth
+            # abort added later.
+            LoadObjDescriptions()
+
             pressed_button = QtWidgets.QMessageBox.information(None,
                 globals_.trans.string('Gamedefs', 2),
                 globals_.trans.string('Gamedefs', 3, '[game]', globals_.gamedef.name),
@@ -1241,6 +1047,10 @@ def LoadGameDef(name=None, dlg=None):
         if globals_.Area is not None:
             SLib.ImageCache.clear()
             SLib.SpriteImagesLoaded.clear()
+            # The next patch's image code is different software, so it gets its
+            # own first report rather than inheriting the previous patch's
+            # already-warned set.
+            globals_.BrokenSpriteImages.clear()
             sprites.LoadBasics()
 
             spriteClasses = globals_.gamedef.getImageClasses()
@@ -1305,10 +1115,23 @@ def LoadGameDef(name=None, dlg=None):
 
     except Exception as e:
         if dlg: dlg.setValue(7)
-        
+
         if sprite_images_enabled and globals_.mainWindow is not None and hasattr(globals_.mainWindow, 'sprPicker'):
             globals_.mainWindow.sprPicker.show_sprite_images = True
-        
+
+        # **Print the traceback before anything else.** This except covers ~200
+        # lines that touch every data file a patch can carry, so `str(e)` on its
+        # own says what broke and nothing about where - and a user reporting
+        # "'NoneType' object has no attribute 'width'" then has no way to say
+        # more, because nothing reached the terminal either (Zement, 2026-09-05,
+        # switching to an external patch: "sadly there is no additional log
+        # output with a proper fault message"). The dialog keeps its plain
+        # summary; the terminal gets the whole thing.
+        import traceback
+        print('\n--- patch load failed: %r ---' % (name,), flush=True)
+        traceback.print_exc()
+        print('--- end of patch load failure ---\n', flush=True)
+
         # If we were trying to load a specific patch and it failed, show a message
         # and fall back to the base game
         if name is not None:
@@ -1333,7 +1156,7 @@ def LoadGameDef(name=None, dlg=None):
         globals_.mainWindow.sprPicker.show_sprite_images = True
 
     # Show the patch that is actually loaded. The combo box reads LastGameDef,
-    # and until now only HandleSwitchPatch refreshed it - so every other route
+    # and until D-d.1b only the patch combo box refreshed it - so every other route
     # into a patch change (a collaboration client following its host, a level
     # load, a failed load falling back to retail) left the box naming the
     # previous patch. Doing it here rather than at each call site means the
@@ -1350,45 +1173,43 @@ def LoadGameDef(name=None, dlg=None):
 
 def RefreshPatchSelector():
     """
-    Re-syncs the controls that name the loaded patch: the toolbar combo box and
-    the Change Game menu (its checkmarks and its description panel).
+    Re-syncs the controls that name the loaded patch.
 
-    Both read the loaded gamedef only when they are built or when the user
-    drives them directly, so anything else that switches patch has to say so.
-    Guarded throughout: the combo box is optional (it can be turned off in
-    preferences, and is None then), and a patch switch must not fail because a
-    piece of chrome could not be updated.
+    Since D-d.1b that is one control - the sidebar's Game Patches page - plus
+    the shared model behind it. The toolbar combo box and the Change Game menu
+    are both gone; a patch is switched from the sidebar or the Patch Manager.
+    The function stays because it is the seam every patch-switching route
+    already calls, and because the Patch Manager adds and removes patches
+    without going through a switch at all.
     """
     window = getattr(globals_, 'mainWindow', None)
     if window is None:
         return
 
-    updater = getattr(window, 'updatePatchComboBox', None)
-    if updater is not None:
+    # Re-read the shared list once, here, rather than letting each view refresh
+    # it: two refreshes would hit the disk twice for one switch, and a view that
+    # refreshed the model *after* another had read it could show a different
+    # set - the disagreement f7 exists to end.
+    patch_model().refresh()
+
+    # The sidebar's Game Patches page (D-d.1). Guarded: the page is only there
+    # once the sidebar is built, and a patch switch must not fail because a
+    # piece of chrome could not be updated.
+    patch_list = getattr(window, 'patchListWidget', None)
+    if patch_list is not None:
         try:
-            updater()
+            patch_list.refresh()
         except Exception:
             pass
 
-    menu = getattr(window, 'GameDefMenu', None)
-    if menu is None:
-        return
-
-    try:
-        loaded = setting('LastGameDef')
-
-        # update_flag suppresses handleGameDefClicked, which the toggle would
-        # otherwise fire - re-entering the load we are finishing.
-        menu.update_flag = True
+    # The directory listing lists a *patch's* levels, so a patch switch means a
+    # different Stage folder entirely - a full rebuild, not a repaint (D-d.2).
+    refresh_tree = getattr(window, 'RefreshDirectoryListing', None)
+    if refresh_tree is not None:
         try:
-            for action in menu.actGroup.actions():
-                action.setChecked(action.data() == loaded)
-        finally:
-            menu.update_flag = False
-
-        menu.gameChanged.emit()
-    except Exception:
-        pass
+            refresh_tree(rebuild=True)
+        except Exception:
+            pass
 
 
 def NotifyCollabGameDefChanged():

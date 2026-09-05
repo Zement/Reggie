@@ -2118,7 +2118,32 @@ class SpriteItem(LevelEditorItem):
                 auxObj.boundingRect().height(),
             ))
 
-        self.ImageObj.dataChanged()
+        # `dataChanged` is **patch-authored code**, so it can raise for reasons
+        # the editor cannot prevent and must not be punished for. NSMLW's midway
+        # flag is the case that found this (Zement, 2026-09-05): it ships only
+        # `midway_flag_0.png`, caches the missing colours as None, and then reads
+        # `.width()` off whichever colour the sprite asks for. A level carrying a
+        # flag of colour 1 - Newer's 01-01 does; MidnightWii's does not, which is
+        # exactly why the bug looked like a "weird group of patches" - therefore
+        # raised inside LoadGameDef, whose except covers the whole load. One
+        # sprite's image code cost the entire patch, and the editor fell back to
+        # retail with "'NoneType' object has no attribute 'width'".
+        #
+        # Caught per sprite, so the damage stops at the sprite it belongs to:
+        # that one draws at its default size, everything else loads, and the
+        # patch opens. Reported once per sprite type rather than per sprite - a
+        # level with forty flags would otherwise print forty identical
+        # tracebacks.
+        try:
+            self.ImageObj.dataChanged()
+        except Exception:
+            if self.type not in globals_.BrokenSpriteImages:
+                globals_.BrokenSpriteImages.add(self.type)
+
+                import traceback
+                print("[Warning] sprite %d's image code raised in dataChanged; "
+                      "it will draw at its default size." % self.type, flush=True)
+                traceback.print_exc()
 
         if globals_.SpriteImagesShown:
             self.UpdateRects()

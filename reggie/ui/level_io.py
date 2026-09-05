@@ -86,10 +86,20 @@ class LevelIO:
 
     def HandleNewLevel(self):
         """
-        Create a new level
+        Create a new level, in a tab of its own.
+
+        **Additive since D-d.3b** (Zement, 2026-09-01: "with the tree design,
+        it might be better now to simply leave the active level untouched, and
+        create a new tab with the new level"). It replaced everything before,
+        which is what File -> New means in a single-document editor and stopped
+        being the right answer when the editor gained tabs: a new level is
+        something you want *as well as* what you have open, not instead of it.
+
+        No CheckDirty either, and for the same reason the tree's open path has
+        none: it asks whether unsaved work stands in the way of *replacing* the
+        workspace, and nothing is being replaced.
         """
-        if self.win.CheckDirty(): return
-        self.win.LoadLevel(None, False, 1)
+        self.win.LoadLevel(None, False, 1, add=True)
     def HandleOpenFromName(self):
         """
         Open a level using the level picker
@@ -129,11 +139,22 @@ class LevelIO:
             globals_.Dirty = False
             return
 
-        manager.clear_dirty_for_file(file_path)
+        cleared = manager.clear_dirty_for_file(file_path)
 
-        # The active session may be on another file entirely (Save As from a
-        # tab, with other files open), so clear it explicitly too.
-        globals_.Dirty = False
+        # `clear_dirty_for_file` finds nothing for a level that has never been
+        # saved: `_handles` is keyed by path and an unsaved handle is not in it,
+        # so `sessions_for(None)` is empty (D-d.3b). Clear the active session
+        # directly for that case alone.
+        #
+        # **Only for that case** (Zement, 2026-09-01). This used to be
+        # unconditional, "because the active session may be on another file
+        # entirely" - which is exactly backwards: when it *is* another file,
+        # that file has nothing to do with the save, and clearing it threw away
+        # a dirty marker for work still only in memory. When it is the same
+        # file, `clear_dirty_for_file` has already cleared it. So the line
+        # helped in no case and hurt in one.
+        if not cleared and not file_path:
+            globals_.Dirty = False
 
     def _ProposeCollabSwitch(self, level, area):
         """
@@ -291,6 +312,12 @@ class LevelIO:
         if fn == '':  # No filename given - abort
             return False
 
+        # Kept across the reassignment below, because the sessions are still
+        # keyed under it and the rename after a successful write needs both
+        # ends. Only meaningful when `copy` is False - a copy deliberately
+        # leaves the editor on the file it had open.
+        previous_path = self.win.fileSavePath
+
         if not copy:
             globals_.AutoSaveDirty = False
             # Save As writes every area too - see _ClearDirtyForSavedFile. The
@@ -336,6 +363,18 @@ class LevelIO:
             f.write(data)
 
         if not copy:
+            # The sessions are still keyed under the old path (Block D-d.3).
+            # A handle is keyed by path, so without this the manager believes
+            # they are on a file the editor is no longer editing: opening the
+            # *new* path would build a second handle over bytes already open -
+            # two undo stacks over one file - and opening the old one would
+            # find sessions for a file that may not exist any more.
+            #
+            # After the write, not before: a rename recorded for a save that
+            # then failed would leave the manager describing something that
+            # never happened.
+            self._RebindSessionsTo(previous_path, fn)
+
             setSetting('AutoSaveFilePath', fn)
             setSetting('AutoSaveFileData', 'x')
 
@@ -346,14 +385,53 @@ class LevelIO:
             self.win.undoStack.clear()
 
         return True
+
+    def _RebindSessionsTo(self, old_path, new_path):
+        """Move every session on ``old_path`` to ``new_path``. True if moved.
+
+        Save As leaves the editor working on the new file, so the manager has
+        to agree. Guarded rather than assumed: there is no manager in the
+        headless suites, and a refusal is a real answer here - the manager
+        declines when the new path is *already* open, because merging would
+        give one file two handles' worth of undo history and picking one to
+        discard would silently drop a user's edits.
+
+        A refusal is reported rather than raised. The bytes are on disk either
+        way, and losing a save because the bookkeeping could not be tidied is
+        the worse outcome; the sessions simply keep the path they had, which is
+        the pre-D-d.3 behaviour.
+
+        **`win.fileSavePath` must already be the new path when this runs.** The
+        two are one fact - which file the editor is working on - kept in two
+        places, and a rename applied to only one of them is worse than no
+        rename at all: the manager then holds sessions under a path the window
+        does not know about, so opening that file again finds no handle, loads
+        it a second time, and builds fresh scene items over a level whose old
+        items are still live ("wrapped C/C++ object of type ObjectItem has been
+        deleted"). HandleSaveAs assigns fileSavePath before the write and calls
+        this after it, so the order holds there.
+        """
+        manager = globals_.get_session_manager()
+        if manager is None:
+            return False
+
+        try:
+            return bool(manager.rename_file(old_path, new_path))
+        except Exception:
+            return False
     def HandleSaveCopyAs(self):
         """
         Save a level back to the archive, with a new filename, but does not store this filename
         """
         self.win.HandleSaveAs(True)
-    def LoadLevel(self, name, isFullPath, areaNum):
+    def LoadLevel(self, name, isFullPath, areaNum, add=False):
         """
         Load a level from NSMBW into the editor.
+
+        ``add`` opens the level **alongside** whatever is already open rather
+        than replacing it (D-d.3b). The directory listing passes it; every
+        other caller replaces, which is what File -> Open, New Level and a
+        patch switch all mean.
         """
         new = name is None
         same = False
@@ -385,7 +463,40 @@ class LevelIO:
             # fileSavePath survives every session being closed, so on its own it
             # would send a genuine re-open down the area-change branch, where
             # globals_.Level is None and there is nothing to change the area of.
-            same = (name == self.win.fileSavePath
+            #
+            # What "same" has to mean is *"is this file the one currently in
+            # front, with its level still loaded"* - because the branch it
+            # guards changes area within `globals_.Level`, and that is the
+            # active session's level.
+            #
+            # Both halves matter since D-d.3b, and each has drawn blood:
+            #
+            # - Comparing against `win.fileSavePath` (a property resolving
+            #   through the process-wide manager) let a *second* ReggieWindow
+            #   booting while the first one's sessions were open read the first
+            #   window's path, take this branch, and rebuild its palette from
+            #   the other window's scene items - "wrapped C/C++ object of type
+            #   ObjectItem has been deleted".
+            # - Comparing against `win._fileSavePath` alone is stale the other
+            #   way: activation moves the file in front without assigning it,
+            #   so opening a *different* file after switching tabs took this
+            #   branch and changed the area of whatever was active instead.
+            #
+            # Asking the active session is the question itself, with no cached
+            # answer to go stale. Falls back to the window's own value when
+            # there is no manager, which is how the pre-session path runs.
+            # The second-window case needs one more condition: the manager is
+            # process-wide, so a window that has not loaded anything yet must
+            # not adopt another window's session. `_fileSavePath` is per window
+            # and is None until this window loads something, which is exactly
+            # that test.
+            manager = globals_.get_session_manager()
+            active = manager.active if manager is not None else None
+            current_path = (active.file_path if active is not None
+                            else self.win._fileSavePath)
+
+            same = (name == current_path
+                    and self.win._fileSavePath is not None
                     and getattr(globals_, 'Level', None) is not None)
             
             # If we just discarded changes, force a full reload even if it's the same level
@@ -404,15 +515,21 @@ class LevelIO:
             # Get the data
             if not globals_.RestoredFromAutoSave:
 
-                # Set the filepath variables
+                # Set the filepath variables.
+                #
+                # Read back from `name`, not from `win.fileSavePath` (D-d.3b).
+                # That is a property resolving through the *active* session now,
+                # and the session for this file does not exist yet - so until it
+                # does, reading it answers with the file this load is replacing
+                # or joining, and this block would open the wrong archive.
                 self.win.fileSavePath = name
                 if globals_.UseFullFilepath:
-                    self.win.fileTitle = self.win.fileSavePath
+                    self.win.fileTitle = name
                 else:
-                    self.win.fileTitle = os.path.basename(self.win.fileSavePath)
+                    self.win.fileTitle = os.path.basename(name)
 
                 # Open the file
-                with open(self.win.fileSavePath, 'rb') as fileobj:
+                with open(name, 'rb') as fileobj:
                     levelData = fileobj.read()
 
                 # Decompress, if needed
@@ -451,19 +568,68 @@ class LevelIO:
                 # Turn off the autosave flag
                 globals_.RestoredFromAutoSave = False
 
-        # Turn the dirty flag off, and keep it that way
-        globals_.Dirty = False
+        # Keep the dirty flag off for the duration of the load: everything
+        # below fires the handlers a user edit would, and none of it is one.
+        #
+        # **Only the override, not `globals_.Dirty = False`** (Zement,
+        # 2026-09-01: "unsaved tabs lose their dirty flag if nearby tabs get
+        # opened, closed, saved, or other").
+        #
+        # `Dirty` is proxied onto the *active* session, and when adding a file
+        # the active session is still the previous one - the new session does
+        # not exist until `add_level` runs, ~270 lines below. So this wrote
+        # False over the tab the user had just been editing, and their unsaved
+        # work stopped being reported as unsaved. Measured: dirty 01-01, open
+        # 01-02 from the tree, and 01-01's flag is gone.
+        #
+        # Exactly the class of bug D-d.3b found with the area number, and for
+        # the same reason: a write to a proxied global lands on the outgoing
+        # session when the incoming one has not been made yet. The area case
+        # was caught because two tabs visibly claimed the same name; this one
+        # was invisible until D-d.3c put the dirty set on screen.
+        #
+        # Nothing is lost by dropping it. A new `EditorSession` is born with
+        # `dirty = False`, so the session being loaded into starts clean either
+        # way; and when *replacing*, `close_all()` disposes every session before
+        # the new one is made, so there was never a flag left to clear.
         globals_.DirtyOverride += 1
 
-        # First, clear out the existing level.
-        self.win.scene.clearSelection()
-        self.win.CurrentSelection = []
-        self.win.scene.clear()
+        # First, clear out the existing level. Two different things, and only
+        # one of them is skipped when adding - they were one block until this
+        # was found, which is the bug.
+        #
+        # **The scene is per session** (D-c.1), so `win.scene` is the *active*
+        # session's. Clearing it while adding a file would destroy the previous
+        # file's items with its sessions still live - the "wrapped C/C++ object
+        # of type ObjectItem has been deleted" crash by another route. The new
+        # session arrives with an empty scene of its own, so there is nothing to
+        # clear for it either.
+        if not add:
+            self.win.scene.clearSelection()
+            self.win.CurrentSelection = []
+            self.win.scene.clear()
 
-        # Clear out all level-thing lists
-        for thingList in (self.win.spriteList, self.win.entranceList, self.win.locationList, self.win.pathList, self.win.commentList):
+        # **The thing lists are still window-owned**, shared by every session
+        # and rebuilt from whichever area is in front. So they are cleared
+        # either way - skipping that appended the incoming area's rows to the
+        # outgoing one's, and the sprite/entrance/path/location lists showed
+        # both levels at once (Zement, 2026-09-02: "the lists are populated
+        # with a lot of duplicates... only one actually belongs to the active
+        # area", measured at 146 + 77 = 223 sprite rows).
+        #
+        # It only showed on the *first* open of a file, which is what made it
+        # look like a difference between clicking a level and clicking its area
+        # 1: every later activation goes through `ActivateSession`, which
+        # clears these lists itself. D-d.3b put both blocks behind one `add`
+        # guard because both were "clearing what is open"; they are not the
+        # same thing, and the scene's per-session-ness does not extend to them.
+        for thingList in (self.win.spriteList, self.win.entranceList,
+                          self.win.locationList, self.win.pathList,
+                          self.win.commentList):
             thingList.clear()
-            thingList.selectionModel().setCurrentIndex(QtCore.QModelIndex(), QtCore.QItemSelectionModel.SelectionFlag.Clear)
+            thingList.selectionModel().setCurrentIndex(
+                QtCore.QModelIndex(),
+                QtCore.QItemSelectionModel.SelectionFlag.Clear)
 
         # Reset these here, because if they are set after
         # creating the objects, they use the old values.
@@ -483,9 +649,12 @@ class LevelIO:
 
         # Load the actual level
         if new:
-            self.win.newLevel()
+            self.win.newLevel(add=add)
         elif not same:
-            self.win.LoadLevel_NSMBW(levelData, areaNum)
+            # `name` rather than win.fileSavePath, for the reason above: the
+            # session that would answer for this file does not exist yet.
+            self.win.LoadLevel_NSMBW(levelData, areaNum, add=add,
+                                     file_path=name if not new else None)
         else:
             # We have already loaded this area's data - it's stored as
             # AbstractAreas in the Level. This means we do not have to open and
@@ -510,8 +679,10 @@ class LevelIO:
 
         self.win.areaComboBox.setCurrentIndex(areaNum - 1)
 
-        # Update patch combo box
-        self.win.updatePatchComboBox()
+        # Put the patch controls in step. Was `updatePatchComboBox()`; the
+        # combo box went in D-d.1b and this is the seam every patch view shares.
+        from reggie.io.gamedef import RefreshPatchSelector
+        RefreshPatchSelector()
 
         # Refresh object layouts
         for layer in globals_.Area.layers:
@@ -547,6 +718,21 @@ class LevelIO:
         # after the session has applied its permissions. Setting them directly
         # here is what re-enabled Backgrounds and the area actions for an Editor
         # client on every level load.
+        # Before the level-specific rules below, because it is the blanket one:
+        # every level action follows "is there a canvas in front".
+        #
+        # Needed here since D-d.3b. `add_level` opens the session *before* the
+        # level exists - deliberately, so the level's own construction has a
+        # session to publish into rather than stamping over the previous one -
+        # so `session.area` is still None when open() -> activate() reaches
+        # SyncToolbarContext, which reads that as "no canvas" and greys out
+        # every level action. Nothing re-synced afterwards, so they stayed dead
+        # until the next activation: opening a second tab, or leaving the tab
+        # and coming back, which is exactly what Zement observed fixing it
+        # (2026-09-02). Backgrounds was the one exception because the line
+        # below re-enables it on its own.
+        self.win.SyncToolbarContext()
+
         set_action_allowed('addarea', len(globals_.Level.areas) < 4)
         set_action_allowed('importarea', len(globals_.Level.areas) < 4)
         set_action_allowed('deletearea', len(globals_.Level.areas) > 1)
@@ -566,7 +752,22 @@ class LevelIO:
         self.win.levelOverview.update()
 
         if new:
-            SetDirty()
+            # Deliberately *not* SetDirty() any more (Zement, 2026-09-01: "a new
+            # level should not open as [Unsaved], this is not needed for a new
+            # level").
+            #
+            # It marked a brand-new level dirty the moment it appeared, which
+            # predates the fork and had a defensible reading - an unsaved level
+            # is unsaved. But "dirty" in this editor means *edited since the
+            # last save*, and it drives the `*` on the tab, the title marker and
+            # the "save your work?" prompt. A level nobody has touched yet has
+            # nothing to lose, so all three were noise: the marker was on before
+            # any edit, and closing an untouched new level asked a question with
+            # no real answer.
+            #
+            # The first actual edit calls SetDirty through the undo stack like
+            # every other change, so nothing is lost by not pre-empting it.
+            pass
 
         elif not same:
             # Add the path to Recent Files
@@ -610,11 +811,34 @@ class LevelIO:
             controller.notifyLevelChanged()
         except Exception:
             pass
-    def newLevel(self):
-        # Create the new level object, and the session that owns it. Opening
-        # the session first means globals_.Level resolves while new() runs.
-        level = Level_NSMBW()
-        session.open_level(level, self.win.fileSavePath, 1)
+    def newLevel(self, add=False):
+        # `_fileSavePath`, not the property (D-d.3b). LoadLevel has already set
+        # it to None for a new level, but the property resolves through the
+        # *active* session - which is still the previous file until this call
+        # replaces it. Reading the property here gave the new empty level the
+        # old level's path, so it was no longer "untitled" and a later load of
+        # that same path took the cheap area-change route instead of reloading.
+        path = self.win._fileSavePath
+
+        if add:
+            # Session first, then the level - the same ordering LoadLevel_NSMBW
+            # uses when adding, and for the same reason: Level_NSMBW() runs
+            # new(), which publishes its default area through set_current_area,
+            # and that writes to whichever session is *active*. Constructing
+            # first would stamp the new level's area 1 over the tab the user
+            # was on.
+            session.add_level(None, path, 1)
+            level = Level_NSMBW()
+
+            manager = globals_.get_session_manager()
+            if manager is not None and manager.active is not None:
+                manager.active.handle.level = level
+        else:
+            # Create the new level object, and the session that owns it.
+            # Opening the session first means globals_.Level resolves while
+            # new() runs.
+            level = Level_NSMBW()
+            session.open_level(level, path, 1)
 
         # Load it
         level.new()
@@ -639,14 +863,46 @@ class LevelIO:
                 self.win.qpt_palette.reset()
             except Exception as e:
                 print(f"[QPT] Warning: Could not reset QPT: {e}")
-    def LoadLevel_NSMBW(self, levelData, areaNum):
+    def LoadLevel_NSMBW(self, levelData, areaNum, add=False, file_path=None):
         """
         Performs all level-loading tasks specific to New Super Mario Bros. Wii levels.
         Do not call this directly - use LoadLevel instead!
+
+        ``add`` opens the level alongside what is open rather than replacing it
+        (D-d.3b). ``file_path`` names the file being loaded; it must be passed
+        when adding, because `win.fileSavePath` is now a property resolving
+        through the *active* session - which is still the previous file until
+        the new session exists.
         """
-        # Create the new level object, and the session that owns it
-        level = Level_NSMBW()
-        session.open_level(level, self.win.fileSavePath, areaNum)
+        path = self.win.fileSavePath if file_path is None else file_path
+
+        if add:
+            # **The session first, then the level** (D-d.3b).
+            #
+            # `Level_NSMBW()` runs new(), which publishes its default area
+            # through `set_current_area` - and that writes to whichever session
+            # is *active*. With open_level that was harmless: close_all() had
+            # already emptied the manager, so there was nothing to write over.
+            # Adding a file leaves the previous session active, so constructing
+            # the level first stamped area 1 over it - measured: two tabs both
+            # claiming "01-01: 1" after opening a second file, when one of them
+            # was area 2.
+            #
+            # Opening an empty session first gives those writes somewhere of
+            # their own to land. The same ordering `open_area` uses, for the
+            # same reason.
+            session.add_level(None, path, areaNum)
+            level = Level_NSMBW()
+
+            # The session was opened with no level, because the level could not
+            # exist yet. Bind them now that it does.
+            manager = globals_.get_session_manager()
+            if manager is not None and manager.active is not None:
+                manager.active.handle.level = level
+        else:
+            # Create the new level object, and the session that owns it
+            level = Level_NSMBW()
+            session.open_level(level, path, areaNum)
 
         # Load it
         if not level.load(levelData, areaNum):

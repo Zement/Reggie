@@ -7,6 +7,7 @@ from reggie.core.tiles import RenderObject, TilesetTile
 from reggie.ui.ui import ListWidgetWithToolTipSignal
 from reggie.io.misc import LoadSpriteData, LoadSpriteListData, LoadSpriteCategories
 from reggie.ui.spriteeditor import SpriteEditorWidget
+from reggie.ui.overlay import canvas_overlay_colour
 from reggie.core.dirty import setting, setSetting
 
 class LevelOverviewWidget(QtWidgets.QWidget):
@@ -26,13 +27,12 @@ class LevelOverviewWidget(QtWidgets.QWidget):
         # Set minimum height to ensure visibility when docked
         self.setMinimumHeight(80)
 
-        # Qt-native, not theme.color('bg'). The theme's `bg` is the *canvas*
-        # colour, which is exactly what this must not match - against it the
-        # overview was invisible (Zement, 2026-08-29). Taken from the running
-        # palette so it follows a light or dark system theme with no setting of
-        # its own, and it is the first of the theme colours to be retired; see
-        # "Retire the old theming engine" in DEFERRED_ITEMS.md for the other 44.
-        self._bgcolor = self.palette().color(QtGui.QPalette.ColorRole.Mid)
+        # Shared with the sub-tab flyout and every future canvas overlay, so the
+        # things floating over the canvas cannot drift apart; the reasoning for
+        # the roles lives on canvas_overlay_colour(). It is also the first of the
+        # theme colours to be retired; see "Retire the old theming engine" in
+        # DEFERRED_ITEMS.md for the other 44.
+        self._bgcolor = canvas_overlay_colour()
         self.bgbrush = QtGui.QBrush(self._bgcolor)
         self.objbrush = QtGui.QBrush(globals_.theme.color('overview_object'))
         self.viewbrush = QtGui.QBrush(globals_.theme.color('overview_zone_fill'))
@@ -591,7 +591,14 @@ class ObjectPickerWidget(QtWidgets.QListView):
 
                 self.ritems.append(pm)
                 self.itemsize.append(QtCore.QSize(defs[i].width * 24 + 4, defs[i].height * 24 + 4))
-                if (idx == 0) and (i in globals_.ObjDesc):
+                # `or ()` because ObjDesc starts as None and only one code path
+                # fills it (LoadGameDef). An abort there - the user cancelling
+                # the "pick a Stage folder" prompt at boot - used to leave it
+                # None and crash here with "argument of type 'NoneType' is not
+                # iterable", before the window existed. LoadGameDef now loads it
+                # before that prompt; this is the belt to that braces, and costs
+                # a tooltip rather than the editor.
+                if (idx == 0) and (i in (globals_.ObjDesc or ())):
                     if isAnim:
                         self.tooltips.append(globals_.trans.string('Objects', 4, '[id]', i, '[desc]', globals_.ObjDesc[i]))
                     else:

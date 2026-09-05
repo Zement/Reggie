@@ -7,11 +7,120 @@ from PyQt6.QtCore import Qt
 from reggie.ui.ui import GetIcon
 from reggie.core import globals_
 from reggie.core.dirty import setting, setSetting
-from reggie.io.gamedef import ReggieGameDefinition, getAvailableGameDefs
+from reggie.io.gamedef import (ReggieGameDefinition, getAvailableGameDefs,
+                               RefreshPatchSelector)
 from reggie.io.misc import validateFolderForPatch
 from reggie.patches.catalog_manager import CatalogManager
 from reggie.patches.download_manager import DownloadManager, github_folder_to_zip_url, extract_folder_name_from_url
 from xml.etree import ElementTree as etree
+
+
+class PatchInfoPanel(QtWidgets.QWidget):
+    """Name, version and description of one patch, from its own ``main.xml``.
+
+    Salvaged from ``GameDefViewer``, the panel at the top of the old
+    ``File -> Change Game`` menu (Block D-d, phase D-d.1b). That menu is gone -
+    a patch is reached from the Patch Manager or the sidebar now - and this was
+    the only thing in it the Patch Manager did not already do.
+
+    The difference from the original: it shows a patch handed to it, not
+    ``globals_.gamedef``. In a manager the interesting patch is the one the
+    cursor is on, which is usually *not* the one currently loaded.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.imgLabel = QtWidgets.QLabel()
+        self.imgLabel.setToolTip(globals_.trans.string('Gamedefs', 0))
+
+        self.versionLabel = QtWidgets.QLabel()
+        self.titleLabel = QtWidgets.QLabel()
+        self.titleLabel.setWordWrap(True)
+        self.descLabel = QtWidgets.QLabel()
+        self.descLabel.setWordWrap(True)
+        self.descLabel.setMinimumHeight(40)
+        # The description is the one field a patch author writes freely, so it
+        # is the one that can be long. Selectable so a link or a credit can be
+        # copied out of it.
+        self.descLabel.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction)
+        self.descLabel.setOpenExternalLinks(True)
+
+        left = QtWidgets.QVBoxLayout()
+        left.addWidget(self.imgLabel)
+        left.addWidget(self.versionLabel)
+        left.addStretch(1)
+
+        right = QtWidgets.QVBoxLayout()
+        right.addWidget(self.titleLabel)
+        right.addWidget(self.descLabel)
+        right.addStretch(1)
+
+        main = QtWidgets.QHBoxLayout(self)
+        main.setContentsMargins(0, 0, 0, 4)
+        main.addLayout(left)
+        main.addLayout(right)
+        main.setStretch(1, 1)
+
+        self.clear()
+
+    def clear(self):
+        """Show nothing in particular - no row is selected."""
+        blank = QtGui.QPixmap(16, 16)
+        blank.fill(QtGui.QColor(0, 0, 0, 0))
+
+        self.imgLabel.setPixmap(blank)
+        self.versionLabel.setText('')
+        self.titleLabel.setText('')
+        self.descLabel.setText(
+            '<i>%s</i>' % globals_.trans.string('MenuItems', 146))
+
+    def setPatch(self, folder, custom_path=None):
+        """Describe the patch with this id. ``folder is None`` means retail.
+
+        Builds a ``ReggieGameDefinition`` for the row rather than reading a
+        cached name: version and description are not carried in the manager's
+        patch dicts, and they are the whole point of this panel.
+        """
+        try:
+            if folder is None:
+                def_ = ReggieGameDefinition()
+            elif custom_path:
+                def_ = ReggieGameDefinition(folder, custom_path=custom_path)
+            else:
+                def_ = ReggieGameDefinition(folder)
+        except Exception:
+            self.clear()
+            return
+
+        # The sprites icon means "this patch brings its own sprite images",
+        # which is what it meant in the old viewer. Retail always does.
+        try:
+            has_sprites = bool(
+                def_.recursiveFiles('sprites', is_folder=True)[0])
+        except Exception:
+            has_sprites = False
+
+        if not def_.custom or has_sprites:
+            img = GetIcon('sprites', False).pixmap(16, 16)
+        else:
+            img = QtGui.QPixmap(16, 16)
+            img.fill(QtGui.QColor(0, 0, 0, 0))
+
+        # Some patches write their version with a leading 'v' in main.xml and
+        # some do not, so prefixing unconditionally - as the old viewer did -
+        # produced "vv2.0" for the former. Add the v only when it is missing.
+        version = '' if def_.version is None else str(def_.version).strip()
+        if version and not version[:1].lower() == 'v':
+            version = 'v' + version
+
+        self.imgLabel.setPixmap(img)
+        self.versionLabel.setText(
+            '' if not version
+            else '<i><p style="font-size:10px;">%s</p></i>' % version)
+        self.titleLabel.setText('<b>%s</b>' % str(def_.name))
+        self.descLabel.setText(str(def_.description))
 
 
 class PatchManagerDialog(QtWidgets.QDialog):
@@ -196,11 +305,23 @@ class PatchManagerDialog(QtWidgets.QDialog):
         
         leftLayout.addWidget(leftSplitter)
         
-        # Right side: Plugin editor
+        # Right side: patch info, then the plugin editor
         rightWidget = QtWidgets.QWidget()
         rightLayout = QtWidgets.QVBoxLayout(rightWidget)
         rightLayout.setContentsMargins(0, 0, 0, 0)
-        
+
+        # The one thing the old Change Game menu had that this dialog did not
+        # (Block D-d, phase D-d.1b): the name, version and description a patch
+        # declares in its own main.xml. That menu is gone now - the Patch
+        # Manager and the sidebar are the ways to reach a patch - so its info
+        # panel is salvaged here rather than lost with it.
+        #
+        # Unlike the menu's viewer, this one follows the *selected* row rather
+        # than the loaded patch: in a manager you read about the patch you are
+        # pointing at, which is usually not the one you have open.
+        self.patchInfo = PatchInfoPanel()
+        rightLayout.addWidget(self.patchInfo)
+
         pluginLabel = QtWidgets.QLabel('<b>Plugins</b>')
         rightLayout.addWidget(pluginLabel)
         
@@ -444,10 +565,10 @@ class PatchManagerDialog(QtWidgets.QDialog):
             self.patches = self._get_all_patches()
             self._populate_table()
             
-            # Refresh the main window's GameDefMenu
-            if hasattr(globals_, 'mainWindow') and globals_.mainWindow:
-                if hasattr(globals_.mainWindow, 'GameDefMenu'):
-                    globals_.mainWindow.GameDefMenu.refreshMenu()
+            # Put every patch control back in step (D-d.1b). Was a
+            # GameDefMenu.refreshMenu() call; that menu is gone, and this
+            # is the seam all patch views share now.
+            RefreshPatchSelector()
             
             QtWidgets.QMessageBox.information(self, 'Patch Removed', 
                 f'"{patch_name}" has been removed successfully.')
@@ -563,11 +684,18 @@ class PatchManagerDialog(QtWidgets.QDialog):
         selected_rows = self.table.selectionModel().selectedRows()
         if not selected_rows:
             self._clear_plugin_editor()
+            self.patchInfo.clear()
             return
-        
+
         row = selected_rows[0].row()
         patch = self.patches[row]
-        
+
+        # The info panel follows the selection too (D-d.1b). Retail is the row
+        # with custom=False, and it describes itself like any other.
+        self.patchInfo.setPatch(
+            patch['folder'] if patch.get('custom') else None,
+            patch.get('custom_path'))
+
         self._load_plugin_editor(patch)
     
     def _clear_plugin_editor(self):
@@ -1198,10 +1326,10 @@ class PatchManagerDialog(QtWidgets.QDialog):
             self.patches = self._get_all_patches()
             self._populate_table()
             
-            # Refresh the main window's GameDefMenu
-            if hasattr(globals_, 'mainWindow') and globals_.mainWindow:
-                if hasattr(globals_.mainWindow, 'GameDefMenu'):
-                    globals_.mainWindow.GameDefMenu.refreshMenu()
+            # Put every patch control back in step (D-d.1b). Was a
+            # GameDefMenu.refreshMenu() call; that menu is gone, and this
+            # is the seam all patch views share now.
+            RefreshPatchSelector()
             
             # Remove from scanned mods list
             self.scanned_riiv_mods.remove(riiv_mod)
@@ -1302,10 +1430,10 @@ class PatchManagerDialog(QtWidgets.QDialog):
         self.patches = self._get_all_patches()
         self._populate_table()
         
-        # Refresh the main window's GameDefMenu
-        if hasattr(globals_, 'mainWindow') and globals_.mainWindow:
-            if hasattr(globals_.mainWindow, 'GameDefMenu'):
-                globals_.mainWindow.GameDefMenu.refreshMenu()
+        # Put every patch control back in step (D-d.1b). Was a
+        # GameDefMenu.refreshMenu() call; that menu is gone, and this
+        # is the seam all patch views share now.
+        RefreshPatchSelector()
         
         QtWidgets.QMessageBox.information(self, 'Patch Added', 
             f'Patch "{patch_name}" has been added successfully!')
@@ -1817,10 +1945,10 @@ class PatchManagerDialog(QtWidgets.QDialog):
             # Reload patches list
             self.patches = self._get_all_patches()
             
-            # Refresh the main window's GameDefMenu
-            if hasattr(globals_, 'mainWindow') and globals_.mainWindow:
-                if hasattr(globals_.mainWindow, 'GameDefMenu'):
-                    globals_.mainWindow.GameDefMenu.refreshMenu()
+            # Put every patch control back in step (D-d.1b). Was a
+            # GameDefMenu.refreshMenu() call; that menu is gone, and this
+            # is the seam all patch views share now.
+            RefreshPatchSelector()
             
             # Update status
             self.catalog_status[patch_name] = 'Installed'
@@ -1944,10 +2072,10 @@ class PatchManagerDialog(QtWidgets.QDialog):
             # Reload patches list to include the newly installed patch
             self.patches = self._get_all_patches()
             
-            # Refresh the main window's GameDefMenu to show the new patch
-            if hasattr(globals_, 'mainWindow') and globals_.mainWindow:
-                if hasattr(globals_.mainWindow, 'GameDefMenu'):
-                    globals_.mainWindow.GameDefMenu.refreshMenu()
+            # Put every patch control back in step (D-d.1b). Was a
+            # GameDefMenu.refreshMenu() call; that menu is gone, and this
+            # is the seam all patch views share now.
+            RefreshPatchSelector()
             
             # Update status
             self.catalog_status[patch_name] = 'Installed'

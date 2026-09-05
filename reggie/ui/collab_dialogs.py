@@ -80,6 +80,128 @@ def _tr(numcode, *replacements):
     return text
 
 
+#: How short the chat half of the panel may be dragged.
+#:
+#: **Measured from its own controls rather than fixed**, because what has to
+#: stay visible is exactly the three rows that cannot shrink - the tab bar, the
+#: entry, the actions button and End session - plus a line of log. A constant
+#: would be either too small to hold them on a large font or needlessly large on
+#: a small one.
+#:
+#: Zement's rule, 2026-09-04: the buttons "should always be visible... and *eat*
+#: from the above section Chat". They eat by being fixed while the log gives,
+#: and this floor is what stops the dragging once there is nothing left to eat.
+MIN_CHAT_LOG_LINES = 1
+
+#: How short the roster half may be dragged: its label and about two rows. Small
+#: on purpose - Zement's 5%. The buttons left this half, so there is nothing
+#: below the list that has to stay reachable, and a session with two
+#: participants should be able to give the chat almost everything.
+MIN_ROSTER_HEIGHT = 60
+
+
+class SplitButton(QtWidgets.QWidget):
+    """A primary action with a menu of related ones beside it (D-d.6).
+
+    Zement's ask, 2026-09-04: the collaboration panel had five buttons across
+    two rows in a ~260px column, and at that width each was a few letters wide -
+    "ange ro", "ve from s", "an addre" in his screenshot. He asked for one
+    action kept separate and the rest folded into a single menu button, in the
+    shape VS Code uses, and named the re-designed Item Properties dialogs as the
+    next place it is wanted.
+
+    Two segments rather than one button with a dropdown, which is the second of
+    the two designs he offered: the left half runs the default action on click,
+    the right half opens the menu. One control, two targets - which is what it
+    is, and a single button that sometimes acts and sometimes opens a menu is
+    the version that gets mis-clicked.
+
+    The face shows the first action added, and follows the menu after that:
+    choosing something from the list makes *that* what the face shows, so the
+    action a user repeats is the one already under their pointer.
+
+    **Enabling does not move it.** The face is a place, not a recommendation - a
+    button whose label changes because something elsewhere became selectable is
+    a button you cannot learn. A disabled action stays on the face and the face
+    is disabled with it, which is the same thing every other disabled button in
+    the editor does.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self._actions = []
+        self._current = None
+
+        self.button = QtWidgets.QPushButton(self)
+        self.button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                  QtWidgets.QSizePolicy.Policy.Fixed)
+        self.button.clicked.connect(self._runCurrent)
+
+        self.arrow = QtWidgets.QToolButton(self)
+        self.arrow.setArrowType(QtCore.Qt.ArrowType.DownArrow)
+        self.arrow.setPopupMode(
+            QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.arrow.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed,
+                                 QtWidgets.QSizePolicy.Policy.Fixed)
+
+        self.menu = QtWidgets.QMenu(self)
+        self.arrow.setMenu(self.menu)
+
+        # Square corners where the two meet, so they read as one control.
+        self.button.setStyleSheet(
+            'QPushButton { border-top-right-radius: 0; '
+            'border-bottom-right-radius: 0; }')
+        self.arrow.setStyleSheet(
+            'QToolButton { border-top-left-radius: 0; '
+            'border-bottom-left-radius: 0; }')
+
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.button, 1)
+        layout.addWidget(self.arrow, 0)
+
+    def addAction(self, text, callback):
+        """Add an action. The first one added is the starting default."""
+        action = self.menu.addAction(text)
+        action.triggered.connect(
+            lambda _checked=False, a=action: self._choose(a))
+
+        self._actions.append((action, callback))
+
+        if self._current is None:
+            self._setCurrent(action)
+
+        return action
+
+    def setActionEnabled(self, action, enabled):
+        """Enable or disable one action, leaving which one is shown alone."""
+        action.setEnabled(bool(enabled))
+
+        # The face is clickable exactly when the action it shows is - it does
+        # not move to a different action to stay clickable.
+        if action is self._current:
+            self.button.setEnabled(bool(enabled))
+
+    def _setCurrent(self, action):
+        self._current = action
+        self.button.setText(action.text())
+        self.button.setEnabled(action.isEnabled())
+
+    def _choose(self, action):
+        """A menu pick: run it, and make it the default for next time."""
+        self._setCurrent(action)
+        self._runCurrent()
+
+    def _runCurrent(self):
+        for action, callback in self._actions:
+            if action is self._current:
+                if action.isEnabled():
+                    callback()
+                return
+
+
 _FALLBACKS = {
     0: 'Collaboration',
     1: 'Host a session',
@@ -109,6 +231,13 @@ _FALLBACKS = {
     25: 'Only from the Patch Manager',
     26: 'Only from the host (data files only)',
     27: 'Patch Manager, then the host (recommended)',
+    # D-d.5's two log tabs. 11 ('Chat') names the tab holding what people typed;
+    # 28 names the one holding everything in arrival order, which is what gets
+    # saved as the session's record.
+    28: 'Activity',
+    # Replaces the Send button (D-d.6): it said what Enter already does, and
+    # took a third of the row in a ~260px column to say it.
+    29: 'Press Enter to send',
 }
 
 
@@ -611,71 +740,179 @@ class CollabStatusWindow(QtWidgets.QDialog):
         self._roster_entries = []
 
         self.roster = QtWidgets.QListWidget()
-        self.roster.setMinimumWidth(200)
 
+        # No minimum width since D-d.5. It was 200 for a 560px dialog; in a
+        # ~260px sidebar slice a floor that size forces a horizontal scrollbar
+        # on the whole column. The roster elides instead, and the busy detail
+        # that would be cut off is in the tooltip.
+        self.roster.setTextElideMode(QtCore.Qt.TextElideMode.ElideRight)
+        self.roster.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        # Two views of one conversation (D-d.5, Zement's brief 2026-09-02).
+        # `chatLog` holds **everything**, in arrival order; `userLog` holds only
+        # what people typed. The split is presentation - the distinction it
+        # splits on is already carried and already trustworthy, since the host
+        # stamps `kind` on every message and a client cannot forge it.
+        #
+        # The complete log is the one kept under the old name, deliberately.
+        # `_writeChatLog` reads `window.chatLog.toPlainText()` to save the
+        # session's record, and a split that quietly made that name mean "the
+        # half without the status messages" would lose half of what happened
+        # from every saved log, with nothing to notice it by.
         self.chatLog = QtWidgets.QTextEdit()
         self.chatLog.setReadOnly(True)
+
+        self.userLog = QtWidgets.QTextEdit()
+        self.userLog.setReadOnly(True)
+
+        self.logTabs = QtWidgets.QTabWidget()
+        self.logTabs.addTab(self.userLog, _tr(11))
+        self.logTabs.addTab(self.chatLog, _tr(28))
+        self.logTabs.setDocumentMode(True)
+
+        # Titles without the unread marker, to put back when a tab is read.
+        self._tabTitles = [self.logTabs.tabText(0), self.logTabs.tabText(1)]
+        self._unread = [False, False]
+        self.logTabs.currentChanged.connect(self._markTabRead)
 
         self.chatEntry = QtWidgets.QLineEdit()
         self.chatEntry.setMaxLength(protocol.MAX_CHAT_CHARS)
         self.chatEntry.returnPressed.connect(self._sendChat)
 
-        sendButton = QtWidgets.QPushButton(_tr(12))
-        sendButton.clicked.connect(self._sendChat)
-
-        entryRow = QtWidgets.QHBoxLayout()
-        entryRow.addWidget(self.chatEntry)
-        entryRow.addWidget(sendButton)
+        # No Send button (Zement, 2026-09-04). Enter already sends, and in a
+        # ~260px column the button took a third of the row to say so. The
+        # placeholder says it instead, which costs no width at all and is only
+        # there while the box is empty.
+        self.chatEntry.setPlaceholderText(_tr(29))
 
         chatColumn = QtWidgets.QVBoxLayout()
-        chatColumn.addWidget(QtWidgets.QLabel(_tr(11)))
-        chatColumn.addWidget(self.chatLog)
-        chatColumn.addLayout(entryRow)
+        chatColumn.setContentsMargins(0, 0, 0, 0)
+
+        # The log is the only part that gives: three rows of controls under it
+        # stay put and it takes whatever is left. Without this the log's own
+        # minimum - a QTextEdit asks for 70px, and 98 inside a tab widget - was
+        # the pane's real floor, so the configured one never applied and the
+        # buttons could be dragged out of sight (Zement, 2026-09-04: they
+        # "should always be visible... and *eat* from the above section").
+        from reggie.ui.sidebar import let_view_give, squeeze_before_scroll
+
+        self.logTabs.setMinimumHeight(0)
+        for log in (self.userLog, self.chatLog):
+            let_view_give(log)
+
+        # ...and the panel as a whole would rather be squeezed to that than be
+        # scrolled by its sidebar section, which would put the buttons below the
+        # fold - the one place they must never be.
+        squeeze_before_scroll(self)
+
+        chatColumn.addWidget(self.logTabs, 1)
+        chatColumn.addWidget(self.chatEntry, 0)
 
         rosterColumn = QtWidgets.QVBoxLayout()
+        rosterColumn.setContentsMargins(0, 0, 0, 0)
         rosterColumn.addWidget(QtWidgets.QLabel(_tr(10)))
         rosterColumn.addWidget(self.roster)
 
-        if self.is_host:
-            self.roleButton = QtWidgets.QPushButton(_tr(13))
-            self.roleButton.clicked.connect(self._changeRole)
-            self.kickButton = QtWidgets.QPushButton(_tr(14))
-            self.kickButton.clicked.connect(self._kick)
-            self.banButton = QtWidgets.QPushButton(_tr(15))
-            self.banButton.clicked.connect(self._ban)
+        # Every action but one, folded into a single menu button (D-d.6). Five
+        # buttons across a ~260px column left each a few letters wide - "ange
+        # ro", "ve from s", "an addre" in Zement's screenshot, 2026-09-04.
+        #
+        # In the **chat** half rather than under the roster, which is what lets
+        # the roster shrink to almost nothing: with the buttons below it, its
+        # floor was its whole button stack and the panel could not be made
+        # small. The host actions still act on the roster selection, and are
+        # still disabled when it does not name a participant.
+        # Host only: every action in it is a host's, so a client would get an
+        # empty menu. `None` rather than an unused widget, so the attribute says
+        # which case this is.
+        self.actionsButton = SplitButton() if self.is_host else None
 
-            rosterColumn.addWidget(self.roleButton)
-            rosterColumn.addWidget(self.kickButton)
-            rosterColumn.addWidget(self.banButton)
+        if self.is_host:
+            self.roleAction = self.actionsButton.addAction(
+                _tr(13), self._changeRole)
+            self.kickAction = self.actionsButton.addAction(
+                _tr(14), self._kick)
+            self.banAction = self.actionsButton.addAction(
+                _tr(15), self._ban)
+
+            # The join code is otherwise unrecoverable: it is shown once when
+            # hosting starts, and a host who dismissed that dialog without
+            # copying it had no way to invite anybody afterwards.
+            self.copyCodeAction = self.actionsButton.addAction(
+                'Copy join code', self._copyJoinCode)
+            self.actionsButton.setActionEnabled(self.copyCodeAction, False)
 
             self.roster.currentRowChanged.connect(self._updateHostButtons)
             self._updateHostButtons(-1)
 
-        # Session-level actions, separated from the per-participant controls
-        # above because they act on the session rather than on whoever happens
-        # to be selected.
-        rosterColumn.addSpacing(8)
-
-        if self.is_host:
-            # The join code is otherwise unrecoverable: it is shown once when
-            # hosting starts, and a host who dismissed that dialog without
-            # copying it had no way to invite anybody afterwards.
-            self.copyCodeButton = QtWidgets.QPushButton('Copy join code')
-            self.copyCodeButton.clicked.connect(self._copyJoinCode)
-            self.copyCodeButton.setEnabled(False)
-            rosterColumn.addWidget(self.copyCodeButton)
-
+        # Kept out of the menu, deliberately (Zement: "keep only the button End
+        # session separate"). It is the one action that ends something for
+        # everybody, and an action like that should not be one menu pick away
+        # from the ones that do not.
         self.leaveButton = QtWidgets.QPushButton(
             'End session' if self.is_host else 'Leave session')
         self.leaveButton.clicked.connect(self._leave)
-        rosterColumn.addWidget(self.leaveButton)
+        self.leaveButton.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                       QtWidgets.QSizePolicy.Policy.Fixed)
 
-        columns = QtWidgets.QHBoxLayout()
-        columns.addLayout(rosterColumn, 1)
-        columns.addLayout(chatColumn, 2)
+        # Three rows, each its own (Zement, 2026-09-04): the chat entry, then
+        # the actions, then End session. Stacked rather than paired, so the one
+        # that ends the session for everybody is never beside something
+        # harmless at a width where both read as three letters.
+        if self.is_host:
+            chatColumn.addWidget(self.actionsButton, 0)
 
-        self.setLayout(columns)
-        self.resize(560, 320)
+        chatColumn.addWidget(self.leaveButton, 0)
+
+        # Stacked, not side by side (Zement, 2026-09-02: "this is the only real
+        # UI change needed"). The two columns were written for a 560px dialog;
+        # in a ~260px sidebar slice they gave roughly 85px of roster beside
+        # 175px of chat, and neither is usable at that width. Stacked, each gets
+        # the full width and the user divides the height.
+        #
+        # A splitter rather than a plain layout, so that division is the user's:
+        # a session with eight participants wants a tall roster, one with two
+        # wants none of it. The sidebar section it sits in is itself in a
+        # splitter, which is the same bargain one level up.
+        rosterPane = QtWidgets.QWidget()
+        rosterPane.setLayout(rosterColumn)
+
+        chatPane = QtWidgets.QWidget()
+        chatPane.setLayout(chatColumn)
+
+        self.split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self.split.addWidget(rosterPane)
+        self.split.addWidget(chatPane)
+
+        # The chat takes the slack: it is the part that grows without limit,
+        # and a roster of three names does not want half the panel.
+        self.split.setStretchFactor(0, 0)
+        self.split.setStretchFactor(1, 1)
+        self.split.setChildrenCollapsible(False)
+
+        # A floor on each half, set to what that half actually needs rather than
+        # to a fraction of a panel whose height the user is dragging - which
+        # would be circular.
+        #
+        # The roster's used to be its own size hint, and that was the whole of
+        # why the panel could not be made small: the hint included the button
+        # stack below the list, so the floor was two rows of buttons plus a
+        # list. With the actions in the chat half there is nothing under the
+        # list that must stay reachable, so the roster's floor is its label and
+        # about two rows (Zement, 2026-09-04: reduce it to 5%).
+        rosterPane.setMinimumHeight(MIN_ROSTER_HEIGHT)
+        chatPane.setMinimumHeight(self._chatFloor())
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.addWidget(self.split)
+
+        self.setLayout(layout)
+
+        # Still a usable free-floating dialog: a session can start before the
+        # shell exists, and the suites drive it with no sidebar at all.
+        self.resize(360, 480)
 
         # In a QDialog every QPushButton is auto-default, so Enter activates
         # whichever button holds focus as well as sending the chat line. That
@@ -693,6 +930,30 @@ class CollabStatusWindow(QtWidgets.QDialog):
         # returnPressed, not made the default button: a default button would
         # fire whenever the dialog has focus anywhere, including in the roster.
         self.chatEntry.setFocus()
+
+    def _chatFloor(self):
+        """How short the chat half may be: its fixed rows, plus a line of log.
+
+        Everything below the log stays put and the log gives, so the floor is
+        reached exactly when the log has nothing left to give. Measured from the
+        widgets rather than written as a number, so it is right at any font
+        size.
+        """
+        rows = self.chatEntry.sizeHint().height() \
+            + self.leaveButton.sizeHint().height()
+
+        if self.actionsButton is not None:
+            rows += self.actionsButton.sizeHint().height()
+
+        # The tab bar, which is what is left of the log's own hint once its
+        # viewport is allowed to disappear.
+        rows += self.logTabs.tabBar().sizeHint().height()
+
+        line = self.fontMetrics().lineSpacing() * MIN_CHAT_LOG_LINES
+
+        # Frames, spacing and the layout's own margins. Small and unavoidable;
+        # a few pixels too many here is invisible, a few too few clips a button.
+        return rows + line + 16
 
     # -- updates ------------------------------------------------------------
 
@@ -784,16 +1045,49 @@ class CollabStatusWindow(QtWidgets.QDialog):
         Appends a chat line. System notices are visually distinct from user
         messages - the host stamps `kind`, and a client cannot forge it, so this
         distinction is trustworthy rather than decorative.
+
+        Since D-d.5 it also decides *which tab* the line lands in. Everything
+        goes to the full log; only what a person typed goes to the Chat tab.
         """
         if kind == protocol.CHAT_KIND_SYSTEM:
-            self.chatLog.append('<i>%s</i>' % _escape(text))
-        elif nick:
-            self.chatLog.append('<b>%s:</b> %s' % (_escape(nick), _escape(text)))
+            self._append(self.chatLog, '<i>%s</i>' % _escape(text), 1)
+            return
+
+        if nick:
+            line = '<b>%s:</b> %s' % (_escape(nick), _escape(text))
         else:
-            self.chatLog.append(_escape(text))
+            line = _escape(text)
+
+        self._append(self.userLog, line, 0)
+        self._append(self.chatLog, line, 1)
 
     def appendStatus(self, text):
-        self.chatLog.append('<i>%s</i>' % _escape(text))
+        """A local notice - not from the session, so the full log only."""
+        self._append(self.chatLog, '<i>%s</i>' % _escape(text), 1)
+
+    def _append(self, widget, html, tab):
+        """Write one line, and mark its tab unread if it is not the one showing.
+
+        Without the marker a status message arriving while the user is reading
+        chat is invisible - the case Zement's brief called out when it asked for
+        the tabs (2026-09-02).
+        """
+        widget.append(html)
+
+        if self.logTabs.currentIndex() == tab:
+            return
+
+        if not self._unread[tab]:
+            self._unread[tab] = True
+            self.logTabs.setTabText(tab, self._tabTitles[tab] + ' *')
+
+    def _markTabRead(self, index):
+        if not (0 <= index < len(self._unread)):
+            return
+
+        if self._unread[index]:
+            self._unread[index] = False
+            self.logTabs.setTabText(index, self._tabTitles[index])
 
     # -- host actions -------------------------------------------------------
 
@@ -821,8 +1115,8 @@ class CollabStatusWindow(QtWidgets.QDialog):
         selectable = (bool(self._selectedSessionId())
                       and self._selectedRole() != protocol.ROLE_HOST)
 
-        for button in (self.roleButton, self.kickButton, self.banButton):
-            button.setEnabled(selectable)
+        for action in (self.roleAction, self.kickAction, self.banAction):
+            self.actionsButton.setActionEnabled(action, selectable)
 
     def _sendChat(self):
         text = self.chatEntry.text().strip()
@@ -879,21 +1173,23 @@ class CollabStatusWindow(QtWidgets.QDialog):
         self.leaveButton.setEnabled(False)
 
         if self.is_host:
-            for button in (self.roleButton, self.kickButton, self.banButton,
-                           self.copyCodeButton):
-                button.setEnabled(False)
+            # The whole control, not each action: with the session over none of
+            # them can run, and a menu of four greyed entries is worse than a
+            # button that plainly cannot be pressed.
+            self.actionsButton.setEnabled(False)
 
     def setJoinCode(self, join_code):
         """
         Gives the window the code to copy. Host only.
 
         Held here rather than fetched on demand so the window has no reference
-        to the session, and so the button can be disabled until there is
+        to the session, and so the action can be disabled until there is
         actually something to copy.
         """
         self._join_code = str(join_code or '')
         if self.is_host:
-            self.copyCodeButton.setEnabled(bool(self._join_code))
+            self.actionsButton.setActionEnabled(self.copyCodeAction,
+                                                bool(self._join_code))
 
     def _copyJoinCode(self):
         code = getattr(self, '_join_code', '')

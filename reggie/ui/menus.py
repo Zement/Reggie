@@ -48,7 +48,21 @@ class MenuBuilder:
         if statustext is not None: act.setStatusTip(statustext)
         if toggle:
             act.setCheckable(True)
-        if function is not None: act.triggered.connect(function)
+        if function is not None:
+            # `triggered` carries a `checked` bool, which Qt passes as the first
+            # positional argument. Every handler that takes an optional first
+            # parameter therefore receives False from a menu or toolbar - which
+            # is how D-d.4's five per-area forms came to be opened with
+            # `session=False` and bound to a non-session (Zement, 2026-09-02).
+            #
+            # Dropped here, once, rather than defended in each handler: a
+            # handler that grows a parameter later cannot know it was wired to
+            # an action, and the next one to grow one would repeat the bug.
+            # Checkable actions still need the flag, so only those keep it.
+            if toggle:
+                act.triggered.connect(function)
+            else:
+                act.triggered.connect(lambda _checked=False, _f=function: _f())
 
         self.win.actions[shortname] = act
 
@@ -126,11 +140,14 @@ class MenuBuilder:
             GetKeybind('collaborate'),
         )
 
-        self.CreateAction(
-            'changegamedef', None, GetIcon('game'),
-            globals_.trans.stringOneLine('MenuItems', 98), globals_.trans.stringOneLine('MenuItems', 99),
-            None,
-        )
+        # 'changegamedef' (Change Game) and 'changegamepath' (Change Game Path)
+        # were removed in Block D-d, phase D-d.1b. A patch is reached from the
+        # Patch Manager or from the sidebar's Game Patches page now, and having
+        # three entry points to one action was the thing D-d set out to end.
+        #
+        # `HandleChangeGamePath` itself is KEPT - `LoadGameDef` calls it
+        # directly the first time a patch is opened without a Stage folder, so
+        # it is a first-run flow, not only a menu command.
 
         self.CreateAction(
             'patchmanager', self.win.HandlePatchManager, GetIcon('game'),
@@ -142,12 +159,6 @@ class MenuBuilder:
             'screenshot', self.win.HandleScreenshot, GetIcon('screenshot'),
             globals_.trans.stringOneLine('MenuItems', 14), globals_.trans.stringOneLine('MenuItems', 15),
             GetKeybind('screenshot'),
-        )
-
-        self.CreateAction(
-            'changegamepath', self.win.HandleChangeGamePath, GetIcon('folderpath'),
-            globals_.trans.stringOneLine('MenuItems', 16), globals_.trans.stringOneLine('MenuItems', 17),
-            GetKeybind('changegamepath'),
         )
 
         self.CreateAction(
@@ -441,7 +452,6 @@ class MenuBuilder:
 
         # Configure them
         self.win.actions['openrecent'].setMenu(self.win.RecentMenu)
-        self.win.actions['changegamedef'].setMenu(self.win.GameDefMenu)
 
         self.win.actions['collisions'].setChecked(globals_.CollisionsShown)
         self.win.actions['realview'].setChecked(globals_.RealViewEnabled)
@@ -486,10 +496,8 @@ class MenuBuilder:
         fmenu.addSeparator()
         fmenu.addAction(self.win.actions['collaborate'])
         fmenu.addSeparator()
-        fmenu.addAction(self.win.actions['changegamedef'])
         fmenu.addAction(self.win.actions['patchmanager'])
         fmenu.addAction(self.win.actions['screenshot'])
-        fmenu.addAction(self.win.actions['changegamepath'])
         fmenu.addAction(self.win.actions['preferences'])
         fmenu.addSeparator()
         fmenu.addAction(self.win.actions['exit'])
@@ -562,6 +570,18 @@ class MenuBuilder:
         hmenu = menubar.addMenu(globals_.trans.string('Menubar', 4))
         self.SetupHelpMenu(hmenu)
 
+        # Built, then hidden (Zement, 2026-09-01: "The Help file menu is now
+        # fully obsolete and should be removed - just hidden, as we learned
+        # from other file menu entries; their methods are still needed, and
+        # some also have hotkeys assigned").
+        #
+        # Built rather than skipped for two reasons: its actions keep their
+        # shortcuts, which only work while the action belongs to a live menu,
+        # and the sidebar's Help section *is* this menu - `helptree.py` renders
+        # whatever is in it, so not building it would empty the section that
+        # replaced it.
+        hmenu.menuAction().setVisible(False)
+
         # Registered by name so whole menus can be enabled or disabled as a
         # group (Block D-c), the way single actions already can. Keyed on the
         # untranslated names rather than the menu titles, which change with the
@@ -591,6 +611,36 @@ class MenuBuilder:
             menubar.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, menubar.sizePolicy().verticalPolicy())
             self.win.toolbar.addWidget(menubar)
 
+        # **Every keyboard shortcut in the editor depends on this** (Zement,
+        # 2026-09-05: "keybinds are now fully broken, even things as generic as
+        # Ctrl+A or Ctrl+Z").
+        #
+        # An action with WindowShortcut context - which is Qt's default, and what
+        # every action here uses - fires only while it is reachable from a
+        # *visible* widget in the window. Being parented to the window is not
+        # enough; the action has to be in some widget's action list, and normally
+        # the menubar is that widget.
+        #
+        # `toolbar.addWidget(menubar)` above reparents the menubar into the
+        # toolbar, which takes it out of the window's menubar slot. The window's
+        # next `menuBar()` call then auto-creates a second, *empty* QMenuBar -
+        # so the editor ends up with two: the real one inside the toolbar, and an
+        # empty one in the slot. The menus holding the actions are no longer
+        # visible-to-window, and every shortcut stops firing.
+        #
+        # Only combined mode moved the menubar, which is why this is Windows-only
+        # and why it looked like everything broke at once.
+        #
+        # Fixed by giving the actions to the window directly, in **both** modes.
+        # An action can live in several widgets' lists at once, so the menus keep
+        # working exactly as before; the window's copy is only what makes the
+        # shortcut reachable no matter where the menubar has been put. Doing it
+        # unconditionally rather than only in combined mode means the separate
+        # path cannot quietly acquire the same bug later.
+        for act in self.win.actions.values():
+            self.win.addAction(act)
+
+
         # Add buttons to the toolbar
         self.addToolbarButtons()
 
@@ -599,23 +649,16 @@ class MenuBuilder:
         self.win.areaComboBox.activated.connect(self.win.HandleSwitchArea)
         self.win.toolbar.addWidget(self.win.areaComboBox)
 
-        # Add the patch combo box (check if enabled in preferences)
-        if setting('ToolbarActs') in (None, 'None', 'none', '', 0):
-            # Default: enabled
-            show_patches = True
-        else:
-            toggled = setting('ToolbarActs')
-            show_patches = toggled.get('gamepatches', True)
-        
-        if show_patches:
-            self.win.patchToolbar = self.win.addToolBar(globals_.trans.string('Menubar', 6))
-            self.win.patchToolbar.setObjectName('PatchToolbar')
-            self.win.patchComboBox = QtWidgets.QComboBox()
-            self.win.patchComboBox.setMinimumWidth(200)
-            self.win.patchComboBox.activated.connect(self.win.HandleSwitchPatch)
-            self.win.patchToolbar.addWidget(self.win.patchComboBox)
-        else:
-            self.win.patchComboBox = None
+        # The patch combo box and its toolbar were removed in Block D-d, phase
+        # D-d.1b. Switching patch is the sidebar's Game Patches page now, and
+        # the Patch Manager's; a third control that did the same thing is what
+        # made the two lists able to disagree in the first place (f7).
+        #
+        # The attribute stays and stays None: `collab_controller` and
+        # `RefreshPatchSelector` both reach for it with getattr and handle its
+        # absence, and the preferences toolbar toggle can still be turned on for
+        # a control that no longer exists without anything noticing.
+        self.win.patchComboBox = None
     def SetupHelpMenu(self, menu=None):
         """
         Creates the help menu.
@@ -677,9 +720,7 @@ class MenuBuilder:
                 'saveas',
                 'savecopyas',
                 'metainfo',
-                'changegamedef',
                 'screenshot',
-                'changegamepath',
                 'preferences',
                 'exit',
             ), (

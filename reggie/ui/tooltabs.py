@@ -59,7 +59,30 @@ from PyQt6 import QtCore, QtWidgets
 #: user asking for it a second time means "show me the one I opened".
 PREFERENCES = 'preferences'
 PATCH_MANAGER = 'patchmanager'
+
+#: Kept, though nothing opens it any more: D-d.5 moved the collaboration roster
+#: and chat out of a tool tab and into a sidebar section, for the reason the
+#: undo history moved in D-c.6 - chatting is something you do *while* editing.
+#: The key stays so a teardown that closes it is still a defined no-op.
 COLLABORATE = 'collaborate'
+
+#: The five per-area forms (D-d.4). One key each, naming a *kind* of form; the
+#: page itself is bound to a session, so every open area has its own of each
+#: (D-d.4b). An earlier version really was one page per kind, replacing area
+#: 1's form when area 2 asked for one - which discarded whatever the user had
+#: typed into it, and was Zement's main design correction on the phase.
+#:
+#: Which session a page belongs to is in its tab title and in the flyout bar
+#: under its tab - see ``ReggieWindow.OpenSessionPage`` and ``tabs.SubTabBar``.
+AREA_SETTINGS = 'areasettings'
+ZONE_SETTINGS = 'zonesettings'
+BACKGROUNDS = 'backgrounds'
+CAMERA_PROFILES = 'cameraprofiles'
+LEVEL_INFORMATION = 'levelinformation'
+
+#: Every key above, for the teardown that closes a session's pages with it.
+SESSION_PAGE_KEYS = (AREA_SETTINGS, ZONE_SETTINGS, BACKGROUNDS,
+                     CAMERA_PROFILES, LEVEL_INFORMATION)
 
 #: The undo history was a tool tab in D-c.5 and moved to a sidebar section in
 #: D-c.6 - a full-width tab made you leave the level to reach a thing you use
@@ -293,6 +316,12 @@ class ToolTabManager(QtCore.QObject):
         under construction - or a headless test with a stub window - does not
         have to have every handler in place before the manager exists.
         """
+        # The five per-area forms are deliberately absent. They were tool tabs
+        # for one phase (D-d.4) and moved into their session's own page stack at
+        # D-d.4b, because one tab per *kind* meant asking for area 2's Area
+        # Settings threw away area 1's half-filled one. Their apply and cancel
+        # are routed by ReggieWindow._finishSessionForm now; the keys below stay
+        # in this module because that stack still identifies a form by one.
         return {
             PREFERENCES: getattr(self.win, 'ApplyPreferences', None),
         }

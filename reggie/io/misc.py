@@ -1662,9 +1662,10 @@ def LoadActionsLists():
         (globals_.trans.string('MenuItems', 10), False, 'saveas'),
         (globals_.trans.string('MenuItems', 128), False, 'savecopyas'),
         (globals_.trans.string('MenuItems', 12), False, 'metainfo'),
-        (globals_.trans.string('MenuItems', 98), False, 'changegamedef'),
+        # 'changegamedef' and 'changegamepath' removed in D-d.1b along with
+        # their File-menu entries; a toolbar toggle for an action that no
+        # longer exists would put a dead button in the customiser.
         (globals_.trans.string('MenuItems', 14), True, 'screenshot'),
-        (globals_.trans.string('MenuItems', 16), False, 'changegamepath'),
         (globals_.trans.string('MenuItems', 18), False, 'preferences'),
         (globals_.trans.string('MenuItems', 20), False, 'exit'),
     )
@@ -1711,7 +1712,9 @@ def LoadActionsLists():
         (globals_.trans.string('MenuItems', 82), False, 'deletearea'),
         (globals_.trans.string('MenuItems', 84), False, 'reloadgfx'),
         (globals_.trans.string('MenuItems', 138), False, 'reloaddata'),
-        (globals_.trans.string('MenuItems', 142), True, 'gamepatches'),
+        # 'gamepatches' (the patch combo box toolbar) removed in D-d.1b - the
+        # sidebar's Game Patches page replaced it, and a preference toggling a
+        # control that no longer exists is worse than no toggle.
     )
     globals_.HelpActions = (
         (globals_.trans.string('MenuItems', 86), False, 'infobox'),
@@ -1739,7 +1742,10 @@ def LoadDefaultKeybinds():
         'undohistory':    ('Ctrl+H',                              globals_.trans.string('Undo', 2)),
         'collaborate':    (None,                                  'Collaborate'),
         'screenshot':     ('Ctrl+Alt+S',                          globals_.trans.string('MenuItems', 14)),
-        'changegamepath': ('Ctrl+Alt+G',                          globals_.trans.string('MenuItems', 16)),
+        # 'changegamepath' removed in D-d.1b with its menu entry. Its old
+        # Ctrl+Alt+G is deliberately left unassigned rather than reused: a
+        # keybind that silently starts doing something else is worse than one
+        # that stops working.
         'preferences':    ('Ctrl+Alt+P',                          globals_.trans.string('MenuItems', 18)),
         'exit':           ('Ctrl+Q',                              globals_.trans.string('MenuItems', 20)),
     }
@@ -2486,11 +2492,16 @@ class PreferencesDialog(QtWidgets.QDialog):
                 # Two controls rather than one, because "off" is a distinct
                 # state from "100%": off means the setting is not in play at
                 # all, and the spinbox greys out to say so.
+                # Named for what they govern rather than for the one thing they
+                # governed first: since D-d.4b the sub-tab flyout floats over
+                # the same canvas, and one of the two being solid while the
+                # other is faded reads as a mistake (Zement, 2026-09-03).
                 self.overviewTranslucent = QtWidgets.QCheckBox(
-                    'Fade the level overview background')
+                    'Fade the panels floating over the level')
                 self.overviewTranslucent.setToolTip(
-                    'When on, the overview background is see-through.\n'
-                    'It becomes solid while the pointer is over it.')
+                    'When on, the level overview and the form bar above each\n'
+                    'level tab have see-through backgrounds.\n'
+                    'Each becomes solid while the pointer is over it.')
 
                 self.overviewOpacity = QtWidgets.QDoubleSpinBox()
                 self.overviewOpacity.setRange(MIN_OPACITY_PCT, MAX_OPACITY_PCT)
@@ -2498,8 +2509,8 @@ class PreferencesDialog(QtWidgets.QDialog):
                 self.overviewOpacity.setDecimals(0)
                 self.overviewOpacity.setSuffix(' % opaque')
                 self.overviewOpacity.setToolTip(
-                    'How solid the faded background is. Lower is more \n'
-                    'see-through. The level drawing itself is never faded.')
+                    'How solid those faded backgrounds are. Lower is more\n'
+                    'see-through. What is drawn on top is never faded.')
                 self.overviewTranslucent.toggled.connect(
                     self.overviewOpacity.setEnabled)
 
@@ -2521,7 +2532,8 @@ class PreferencesDialog(QtWidgets.QDialog):
                 shellForm.addRow('Level overview corner:', self.overviewCorner)
                 shellForm.addRow('Level overview height:', self.overviewHeight)
                 shellForm.addRow(self.overviewTranslucent)
-                shellForm.addRow('Overview background:', self.overviewOpacity)
+                shellForm.addRow('Floating panel background:',
+                                 self.overviewOpacity)
 
                 # Create the main layout
                 L = QtWidgets.QVBoxLayout()

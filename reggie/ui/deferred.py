@@ -10,7 +10,7 @@ so it blocks moving ``main()`` or ``ReggieWindow`` elsewhere.
 This module replaces that mechanism. Call :func:`load` once, right after the
 ``QApplication`` is created; it imports the deferred classes/functions and binds
 them as attributes of *this* module. Any module can then use
-``from reggie.ui import deferred`` and reach them as ``deferred.GameDefMenu``,
+``from reggie.ui import deferred`` and reach them as ``deferred.LoadGameDef``,
 ``deferred.GetIcon``, etc. — no namespace injection, works from anywhere.
 
 See _docs/plan/REFACTORING_ANALYSIS.md (Phase 2, boot sequence) and
@@ -26,7 +26,6 @@ ListWidgetWithToolTipSignal = None
 LoadNumberFont = None
 LoadTheme = None
 IconsOnlyTabBar = None
-GameDefMenu = None
 LoadGameDef = None
 PatchManagerDialog = None
 BGDialog = None
@@ -56,7 +55,7 @@ def load():
     mod = _sys.modules[__name__]
 
     from reggie.ui.ui import GetIcon, SetAppStyle, SetColorScheme, ListWidgetWithToolTipSignal, LoadNumberFont, LoadTheme, IconsOnlyTabBar
-    from reggie.io.gamedef import GameDefMenu, LoadGameDef
+    from reggie.io.gamedef import LoadGameDef
     from reggie.patches.patch_manager_dialog import PatchManagerDialog
     from reggie.core.background import BGDialog
     from reggie.core.zones import ZonesDialog
@@ -66,7 +65,7 @@ def load():
 
     for name in (
         'GetIcon', 'SetAppStyle', 'SetColorScheme', 'ListWidgetWithToolTipSignal', 'LoadNumberFont', 'LoadTheme', 'IconsOnlyTabBar',
-        'GameDefMenu', 'LoadGameDef', 'PatchManagerDialog', 'BGDialog', 'ZonesDialog', 'AreaOptionsDialog',
+        'LoadGameDef', 'PatchManagerDialog', 'BGDialog', 'ZonesDialog', 'AreaOptionsDialog',
         'Stamp', 'StampChooserWidget', 'SpriteList', 'SpritePickerWidget', 'ObjectPickerWidget', 'LevelOverviewWidget',
         'SpriteEditorWidget',
     ):
