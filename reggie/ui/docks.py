@@ -70,6 +70,12 @@ class DockBuilder:
         act.setStatusTip(globals_.trans.string('MenuItems', 95))
         # Register so the keybind editor (SetKeybind) can update the shortcut
         self.win.actions['leveloverview'] = act
+        # ...and on the window, or the shortcut never fires. See the note in
+        # menus.py: an action needs to be in a window widget's action list, and
+        # the menubar cannot be that widget once combined mode moves it into the
+        # toolbar. menus.py sweeps every action it built; these two are added
+        # afterwards, so they say it for themselves.
+        self.win.addAction(act)
         self.win.vmenu.addAction(act)
 
         # No levelOverviewDock alias: nothing outside this builder ever used it
@@ -130,6 +136,8 @@ class DockBuilder:
         act.setStatusTip(globals_.trans.string('MenuItems', 97))
         # Register so the keybind editor (SetKeybind) can update the shortcut
         self.win.actions['palette'] = act
+        # On the window too - see the note on 'leveloverview' above.
+        self.win.addAction(act)
         self.win.vmenu.addAction(act)
 
         # object choosing tabs

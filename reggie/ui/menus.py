@@ -611,6 +611,36 @@ class MenuBuilder:
             menubar.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, menubar.sizePolicy().verticalPolicy())
             self.win.toolbar.addWidget(menubar)
 
+        # **Every keyboard shortcut in the editor depends on this** (Zement,
+        # 2026-09-05: "keybinds are now fully broken, even things as generic as
+        # Ctrl+A or Ctrl+Z").
+        #
+        # An action with WindowShortcut context - which is Qt's default, and what
+        # every action here uses - fires only while it is reachable from a
+        # *visible* widget in the window. Being parented to the window is not
+        # enough; the action has to be in some widget's action list, and normally
+        # the menubar is that widget.
+        #
+        # `toolbar.addWidget(menubar)` above reparents the menubar into the
+        # toolbar, which takes it out of the window's menubar slot. The window's
+        # next `menuBar()` call then auto-creates a second, *empty* QMenuBar -
+        # so the editor ends up with two: the real one inside the toolbar, and an
+        # empty one in the slot. The menus holding the actions are no longer
+        # visible-to-window, and every shortcut stops firing.
+        #
+        # Only combined mode moved the menubar, which is why this is Windows-only
+        # and why it looked like everything broke at once.
+        #
+        # Fixed by giving the actions to the window directly, in **both** modes.
+        # An action can live in several widgets' lists at once, so the menus keep
+        # working exactly as before; the window's copy is only what makes the
+        # shortcut reachable no matter where the menubar has been put. Doing it
+        # unconditionally rather than only in combined mode means the separate
+        # path cannot quietly acquire the same bug later.
+        for act in self.win.actions.values():
+            self.win.addAction(act)
+
+
         # Add buttons to the toolbar
         self.addToolbarButtons()
 
